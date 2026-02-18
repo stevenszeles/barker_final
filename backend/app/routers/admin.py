@@ -219,14 +219,22 @@ def _parse_option_symbol(raw: str) -> Optional[Dict[str, Any]]:
 def _parse_txn_date(raw: str) -> Optional[str]:
     if not raw:
         return None
-    match = _TXN_DATE_RE.match(str(raw))
-    if not match:
-        return None
-    date_text = match.group(2) or match.group(1)
-    try:
-        return datetime.strptime(date_text, "%m/%d/%Y").date().isoformat()
-    except Exception:
-        return None
+    text = str(raw).strip()
+    match = _TXN_DATE_RE.match(text)
+    if match:
+        date_text = match.group(2) or match.group(1)
+        try:
+            return datetime.strptime(date_text, "%m/%d/%Y").date().isoformat()
+        except Exception:
+            return None
+    parsed = legacy_engine.parse_iso_date(text)
+    if parsed:
+        return parsed
+    if len(text) >= 10:
+        parsed = legacy_engine.parse_iso_date(text[:10])
+        if parsed:
+            return parsed
+    return None
 
 
 def _action_cash_only(action_lower: str) -> bool:
@@ -267,6 +275,97 @@ def _parse_money_value(raw: Any) -> Optional[float]:
         return float(text)
     except Exception:
         return None
+
+
+def _parse_realized_lot_details_rows(text: str, target_account: str) -> List[Dict[str, Any]]:
+    target = legacy_engine._account_label(target_account)
+    rows_out: List[Dict[str, Any]] = []
+    reader = csv.reader(io.StringIO(text))
+    header_map: Dict[str, int] = {}
+    section_allowed = True
+
+    def _idx(name: str) -> int:
+        return header_map.get(name.lower(), -1)
+
+    def _cell(row: List[str], name: str) -> str:
+        i = _idx(name)
+        if i < 0 or i >= len(row):
+            return ""
+        return (row[i] or "").strip()
+
+    for raw_row in reader:
+        row = [str(c or "").strip() for c in raw_row]
+        nonempty = [c for c in row if c]
+        if not nonempty:
+            continue
+        first = nonempty[0]
+        lowered = first.lower()
+
+        if lowered.startswith("realized gain/loss - lot details"):
+            continue
+        if lowered.startswith("there are no transactions"):
+            header_map = {}
+            section_allowed = False
+            continue
+
+        if len(nonempty) == 1 and lowered != "symbol":
+            title = _normalize_account_name(first)
+            if title:
+                section_allowed = _match_existing_account(title, [target]) == target
+                header_map = {}
+            continue
+
+        if lowered == "symbol":
+            header_map = {name.strip().lower(): idx for idx, name in enumerate(row)}
+            continue
+
+        if not header_map or not section_allowed:
+            continue
+
+        symbol_raw = _cell(row, "Symbol").upper()
+        if not symbol_raw:
+            continue
+        opened = _parse_txn_date(_cell(row, "Opened Date"))
+        closed = _parse_txn_date(_cell(row, "Closed Date"))
+        qty = abs(float(_parse_money_value(_cell(row, "Quantity")) or 0.0))
+        if not opened or not closed or qty <= 0:
+            continue
+
+        desc = _cell(row, "Name")
+        cost_per_share = float(_parse_money_value(_cell(row, "Cost Per Share")) or 0.0)
+        proceeds_per_share = float(_parse_money_value(_cell(row, "Proceeds Per Share")) or 0.0)
+        parsed_option = _parse_option_symbol(symbol_raw) or _parse_option_symbol(desc)
+        asset_class = "option" if parsed_option else "equity"
+        symbol = parsed_option["symbol"] if parsed_option else symbol_raw
+        mult = legacy_engine.contract_multiplier(symbol, asset_class)
+
+        buy_amount = -(qty * cost_per_share * mult)
+        sell_amount = qty * proceeds_per_share * mult
+
+        rows_out.append(
+            {
+                "Date": opened,
+                "Action": "BUY",
+                "Symbol": symbol,
+                "Description": desc,
+                "Quantity": qty,
+                "Price": cost_per_share,
+                "Amount": buy_amount,
+            }
+        )
+        rows_out.append(
+            {
+                "Date": closed,
+                "Action": "SELL",
+                "Symbol": symbol,
+                "Description": desc,
+                "Quantity": qty,
+                "Price": proceeds_per_share,
+                "Amount": sell_amount,
+            }
+        )
+
+    return rows_out
 
 
 def _parse_custaccs_positions(text: str) -> Dict[str, Any]:
@@ -660,6 +759,12 @@ def _build_nav_from_transactions_static(rows: List[Dict[str, Any]], account: str
             expiry = parsed_option["expiry"]
             strike = parsed_option["strike"]
             option_type = parsed_option["option_type"]
+        elif legacy_engine.is_option_symbol(symbol_raw):
+            asset_class = "option"
+            parsed_osi = options_service.parse_osi_symbol(symbol_raw)
+            if parsed_osi:
+                underlying, expiry, right, strike = parsed_osi
+                option_type = "CALL" if str(right).upper().startswith("C") else "PUT"
         symbol_raw = symbol_raw.strip().upper()
         mult = legacy_engine.contract_multiplier(symbol_raw, asset_class)
         price = float(price_val or 0.0)
@@ -1035,14 +1140,17 @@ async def import_positions(file: UploadFile = File(...), account: Optional[str] 
 async def import_transactions(file: UploadFile = File(...), account: Optional[str] = None, replace: bool = True):
     content = await file.read()
     text = content.decode("utf-8", errors="ignore")
-    reader = csv.DictReader(io.StringIO(text))
-    rows = [row for row in reader if row and any(cell.strip() for cell in row.values() if isinstance(cell, str))]
-    if not rows:
-        raise HTTPException(status_code=400, detail="No transactions found in CSV.")
-
     if not account or str(account).strip().upper() == "ALL":
         raise HTTPException(status_code=400, detail="Select a specific account (not ALL) for transaction import.")
     acct = legacy_engine._account_label(account)
+    if "Realized Gain/Loss - Lot Details" in text[:4000]:
+        rows = _parse_realized_lot_details_rows(text, acct)
+    else:
+        reader = csv.DictReader(io.StringIO(text))
+        rows = [row for row in reader if row and any(cell.strip() for cell in row.values() if isinstance(cell, str))]
+    if not rows:
+        raise HTTPException(status_code=400, detail="No transactions found in CSV.")
+
     current_cash_total = legacy_engine.compute_cash_balance_total(acct)
 
     if settings.static_mode:
@@ -1122,6 +1230,12 @@ async def import_transactions(file: UploadFile = File(...), account: Optional[st
             expiry = parsed_option["expiry"]
             strike = parsed_option["strike"]
             option_type = parsed_option["option_type"]
+        elif legacy_engine.is_option_symbol(symbol_raw):
+            asset_class = "option"
+            parsed_osi = options_service.parse_osi_symbol(symbol_raw)
+            if parsed_osi:
+                underlying, expiry, right, strike = parsed_osi
+                option_type = "CALL" if str(right).upper().startswith("C") else "PUT"
 
         price = float(price_val or 0.0)
         if price == 0.0 and amount_val is not None and qty:
@@ -1130,7 +1244,9 @@ async def import_transactions(file: UploadFile = File(...), account: Optional[st
                 price = abs(float(amount_val)) / (abs(float(qty)) * float(mult))
             except Exception:
                 price = 0.0
-        allow_zero_price = action_lower == "expired"
+        allow_zero_price = (action_lower == "expired") or (
+            (asset_class == "option" or legacy_engine.is_option_symbol(symbol_raw)) and price <= 0
+        )
 
         trades.append(
             {

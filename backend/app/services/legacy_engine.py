@@ -174,6 +174,74 @@ def _get_bench_start() -> str:
     return str(start)
 
 
+def _earliest_portfolio_date(account: Optional[str]) -> Optional[str]:
+    def _run(conn):
+        where, params = _account_where(conn, account)
+        cur = conn.cursor()
+        cur.execute(
+            f"""
+            SELECT MIN(entry_date) AS d
+            FROM positions
+            WHERE {where}
+              AND entry_date IS NOT NULL
+              AND TRIM(entry_date) != ''
+            """,
+            params,
+        )
+        row = cur.fetchone()
+        pos_date = parse_iso_date(row.get("d") if isinstance(row, dict) else (row[0] if row else None))
+        cur.execute(
+            f"""
+            SELECT MIN(trade_date) AS d
+            FROM trades
+            WHERE {where}
+              AND trade_date IS NOT NULL
+              AND TRIM(trade_date) != ''
+            """,
+            params,
+        )
+        row = cur.fetchone()
+        trade_date = parse_iso_date(row.get("d") if isinstance(row, dict) else (row[0] if row else None))
+        dates = [d for d in [pos_date, trade_date] if d]
+        return min(dates) if dates else None
+
+    return with_conn(_run)
+
+
+def _effective_nav_start(account: Optional[str]) -> str:
+    bench_start = _get_bench_start()
+    earliest = _earliest_portfolio_date(account)
+    # If we have explicit portfolio dating (entry dates / trades),
+    # anchor NAV + benchmark at that date so relative returns align.
+    if earliest:
+        return earliest
+    return bench_start
+
+
+def _has_trade_or_entry_data(account: Optional[str]) -> bool:
+    def _run(conn):
+        where, params = _account_where(conn, account)
+        cur = conn.cursor()
+        cur.execute(f"SELECT COUNT(*) AS cnt FROM trades WHERE {where}", params)
+        row = cur.fetchone()
+        trade_cnt = int((row.get("cnt") if isinstance(row, dict) else row[0]) or 0) if row else 0
+        cur.execute(
+            f"""
+            SELECT COUNT(*) AS cnt
+            FROM positions
+            WHERE {where}
+              AND entry_date IS NOT NULL
+              AND TRIM(entry_date) != ''
+            """,
+            params,
+        )
+        row = cur.fetchone()
+        entry_cnt = int((row.get("cnt") if isinstance(row, dict) else row[0]) or 0) if row else 0
+        return trade_cnt > 0 or entry_cnt > 0
+
+    return bool(with_conn(_run))
+
+
 def _symbol_start_map_from_positions_df(pos_df: pd.DataFrame, default_start: str) -> Dict[str, str]:
     out: Dict[str, str] = {}
     default_iso = parse_iso_date(default_start) or year_start_date()
@@ -592,8 +660,6 @@ def ensure_symbol_history(symbol: str, start_date: str, is_bench: bool = False) 
         symbol = normalize_benchmark_symbol(symbol)
     if not symbol:
         return False
-    if settings.static_mode:
-        return last_cached_close(symbol) is not None
     start_iso = parse_iso_date(start_date) or year_start_date()
     if is_option_symbol(symbol):
         return last_cached_close(symbol) is not None
@@ -645,17 +711,20 @@ def fetch_prices_incremental(symbol: str, lookback_iso: str, is_bench: bool = Fa
         return False
 
 
-def get_bench_series(bench_symbol: Optional[str] = None) -> pd.DataFrame:
+def get_bench_series(bench_symbol: Optional[str] = None, start_date: Optional[str] = None) -> pd.DataFrame:
     bench = normalize_benchmark_symbol(bench_symbol or _get_benchmark())
-    start_iso = _get_bench_start()
+    start_iso = parse_iso_date(start_date) or _get_bench_start()
     ensure_symbol_history(bench, start_iso, is_bench=True)
 
     def _run(conn):
         cur = conn.cursor()
         candidates = [bench]
-        for alias in ("^GSPC", "^SPX", "SPX", "$SPX", "SPY"):
+        for alias in ("^GSPC", "^SPX", "SPX", "$SPX"):
             if alias not in candidates:
                 candidates.append(alias)
+        # Proxy fallback when index history is unavailable from provider/cache.
+        if bench in {"^GSPC", "^SPX", "SPX", "$SPX"} and "SPY" not in candidates:
+            candidates.append("SPY")
         for candidate in candidates:
             cur.execute(
                 "SELECT date, close FROM price_cache WHERE symbol=? AND date>=? ORDER BY date ASC",
@@ -1164,9 +1233,6 @@ def build_daily_nav_series(start_iso: str, bench_series: pd.DataFrame, account: 
 
     trades = with_conn(_load_trades)
     cash_rows = with_conn(_load_cash)
-    if settings.static_mode:
-        trades = []
-        cash_rows = []
 
     if settings.static_mode and account_value is not None and not trades and not cash_rows:
         nav = np.full(len(dates), float(account_value), dtype=float)
@@ -1392,15 +1458,19 @@ def get_nav_series(limit: int = 120, account: Optional[str] = None) -> List[Dict
     cached = _get_nav_cache(limit, account)
     if cached is not None:
         return cached
+    start_iso = _effective_nav_start(account)
+    snapshot_points: List[Dict[str, Any]] = []
     if settings.static_mode:
-        points = _get_nav_series_from_snapshots(limit=limit, account=account)
-        if points:
-            _set_nav_cache(limit, account, points)
-            return points
-    bench_series = get_bench_series()
-    start_iso = _get_bench_start()
+        snapshot_points = _get_nav_series_from_snapshots(limit=limit, account=account)
+        if snapshot_points and not _has_trade_or_entry_data(account):
+            _set_nav_cache(limit, account, snapshot_points)
+            return snapshot_points
+    bench_series = get_bench_series(start_date=start_iso)
     nav_df = build_daily_nav_series(start_iso, bench_series, account=account)
     if nav_df is None or nav_df.empty:
+        if snapshot_points:
+            _set_nav_cache(limit, account, snapshot_points)
+            return snapshot_points
         return []
     nav_df = nav_df.tail(int(limit))
     bench_map = {}
@@ -1493,19 +1563,6 @@ def _get_nav_series_from_snapshots(limit: int = 120, account: Optional[str] = No
 
         # Prefer live bench_map lookup over stored bench (stored bench may be nav value if bench was missing)
         bench_raw = bench_map.get(d)
-        if bench_raw is None or bench_raw <= 0:
-            # Try stored value - but only if it looks like a real bench price (not nav-sized)
-            stored = row.get("bench")
-            if stored is not None:
-                try:
-                    stored_f = float(stored)
-                    # Only use stored bench if it differs materially from nav (heuristic: bench_map exists but this date is missing)
-                    if not bench_map:
-                        # No bench data at all: use stored value as-is
-                        bench_raw = stored_f if stored_f > 0 else None
-                    # else: bench_map has data but not this date; forward-fill below
-                except Exception:
-                    pass
         if bench_raw and bench_raw > 0:
             last_bench_raw = bench_raw
 
@@ -1884,7 +1941,7 @@ def apply_trade(payload: Dict[str, Any]) -> Tuple[bool, str, Optional[str]]:
 
     with_conn(_run)
     if not is_option_symbol(symbol):
-        history_start = parse_iso_date(entry_date) if entry_date_provided else None
+        history_start = parse_iso_date(trade_date)
         ensure_symbol_history(symbol, history_start or _get_bench_start(), is_bench=False)
     cache.delete_pattern("positions")
     return True, "Trade saved.", trade_id
@@ -2474,7 +2531,33 @@ def get_sector_series(sector: str, limit: int = 120, source: str = "auto", accou
 # ----------------------------
 
 def rebuild_nav_history(limit: int = 1500, account: Optional[str] = None) -> Dict[str, Any]:
-    points = get_nav_series(limit=limit, account=account)
+    start_iso = _effective_nav_start(account)
+    bench_series = get_bench_series(start_date=start_iso)
+    nav_df = build_daily_nav_series(start_iso, bench_series, account=account)
+    if nav_df is None or nav_df.empty:
+        points: List[Dict[str, Any]] = []
+    else:
+        nav_df = nav_df.tail(int(limit))
+        bench_map: Dict[str, float] = {}
+        if bench_series is not None and len(bench_series):
+            bench_map = {str(r["d"]): float(r["close"]) for _, r in bench_series.iterrows()}
+        points = []
+        for _, row in nav_df.iterrows():
+            d = str(row["d"])
+            twr_val = None
+            try:
+                if "twr" in nav_df.columns:
+                    twr_val = float(row["twr"])
+            except Exception:
+                twr_val = None
+            points.append(
+                {
+                    "date": d,
+                    "nav": float(row["nav"]),
+                    "bench": float(bench_map.get(d, row["nav"])) if bench_map else float(row["nav"]),
+                    "twr": twr_val,
+                }
+            )
     def _run(conn):
         where, params = _account_where(conn, account)
         cur = conn.cursor()
@@ -2486,6 +2569,7 @@ def rebuild_nav_history(limit: int = 1500, account: Optional[str] = None) -> Dic
             )
         conn.commit()
     with_conn(_run)
+    _clear_nav_cache()
     return {"ok": True, "count": len(points)}
 
 
