@@ -1,0 +1,62 @@
+{
+  "benchmarks": ["SPY", "QQQ", "DIA"],
+  "accounts": [
+    {
+      "id": "taxable",
+      "name": "Taxable Brokerage",
+      "portfolios": [
+        {
+          "id": "core",
+          "name": "Core Growth",
+          "cash": 42000,
+          "positions": [
+            { "symbol": "AAPL", "shares": 145, "avg_cost": 156.2 },
+            { "symbol": "MSFT", "shares": 72, "avg_cost": 305.4 },
+            { "symbol": "AMZN", "shares": 58, "avg_cost": 122.7 },
+            { "symbol": "GOOGL", "shares": 50, "avg_cost": 119.8 },
+            { "symbol": "NVDA", "shares": 64, "avg_cost": 443.1 }
+          ]
+        },
+        {
+          "id": "income",
+          "name": "Income Sleeve",
+          "cash": 18000,
+          "positions": [
+            { "symbol": "SCHD", "shares": 310, "avg_cost": 73.1 },
+            { "symbol": "VIG", "shares": 190, "avg_cost": 153.7 },
+            { "symbol": "TLT", "shares": 130, "avg_cost": 96.5 },
+            { "symbol": "BND", "shares": 220, "avg_cost": 72.4 }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "retirement",
+      "name": "Retirement Accounts",
+      "portfolios": [
+        {
+          "id": "equity",
+          "name": "Long-Term Equity",
+          "cash": 28000,
+          "positions": [
+            { "symbol": "VTI", "shares": 360, "avg_cost": 205.6 },
+            { "symbol": "VXUS", "shares": 260, "avg_cost": 57.2 },
+            { "symbol": "AVUV", "shares": 145, "avg_cost": 84.9 },
+            { "symbol": "QQQM", "shares": 140, "avg_cost": 156.4 }
+          ]
+        },
+        {
+          "id": "balanced",
+          "name": "Balanced Model",
+          "cash": 22000,
+          "positions": [
+            { "symbol": "VOO", "shares": 95, "avg_cost": 401.2 },
+            { "symbol": "IJH", "shares": 95, "avg_cost": 246.5 },
+            { "symbol": "IEF", "shares": 190, "avg_cost": 95.6 },
+            { "symbol": "GLD", "shares": 48, "avg_cost": 181.9 }
+          ]
+        }
+      ]
+    }
+  ]
+}
