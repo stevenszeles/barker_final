@@ -994,6 +994,10 @@ def _build_nav_from_transactions_static(rows: List[Dict[str, Any]], account: str
 
 @router.post("/import-positions")
 async def import_positions(file: UploadFile = File(...), account: Optional[str] = None):
+    account_raw = str(account or "").strip()
+    import_all_accounts = (not account_raw) or (account_raw.upper() == "ALL")
+    selected_account = None if import_all_accounts else legacy_engine._account_label(account_raw)
+
     content = await file.read()
     text = content.decode("utf-8", errors="ignore")
     parsed = _parse_custaccs_positions(text)
@@ -1010,10 +1014,8 @@ async def import_positions(file: UploadFile = File(...), account: Optional[str] 
         return with_conn(_run)
     existing_accounts = _load_existing_accounts()
     candidate_accounts = list(existing_accounts)
-    if account:
-        acct_label = legacy_engine._account_label(account)
-        if acct_label and acct_label not in candidate_accounts:
-            candidate_accounts.append(acct_label)
+    if selected_account and selected_account not in candidate_accounts:
+        candidate_accounts.append(selected_account)
     if candidate_accounts:
         for row in positions:
             try:
@@ -1036,19 +1038,17 @@ async def import_positions(file: UploadFile = File(...), account: Optional[str] 
             except Exception:
                 remapped_values[mapped] = remapped_values.get(mapped, 0.0)
         account_values = remapped_values
-    if account and str(account).strip().upper() == "ALL":
-        raise HTTPException(status_code=400, detail="Select a specific account (not ALL) for positions import.")
-    if account:
-        label = legacy_engine._account_label(account)
+    if selected_account:
+        label = selected_account
         positions = [row for row in positions if legacy_engine._account_label(row.get("account")) == label]
         cash_map = {k: v for k, v in cash_map.items() if legacy_engine._account_label(k) == label}
         account_values = {k: v for k, v in account_values.items() if legacy_engine._account_label(k) == label}
     if not positions and not cash_map:
-        if account:
-            raise HTTPException(status_code=400, detail=f"No positions found for account {account}.")
+        if selected_account:
+            raise HTTPException(status_code=400, detail=f"No positions found for account {selected_account}.")
         raise HTTPException(status_code=400, detail="No positions found in CSV.")
-    if account:
-        accounts = [legacy_engine._account_label(account)]
+    if selected_account:
+        accounts = [selected_account]
     else:
         accounts = sorted({row["account"] for row in positions} | set(cash_map.keys()) | set(account_values.keys()))
     import_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
