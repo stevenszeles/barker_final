@@ -1699,8 +1699,7 @@ export default function App() {
       }
     }
     if (isPositionsReport) {
-      const account = requireAccount("import positions CSV", setCsvError);
-      if (!account) return;
+      const account = accountId && accountId.trim() ? accountId : "ALL";
       try {
         setToast("Importing positions CSV...");
         const form = new FormData();
@@ -1710,10 +1709,15 @@ export default function App() {
           timeout: 120000,
         });
         const count = resp.data?.positions_count ?? resp.data?.count ?? 0;
+        const importedAccounts = Array.isArray(resp.data?.accounts) ? resp.data.accounts.length : null;
         fetchAccounts();
         refreshAll();
         fetchNav(navLimit);
-        notify(`Imported positions from Schwab CSV (${count} rows).`);
+        if (account === "ALL") {
+          notify(`Imported positions from Schwab CSV (${count} rows across ${importedAccounts ?? "multiple"} accounts).`);
+        } else {
+          notify(`Imported positions from Schwab CSV (${count} rows).`);
+        }
         return;
       } catch (err: any) {
         const detail = err?.response?.data?.detail ?? err?.message ?? "CSV import failed";
