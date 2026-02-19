@@ -1670,13 +1670,15 @@ export default function App() {
       // Join all cells in the row to search anywhere
       return row.map(cell => stripBom(cell || "").toLowerCase()).join(" ");
     });
+    const filenameLower = (file?.name || "").toLowerCase();
     const isBalancesReport =
       firstRows.some((rowText) => rowText.includes("balances for all-accounts") || rowText.includes("balances for all accounts")) ||
       firstRows.some((rowText) => rowText.includes("total accounts value") && rowText.includes("cash & cash investments total"));
     const isAccountStatement = firstRows.some((rowText) => rowText.includes("account statement"));
     const isPositionsReport = firstRows.some(
       (rowText) => rowText.includes("positions for") || rowText.includes("custaccs")
-    );
+    ) ||
+      filenameLower.includes("positions");
     if (isBalancesReport) {
       try {
         setToast("Importing balances CSV...");
