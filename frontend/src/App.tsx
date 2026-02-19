@@ -1785,6 +1785,7 @@ export default function App() {
       return;
     }
     const aliasMap: Record<string, string[]> = {
+      account: ["account", "account_name", "acct", "accountid", "account_id"],
       instrument_id: ["instrument_id", "instrumentid", "id"],
       symbol: ["symbol", "sym", "ticker", "instrument", "instrument_symbol", "option_symbol", "security", "description"],
       qty: ["qty", "quantity", "position", "pos", "position_qty", "net_qty", "net_quantity", "units", "size"],
@@ -1870,6 +1871,7 @@ export default function App() {
       const entry_date = /^\d{4}-\d{2}-\d{2}$/.test(entryDateRaw) ? entryDateRaw : undefined;
 
       return {
+        account: pick("account") || undefined,
         instrument_id: pick("instrument_id") || undefined,
         symbol: symbol.toUpperCase(),
         qty,
@@ -1893,11 +1895,26 @@ export default function App() {
       return;
     }
     try {
-      const account = requireAccount("import positions CSV", setCsvError);
-      if (!account) return;
-      await api.post("/positions/bulk", { positions: filtered, account });
+      const selectedAccount = accountId && accountId !== "ALL" ? accountId : null;
+      const hasRowAccounts = filtered.every(
+        (row) => !!row.account && row.account.trim() !== "" && row.account.trim().toUpperCase() !== "ALL"
+      );
+      if (!selectedAccount && !hasRowAccounts) {
+        const msg = "For ALL Accounts import, include an account column in the CSV (or select a specific account).";
+        setCsvError(msg);
+        notify(msg);
+        return;
+      }
+      await api.post("/positions/bulk", {
+        positions: filtered,
+        ...(selectedAccount ? { account: selectedAccount } : {}),
+      });
       refreshAll();
-      notify(`Imported ${filtered.length} positions.`);
+      notify(
+        selectedAccount
+          ? `Imported ${filtered.length} positions.`
+          : `Imported ${filtered.length} positions across accounts.`
+      );
     } catch (err: any) {
       setCsvError(err?.response?.data?.detail ?? "CSV import failed");
     }
