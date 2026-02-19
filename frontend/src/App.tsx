@@ -1655,6 +1655,7 @@ export default function App() {
   const importCsvFile = async (file: File) => {
     setCsvError("");
     const text = await file.text();
+    const textLower = stripBom(text).toLowerCase();
     const rawRows = parseCsvRows(text);
     if (!rawRows.length) {
       setCsvError("CSV file is empty.");
@@ -1675,10 +1676,14 @@ export default function App() {
       firstRows.some((rowText) => rowText.includes("balances for all-accounts") || rowText.includes("balances for all accounts")) ||
       firstRows.some((rowText) => rowText.includes("total accounts value") && rowText.includes("cash & cash investments total"));
     const isAccountStatement = firstRows.some((rowText) => rowText.includes("account statement"));
+    const looksLikeSchwabPositionsDump =
+      textLower.includes("positions for custaccs") ||
+      (textLower.includes("account total") && textLower.includes("cash & cash investments"));
     const isPositionsReport = firstRows.some(
       (rowText) => rowText.includes("positions for") || rowText.includes("custaccs")
     ) ||
-      filenameLower.includes("positions");
+      filenameLower.includes("positions") ||
+      looksLikeSchwabPositionsDump;
     if (isBalancesReport) {
       try {
         setToast("Importing balances CSV...");
@@ -1708,7 +1713,7 @@ export default function App() {
         form.append("file", file);
         const resp = await api.post(`/admin/import-positions?account=${encodeURIComponent(account)}`, form, {
           headers: { "Content-Type": "multipart/form-data" },
-          timeout: 120000,
+          timeout: 300000,
         });
         const count = resp.data?.positions_count ?? resp.data?.count ?? 0;
         const importedAccounts = Array.isArray(resp.data?.accounts) ? resp.data.accounts.length : null;
