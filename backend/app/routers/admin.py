@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List
 import csv
 import io
+import logging
 import re
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from pydantic import BaseModel
@@ -13,6 +14,7 @@ from ..services import legacy_engine as legacy_engine
 from ..services import options as options_service
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+logger = logging.getLogger(__name__)
 
 
 class ResetPayload(BaseModel):
@@ -997,6 +999,12 @@ async def import_positions(file: UploadFile = File(...), account: Optional[str] 
     account_raw = str(account or "").strip()
     import_all_accounts = (not account_raw) or (account_raw.upper() == "ALL")
     selected_account = None if import_all_accounts else legacy_engine._account_label(account_raw)
+    logger.info(
+        "import-positions start file=%r account_param=%r mode=%s",
+        file.filename,
+        account_raw,
+        "ALL" if import_all_accounts else f"specific:{selected_account}",
+    )
 
     content = await file.read()
     text = content.decode("utf-8", errors="ignore")
@@ -1106,14 +1114,36 @@ async def import_positions(file: UploadFile = File(...), account: Optional[str] 
             continue
         portfolio_service.set_account_cash(account, legacy_engine.compute_cash_balance_total(acct), asof=asof, account_value=value)
     if asof and accounts:
-        bench_map: Dict[str, float] = {}
+        # Avoid network-bound benchmark fetches during import; read cache only.
+        bench_val = None
         try:
-            bench_series = legacy_engine.get_bench_series()
-            if bench_series is not None and len(bench_series):
-                bench_map = {str(r["d"]): float(r["close"]) for _, r in bench_series.iterrows()}
+            bench_symbol = legacy_engine.normalize_benchmark_symbol(legacy_engine._get_benchmark())
+            candidates = [bench_symbol]
+            for alias in ("^GSPC", "^SPX", "SPX", "$SPX", "SPY"):
+                if alias not in candidates:
+                    candidates.append(alias)
+
+            def _load_bench(conn):
+                cur = conn.cursor()
+                for sym in candidates:
+                    cur.execute(
+                        "SELECT close FROM price_cache WHERE symbol=? AND date<=? ORDER BY date DESC LIMIT 1",
+                        (sym, asof),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        val = row.get("close") if isinstance(row, dict) else row[0]
+                        try:
+                            num = float(val)
+                            if num > 0:
+                                return num
+                        except Exception:
+                            continue
+                return None
+
+            bench_val = with_conn(_load_bench)
         except Exception:
-            bench_map = {}
-        bench_val = bench_map.get(asof) if bench_map else None
+            bench_val = None
         nav_by_account: Dict[str, float] = {acct: float(account_values.get(acct) or 0.0) for acct in accounts}
         for row in positions:
             acct = row.get("account")
@@ -1127,6 +1157,14 @@ async def import_positions(file: UploadFile = File(...), account: Optional[str] 
         legacy_engine._clear_nav_cache()
     except Exception:
         pass
+    logger.info(
+        "import-positions done file=%r mode=%s accounts=%s positions=%d trades=%d",
+        file.filename,
+        "ALL" if import_all_accounts else f"specific:{selected_account}",
+        accounts,
+        len(positions),
+        trades_created,
+    )
     return {
         "ok": True,
         "accounts": accounts,

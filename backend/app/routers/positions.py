@@ -91,20 +91,22 @@ def set_cash(payload: CashPayload):
 def bulk_upsert(payload: BulkPayload):
     try:
         account_override = payload.account
-        if account_override and account_override.upper() == "ALL":
-            raise ValueError("Select a specific account (not ALL) to upload positions.")
+        use_override = bool(account_override) and account_override.upper() != "ALL"
         for row in payload.positions:
             data = row.model_dump(exclude_unset=True)
-            if account_override and not data.get("account"):
+            if use_override:
                 data["account"] = account_override
-            if not data.get("account") or str(data.get("account")).strip().upper() == "ALL":
-                raise ValueError("Select a specific account (not ALL) to upload positions.")
+            row_account = str(data.get("account") or "").strip()
+            if not row_account or row_account.upper() == "ALL":
+                raise ValueError(
+                    "Each row must include a specific account. Select one account or provide an account column."
+                )
             portfolio.upsert_position(data)
         if payload.cash is not None:
-            if account_override:
+            if use_override:
                 portfolio.set_account_cash(account_override, payload.cash)
             else:
-                raise ValueError("Select a specific account (not ALL) to update cash.")
+                raise ValueError("Cannot update cash when account is ALL.")
         return {"ok": True, "count": len(payload.positions)}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

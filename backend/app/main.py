@@ -87,10 +87,22 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/version")
+def version():
+    # Lightweight deploy verification endpoint.
+    return {
+        "build_id": os.getenv("RENDER_GIT_COMMIT", os.getenv("GIT_COMMIT", "local")),
+        "build_time": os.getenv("BUILD_TIMESTAMP", "unknown"),
+        "environment": os.getenv("ENVIRONMENT", "development"),
+    }
+
+
 @app.on_event("startup")
 def _startup():
     ensure_schema()
-    seed_demo_portfolio_if_empty()
+    # Demo seed can be expensive; keep disabled by default in deployed envs.
+    if os.getenv("WS_SEED_DEMO", "0") == "1":
+        seed_demo_portfolio_if_empty()
     start_workers()
 
 

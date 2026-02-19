@@ -9,6 +9,8 @@ services:
     envVars:
       - key: ENVIRONMENT
         value: production
+      - key: WS_SEED_DEMO
+        value: "0"
       - key: WS_STATIC_MODE
         value: "0"
       - key: WS_LIVE_QUOTES

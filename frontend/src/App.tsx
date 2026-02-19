@@ -1676,14 +1676,15 @@ export default function App() {
       firstRows.some((rowText) => rowText.includes("balances for all-accounts") || rowText.includes("balances for all accounts")) ||
       firstRows.some((rowText) => rowText.includes("total accounts value") && rowText.includes("cash & cash investments total"));
     const isAccountStatement = firstRows.some((rowText) => rowText.includes("account statement"));
+    const isSchwabPositionsFilename = /positions[_-]\d{4}[-_]\d{2}[-_]\d{2}/.test(filenameLower);
     const looksLikeSchwabPositionsDump =
       textLower.includes("positions for custaccs") ||
+      isSchwabPositionsFilename ||
       (textLower.includes("account total") && textLower.includes("cash & cash investments"));
-    const isPositionsReport = firstRows.some(
-      (rowText) => rowText.includes("positions for") || rowText.includes("custaccs")
-    ) ||
-      filenameLower.includes("positions") ||
-      looksLikeSchwabPositionsDump;
+    const isPositionsReport =
+      looksLikeSchwabPositionsDump ||
+      firstRows.some((rowText) => rowText.includes("positions for") || rowText.includes("custaccs")) ||
+      filenameLower.includes("positions");
     if (isBalancesReport) {
       try {
         setToast("Importing balances CSV...");
