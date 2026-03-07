@@ -1748,12 +1748,29 @@ def get_nav_series(limit: int = 120, account: Optional[str] = None) -> List[Dict
         return cached
     start_iso = _effective_nav_start(account)
     snapshot_points: List[Dict[str, Any]] = []
+    snapshot_points = _get_nav_series_from_snapshots(limit=limit, account=account)
+    # Imported/stored snapshots are cheap and deterministic; prefer them in all modes.
+    if snapshot_points:
+        _set_nav_cache(limit, account, snapshot_points)
+        return snapshot_points
+    # In render-style import deployments (live quotes disabled), avoid expensive
+    # history rebuilds in request path and return a lightweight current NAV point.
+    if not settings.static_mode and not settings.live_quotes:
+        today = today_str()
+        nav_val = _get_account_value(account)
+        if nav_val is None:
+            try:
+                positions_live = build_positions_live(today, _get_bench_start(), account=account)
+                cash_total = compute_cash_balance_total(account)
+                net_mv = float(np.sum(positions_live["market_value"].astype(float).to_numpy())) if not positions_live.empty else 0.0
+                nav_val = float(cash_total + net_mv) if not positions_live.empty else float(cash_total)
+            except Exception:
+                nav_val = 0.0
+        point = [{"date": today, "nav": float(nav_val or 0.0), "bench": 1.0, "twr": 1.0}]
+        _set_nav_cache(limit, account, point)
+        return point
     if settings.static_mode:
-        snapshot_points = _get_nav_series_from_snapshots(limit=limit, account=account)
-        # In static mode, imported balance history/nav snapshots are authoritative.
-        if snapshot_points:
-            _set_nav_cache(limit, account, snapshot_points)
-            return snapshot_points
+        return []
     bench_series = get_bench_series(start_date=start_iso)
     nav_df = build_daily_nav_series(start_iso, bench_series, account=account)
     if nav_df is None or nav_df.empty:
@@ -1805,14 +1822,6 @@ def get_nav_series(limit: int = 120, account: Optional[str] = None) -> List[Dict
 
 def _get_nav_series_from_snapshots(limit: int = 120, account: Optional[str] = None) -> List[Dict[str, Any]]:
     label = _account_label(account)
-    # Build bench_map: date -> raw close price (e.g. SPX index)
-    bench_map: Dict[str, float] = {}
-    try:
-        bench_series = get_bench_series()
-        if bench_series is not None and len(bench_series):
-            bench_map = {str(r["d"]): float(r["close"]) for _, r in bench_series.iterrows()}
-    except Exception:
-        bench_map = {}
 
     def _aggregate_all_rows(raw_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if not raw_rows:
@@ -1913,17 +1922,19 @@ def _get_nav_series_from_snapshots(limit: int = 120, account: Optional[str] = No
     rows = rows[-int(limit):]
 
     points = []
-    # Track last known bench raw price for forward-fill
+    # Track last known bench value for forward-fill (from stored snapshots only).
     last_bench_raw: Optional[float] = None
     base_nav: Optional[float] = None
     for row in rows:
         d = str(row.get("date") or "")
         nav_val = float(row.get("nav") or 0.0)
-
-        # Prefer live bench_map lookup over stored bench (stored bench may be nav value if bench was missing)
-        bench_raw = bench_map.get(d)
-        if bench_raw and bench_raw > 0:
-            last_bench_raw = bench_raw
+        bench_raw = row.get("bench")
+        try:
+            bench_raw_num = float(bench_raw) if bench_raw is not None else None
+        except Exception:
+            bench_raw_num = None
+        if bench_raw_num is not None and bench_raw_num > 0:
+            last_bench_raw = bench_raw_num
 
         # Use forward-filled bench raw price
         effective_bench = last_bench_raw if last_bench_raw and last_bench_raw > 0 else None
@@ -2307,7 +2318,9 @@ def apply_trade(payload: Dict[str, Any]) -> Tuple[bool, str, Optional[str]]:
         conn.commit()
 
     with_conn(_run)
-    if not is_option_symbol(symbol):
+    source_tag = str(source or "").strip().upper()
+    skip_history_refresh = source_tag in {"CSV_IMPORT", "CSV_REALIZED", "CSV_TRANSACTION"}
+    if not is_option_symbol(symbol) and not skip_history_refresh:
         history_start = parse_iso_date(trade_date)
         ensure_symbol_history(symbol, history_start or _get_bench_start(), is_bench=False)
     cache.delete_pattern("positions")
@@ -2763,7 +2776,11 @@ def close_expired_options(account: Optional[str] = None) -> int:
 
 def get_snapshot(account: Optional[str] = None) -> Dict[str, Any]:
     bench = _get_benchmark()
-    bench_series = get_bench_series(bench)
+    bench_series = pd.DataFrame()
+    # In import-heavy deployments with live quotes disabled, avoid network-bound
+    # benchmark refresh in snapshot reads.
+    if settings.static_mode or settings.live_quotes:
+        bench_series = get_bench_series(bench)
     bench_asof = str(bench_series["d"].iloc[-1]) if bench_series is not None and len(bench_series) else today_str()
     live_date = today_str()
 
@@ -2777,10 +2794,24 @@ def get_snapshot(account: Optional[str] = None) -> Dict[str, Any]:
     else:
         nav_live = float(cash_total + net_mv) if not positions_live.empty else float(cash_total)
     if not settings.static_mode and _has_trade_or_entry_data(account):
+        # Avoid expensive NAV recomputation in snapshot requests.
+        # Prefer latest stored snapshot for specific accounts.
         try:
-            latest_nav = get_nav_series(limit=1, account=account)
-            if latest_nav:
-                nav_live = float(latest_nav[-1].get("nav") or nav_live)
+            label = _account_label(account)
+            if label != "ALL":
+                def _load_latest_nav(conn):
+                    cur = conn.cursor()
+                    cur.execute(
+                        "SELECT nav FROM nav_snapshots WHERE account=? ORDER BY date DESC LIMIT 1",
+                        (label,),
+                    )
+                    row = cur.fetchone()
+                    if not row:
+                        return None
+                    return row.get("nav") if isinstance(row, dict) else row[0]
+                latest_nav = with_conn(_load_latest_nav)
+                if latest_nav is not None:
+                    nav_live = float(latest_nav)
         except Exception:
             pass
     cash_avail = compute_cash_available(cash_total, positions_live)

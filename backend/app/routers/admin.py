@@ -5,6 +5,8 @@ import io
 import logging
 import hashlib
 import re
+import os
+import threading
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from pydantic import BaseModel
 
@@ -16,6 +18,10 @@ from ..services import options as options_service
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 logger = logging.getLogger(__name__)
+
+_NAV_REBUILD_LOCK = threading.Lock()
+_NAV_REBUILD_INFLIGHT: set[tuple[str, int]] = set()
+_NAV_REBUILD_SEMAPHORE = threading.Semaphore(1)
 
 
 class ResetPayload(BaseModel):
@@ -67,6 +73,38 @@ class SectorPerformanceInputPayload(BaseModel):
     sector: str
     baseline_value: Optional[float] = None
     target_weight: Optional[float] = None
+
+
+def _balance_history_mode() -> str:
+    raw = str(os.getenv("WS_BALANCE_HISTORY_MODE", "")).strip().lower()
+    if raw in {"fast", "full"}:
+        return raw
+    env = str(os.getenv("ENVIRONMENT", "")).strip().lower()
+    return "fast" if env in {"production", "prod"} else "full"
+
+
+def _queue_nav_rebuild(account: Optional[str], limit: int) -> None:
+    if settings.static_mode:
+        return
+    label = legacy_engine._account_label(account)
+    key = (label, int(limit))
+    with _NAV_REBUILD_LOCK:
+        if key in _NAV_REBUILD_INFLIGHT:
+            return
+        _NAV_REBUILD_INFLIGHT.add(key)
+
+    def _worker():
+        try:
+            with _NAV_REBUILD_SEMAPHORE:
+                portfolio_service.rebuild_nav_history(limit=int(limit), account=label)
+        except Exception as exc:
+            logger.warning("Async nav rebuild failed account=%s limit=%s err=%s", label, limit, exc)
+        finally:
+            with _NAV_REBUILD_LOCK:
+                _NAV_REBUILD_INFLIGHT.discard(key)
+
+    thread = threading.Thread(target=_worker, daemon=True, name=f"nav-rebuild-{label}")
+    thread.start()
 
 
 @router.get("/benchmark")
@@ -2494,7 +2532,7 @@ async def import_transactions(
         legacy_engine._clear_nav_cache()
     except Exception:
         pass
-    portfolio_service.rebuild_nav_history(limit=2000, account=acct)
+    _queue_nav_rebuild(account=acct, limit=2000)
 
     return {
         "ok": True,
@@ -2505,6 +2543,7 @@ async def import_transactions(
         "auto_closed_expired": auto_closed_expired,
         "skipped_close_rows": skipped_close_rows,
         "duplicates_skipped": skipped_duplicate_rows,
+        "nav_rebuild": "queued",
     }
 
 
@@ -2783,60 +2822,59 @@ async def import_balances(file: UploadFile = File(...), account: Optional[str] =
 
         start_iso = str(history_for_nav[0]["date"])
         end_iso = str(calibration_history[-1]["date"])
+        history_points_for_snapshots = history_non_future if history_non_future else list(calibration_history)
+        latest_nav = float(history_points_for_snapshots[-1]["amount"])
+        latest_date = str(history_points_for_snapshots[-1]["date"])
+        nav_snapshots_written = 0
+        fast_mode = (not settings.static_mode) and (_balance_history_mode() == "fast")
 
-        if settings.static_mode:
-            bench_series = legacy_engine.get_bench_series(start_date=start_iso)
-            bench_map_history: Dict[str, float] = {}
-            if bench_series is not None and len(bench_series):
-                for _, r in bench_series.iterrows():
-                    d = str(r.get("d") or "")
-                    if not d:
-                        continue
-                    try:
-                        close_val = float(r.get("close") or 0.0)
-                    except Exception:
-                        continue
-                    if close_val > 0:
-                        bench_map_history[d] = close_val
+        if settings.static_mode or fast_mode:
+            history_adjustment_mode = "none" if settings.static_mode else "fast_snapshot"
 
-            history_points_for_snapshots = history_non_future if history_non_future else list(calibration_history)
-            latest_nav = float(history_points_for_snapshots[-1]["amount"])
-            latest_date = str(history_points_for_snapshots[-1]["date"])
-            nav_snapshots_written = 0
-
-            def _store_static(conn):
+            def _store_fast(conn):
                 nonlocal nav_snapshots_written
                 cur = conn.cursor()
+                if fast_mode:
+                    cur.execute(
+                        (
+                            "DELETE FROM cash_flows WHERE account=? "
+                            "AND (note LIKE 'BALANCE_ADJ_HISTORY%' OR note LIKE 'BALANCE_ADJ_HISTORY_EXTERNAL%')"
+                        ),
+                        (target_account,),
+                    )
                 cur.execute("DELETE FROM nav_snapshots WHERE account=?", (target_account,))
                 for point in history_points_for_snapshots:
                     d = str(point.get("date") or "")
                     if not d:
                         continue
                     nav_val = float(point.get("amount") or 0.0)
-                    bench_val = bench_map_history.get(d)
                     cur.execute(
                         "INSERT OR REPLACE INTO nav_snapshots(account, date, nav, bench) VALUES(?,?,?,?)",
-                        (target_account, d, nav_val, bench_val),
+                        (target_account, d, nav_val, None),
                     )
                     nav_snapshots_written += 1
 
-                cur.execute("SELECT cash, anchor_mode FROM accounts WHERE account=?", (target_account,))
+                cur.execute("SELECT cash, asof, anchor_mode FROM accounts WHERE account=?", (target_account,))
                 row = cur.fetchone()
                 existing_cash = row.get("cash") if isinstance(row, dict) else (row[0] if row else None)
-                existing_mode = row.get("anchor_mode") if isinstance(row, dict) else (row[1] if row and len(row) > 1 else None)
+                existing_asof = row.get("asof") if isinstance(row, dict) else (row[1] if row and len(row) > 1 else None)
+                existing_mode = row.get("anchor_mode") if isinstance(row, dict) else (row[2] if row and len(row) > 2 else None)
                 seed_cash = float(existing_cash) if existing_cash is not None else float(latest_nav)
+                seed_asof = legacy_engine.parse_iso_date(existing_asof) or latest_date
                 seed_mode = str(existing_mode or "EOD").strip().upper() or "EOD"
                 cur.execute(
                     "INSERT OR REPLACE INTO accounts(account, cash, asof, account_value, anchor_mode) VALUES(?,?,?,?,?)",
-                    (target_account, seed_cash, latest_date, latest_nav, seed_mode),
+                    (target_account, seed_cash, seed_asof, latest_nav, seed_mode),
                 )
                 conn.commit()
 
-            with_conn(_store_static)
+            with_conn(_store_fast)
             try:
                 legacy_engine._clear_nav_cache()
             except Exception:
                 pass
+            if fast_mode:
+                _queue_nav_rebuild(account=target_account, limit=1200)
             return {
                 "ok": True,
                 "account": target_account,
@@ -2848,9 +2886,10 @@ async def import_balances(file: UploadFile = File(...), account: Optional[str] =
                 "matched_nav_points": len(history_points_for_snapshots),
                 "history_adjustments": 0,
                 "history_anchor_adjustment": 0.0,
-                "history_adjustment_mode": "none",
+                "history_adjustment_mode": history_adjustment_mode,
                 "future_points_ignored": future_points_ignored,
                 "nav_snapshots_written": nav_snapshots_written,
+                "nav_rebuild": "queued" if fast_mode else "not_required",
             }
 
         use_external_history_flows = bool(legacy_engine._has_non_import_trades(target_account))
@@ -2982,7 +3021,7 @@ async def import_balances(file: UploadFile = File(...), account: Optional[str] =
         except Exception:
             pass
         if not settings.static_mode:
-            portfolio_service.rebuild_nav_history(limit=4000, account=target_account)
+            _queue_nav_rebuild(account=target_account, limit=4000)
         return {
             "ok": True,
             "account": target_account,
@@ -2997,6 +3036,7 @@ async def import_balances(file: UploadFile = File(...), account: Optional[str] =
             "history_adjustment_mode": "external" if use_external_history_flows else "internal",
             "future_points_ignored": future_points_ignored,
             "nav_snapshots_written": nav_snapshots_written,
+            "nav_rebuild": "queued",
         }
 
     asof = None
@@ -3087,19 +3127,11 @@ async def import_balances(file: UploadFile = File(...), account: Optional[str] =
     # In static mode, also store NAV snapshots from the balance import
     # so charts reflect the imported account values
     if settings.static_mode:
-        bench_map: Dict[str, float] = {}
-        try:
-            bench_series = legacy_engine.get_bench_series()
-            if bench_series is not None and len(bench_series):
-                bench_map = {str(r["d"]): float(r["close"]) for _, r in bench_series.iterrows()}
-        except Exception:
-            bench_map = {}
         for name, data in accounts.items():
             nav_val = data.get("account_value") or data.get("cash")
             if nav_val and nav_val > 0:
                 date_iso = asof or datetime.now().date().isoformat()
-                bench_val = bench_map.get(date_iso)
-                portfolio_service.store_nav_snapshot(name, date_iso, float(nav_val), bench=bench_val)
+                portfolio_service.store_nav_snapshot(name, date_iso, float(nav_val), bench=None)
 
     try:
         legacy_engine._clear_nav_cache()
