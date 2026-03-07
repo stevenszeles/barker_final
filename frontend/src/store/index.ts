@@ -170,7 +170,24 @@ export const useAppStore = create<StoreState>((set) => ({
   fetchAccounts: async () => {
     try {
       const resp = await api.get<{ accounts: AccountInfo[] }>("/admin/accounts");
-      set({ accounts: resp.data?.accounts ?? [] });
+      const accounts = resp.data?.accounts ?? [];
+      const names = new Set(
+        accounts
+          .map((row) => (row?.account || "").trim())
+          .filter(Boolean)
+      );
+      names.add("ALL");
+
+      const current = (useAppStore.getState().account || "ALL").trim() || "ALL";
+      const nextAccount = names.has(current) ? current : "ALL";
+      if (nextAccount !== current) {
+        try {
+          window.localStorage.setItem(ACCOUNT_STORAGE_KEY, nextAccount);
+        } catch {
+          // ignore storage errors
+        }
+      }
+      set({ accounts, account: nextAccount });
     } catch {
       set({ accounts: [] });
     }

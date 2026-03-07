@@ -1913,6 +1913,14 @@ export default function App() {
       textLower.includes("positions for custaccs") ||
       isSchwabPositionsFilename ||
       hasPositionsHeader;
+    const isAllAccountsPositionsReport =
+      looksLikeSchwabPositionsDump &&
+      (
+        filenameLower.includes("all-accounts") ||
+        filenameLower.includes("all_accounts") ||
+        textLower.includes("positions for custaccs") ||
+        firstRows.some((rowText) => rowText.includes("positions for custaccs"))
+      );
     const isPositionsReport =
       (!isBalancesReport && looksLikeSchwabPositionsDump) ||
       firstRows.some((rowText) => rowText.includes("positions for") || rowText.includes("custaccs")) ||
@@ -1951,7 +1959,11 @@ export default function App() {
       }
     }
     if (isPositionsReport) {
-      const account = accountId && accountId.trim() ? accountId : "ALL";
+      const account = isAllAccountsPositionsReport
+        ? "ALL"
+        : accountId && accountId.trim()
+          ? accountId
+          : "ALL";
       try {
         setToast("Importing positions CSV...");
         const form = new FormData();
@@ -1963,6 +1975,9 @@ export default function App() {
         const count = resp.data?.positions_count ?? resp.data?.count ?? 0;
         const importedAccounts = Array.isArray(resp.data?.accounts) ? resp.data.accounts.length : null;
         fetchAccounts();
+        if (account === "ALL" && accountId !== "ALL") {
+          setAccount("ALL");
+        }
         refreshAll();
         fetchNav(navLimit);
         if (account === "ALL") {
