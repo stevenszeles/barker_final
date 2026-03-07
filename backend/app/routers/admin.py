@@ -847,24 +847,42 @@ def _parse_custaccs_positions(text: str) -> Dict[str, Any]:
         symbol = _normalize_symbol_token(row[0].strip())
         if not symbol:
             continue
-        if symbol.lower() == "account total":
-            total_val = _parse_money(_cell(row, "Mkt Val (Market Value)"))
+        symbol_lower = symbol.lower()
+        qty = _parse_float(_cell(row, "Qty (Quantity)"))
+        security_type = _cell(row, "Security Type")
+        security_type_lower = str(security_type or "").strip().lower()
+        mkt_val = _parse_money(_cell(row, "Mkt Val (Market Value)"))
+        if symbol_lower.startswith("account total"):
+            total_val = mkt_val
             if total_val is not None:
                 account_value_by_account[current_account] = float(total_val)
             continue
-        if symbol.lower().startswith("cash"):
-            cash = _parse_money(_cell(row, "Mkt Val (Market Value)"))
-            cash_by_account[current_account] = cash
+        # Schwab summary rows (e.g. "Futures Cash", "Cash & Cash Investments")
+        # are not tradable positions; fold them into cash when present.
+        if abs(qty) <= 1e-12 and (
+            symbol_lower.startswith("cash")
+            or symbol_lower.startswith("futures cash")
+            or "cash investments" in symbol_lower
+        ):
+            if mkt_val is not None:
+                cash_by_account[current_account] = float(cash_by_account.get(current_account, 0.0)) + float(mkt_val)
             continue
-        qty = _parse_float(_cell(row, "Qty (Quantity)"))
+        # Skip non-position summary rows that can otherwise leak into holdings.
+        if abs(qty) <= 1e-12:
+            if mkt_val is not None and (
+                "positions market value" in symbol_lower
+                or "market value total" in symbol_lower
+                or "account value" in symbol_lower
+                or "total accounts value" in symbol_lower
+            ):
+                account_value_by_account.setdefault(current_account, float(mkt_val))
+            continue
         price = _parse_float(_cell(row, "Price"))
-        mkt_val = _parse_money(_cell(row, "Mkt Val (Market Value)"))
         day_chg = _parse_money(_cell(row, "Day Chng $ (Day Change $)"))
         cost_basis = _parse_money(_cell(row, "Cost Basis"))
         gain = _parse_money(_cell(row, "Gain $ (Gain/Loss $)"))
-        security_type = _cell(row, "Security Type")
         parsed_option = _parse_option_symbol(symbol) or _parse_option_symbol(_cell(row, "Description"))
-        asset_class = "option" if parsed_option or "option" in (security_type or "").lower() else "equity"
+        asset_class = "option" if parsed_option or "option" in security_type_lower else "equity"
         underlying = symbol
         expiry = None
         strike = None

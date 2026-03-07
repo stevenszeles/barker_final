@@ -129,6 +129,29 @@ def test_parse_custaccs_extracts_cash():
     assert not any("cash" in sym.lower() for sym in symbols)
 
 
+def test_parse_custaccs_skips_zero_qty_summary_rows():
+    from backend.app.routers.admin import _parse_custaccs_positions
+
+    sample = textwrap.dedent(
+        """\
+        Positions for CUSTACCS as of 01:18 AM ET, 02/10/2026
+        Limit Liability Company ...024
+        Symbol,Description,Qty (Quantity),Price,Mkt Val (Market Value),Cost Basis,Security Type
+        AAPL,Apple Inc,100,180.00,"18,000.00","15,000.00",Equity
+        Futures Cash,,,,"1,500.00",,
+        Futures Positions Market Value,,,,"2,200.00",,
+        Cash & Cash Investments,,,,"5,000.00",,
+        Account Total,,,,"26,700.00",,
+        """
+    )
+
+    result = _parse_custaccs_positions(sample)
+    symbols = {row["symbol"] for row in result["positions"]}
+    assert symbols == {"AAPL"}
+    assert result["cash"]["Limit Liability Company ...024"] == 6500.0
+    assert result["account_values"]["Limit Liability Company ...024"] == 26700.0
+
+
 def test_import_positions_parses_all_rows():
     from backend.app.routers.admin import _parse_custaccs_positions
 

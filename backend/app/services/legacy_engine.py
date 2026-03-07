@@ -151,7 +151,12 @@ def _get_setting(key: str, default: Optional[str] = None) -> Optional[str]:
     def _run(conn):
         cur = conn.cursor()
         cur.execute("SELECT value FROM settings WHERE key=?", (key,))
-        row = cur.fetchone()
+        row = None
+        if hasattr(cur, "fetchone"):
+            row = cur.fetchone()
+        elif hasattr(cur, "fetchall"):
+            rows = cur.fetchall() or []
+            row = rows[0] if rows else None
         if not row:
             return default
         if isinstance(row, dict):
@@ -2996,10 +3001,19 @@ def get_sector_series(sector: str, limit: int = 120, source: str = "auto", accou
         tr["qty"] = pd.to_numeric(tr["qty"], errors="coerce").fillna(0.0)
         tr["side"] = tr["side"].astype(str).str.upper()
         tr["cash_flow"] = pd.to_numeric(tr["cash_flow"], errors="coerce").fillna(0.0)
-        tr["realized_pl"] = pd.to_numeric(tr.get("realized_pl"), errors="coerce").fillna(0.0)
-        tr["trade_type"] = tr.get("trade_type", "").astype(str).str.upper()
-        tr["source"] = tr.get("source", "").astype(str).str.upper()
-        tr["sector"] = tr.get("sector", "").astype(str)
+        if "realized_pl" in tr.columns:
+            tr["realized_pl"] = pd.to_numeric(tr["realized_pl"], errors="coerce").fillna(0.0)
+        else:
+            tr["realized_pl"] = 0.0
+        if "trade_type" not in tr.columns:
+            tr["trade_type"] = ""
+        if "source" not in tr.columns:
+            tr["source"] = ""
+        if "sector" not in tr.columns:
+            tr["sector"] = ""
+        tr["trade_type"] = tr["trade_type"].astype(str).str.upper()
+        tr["source"] = tr["source"].astype(str).str.upper()
+        tr["sector"] = tr["sector"].astype(str)
         tr["is_import"] = (tr["trade_type"] == "IMPORT") | (tr["source"] == "CSV_IMPORT")
         tr = tr[~tr["is_import"]].copy()
         tr["sector"] = tr.apply(
