@@ -428,6 +428,17 @@ def test_resolve_balance_history_account_from_filename_without_existing_accounts
     assert out == "Limit_Liability_Company ...013"
 
 
+def test_resolve_balance_history_account_prefers_filename_suffix_over_single_existing():
+    from backend.app.routers.admin import _resolve_balance_history_account
+
+    out = _resolve_balance_history_account(
+        "Limit Liability Company_XXXX024_Balances_20260306-191958.CSV",
+        account_param=None,
+        existing_accounts=["Limit_Liability_Company ...013"],
+    )
+    assert out == "Limit_Liability_Company ...024"
+
+
 def test_snapshot_all_series_forward_fills_sparse_account_dates(monkeypatch):
     from backend.app.services import legacy_engine as engine
 

@@ -515,6 +515,12 @@ def _resolve_balance_history_account(
             digits = _extract_account_digits(acct)
             if digits and digits.endswith(suffix):
                 return acct
+        # If no existing account matches the masked suffix, use a deterministic
+        # account label derived from filename rather than collapsing to a single
+        # existing account.
+        fallback = _fallback_from_filename()
+        if fallback:
+            return fallback
 
     # Fallback fuzzy match on account name from filename.
     candidate = re.sub(r"\bbalances?\b.*$", "", stem, flags=re.I)
@@ -524,9 +530,12 @@ def _resolve_balance_history_account(
         if matched in existing_accounts:
             return matched
 
+    fallback = _fallback_from_filename()
+    if fallback:
+        return fallback
     if len(existing_accounts) == 1:
         return existing_accounts[0]
-    return _fallback_from_filename()
+    return None
 
 
 def _parse_balance_history_rows(rows: List[List[str]]) -> List[Dict[str, Any]]:
@@ -1864,8 +1873,9 @@ async def import_positions(file: UploadFile = File(...), account: Optional[str] 
     clear_accounts, alias_to_target = _expand_account_aliases(accounts, existing_accounts)
     import_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     accounts_with_real_trades: set[str] = set()
+    accounts_with_balance_history: set[str] = set()
     if clear_accounts:
-        def _find_real(conn):
+        def _inspect_accounts(conn):
             cur = conn.cursor()
             for acct in clear_accounts:
                 cur.execute(
@@ -1874,28 +1884,58 @@ async def import_positions(file: UploadFile = File(...), account: Optional[str] 
                 )
                 if cur.fetchone():
                     accounts_with_real_trades.add(acct)
-        with_conn(_find_real)
+                cur.execute(
+                    """
+                    SELECT 1
+                    FROM cash_flows
+                    WHERE account=?
+                      AND note LIKE 'BALANCE_ADJ_HISTORY%'
+                    LIMIT 1
+                    """,
+                    (acct,),
+                )
+                if cur.fetchone():
+                    accounts_with_balance_history.add(acct)
+        with_conn(_inspect_accounts)
 
         portfolio_service.clear_positions_for_accounts(clear_accounts)
         for acct in clear_accounts:
-            # Always clear nav history so the chart rebuilds from fresh import data
-            try:
-                portfolio_service.clear_nav_history(account=acct)
-            except Exception:
-                pass
+            preserve_balance_history = (not settings.static_mode) and (acct in accounts_with_balance_history)
+            if not preserve_balance_history:
+                # Clear stale NAV only when we are not preserving imported balance-history calibration.
+                try:
+                    portfolio_service.clear_nav_history(account=acct)
+                except Exception:
+                    pass
             if settings.static_mode or acct not in accounts_with_real_trades:
                 try:
-                    portfolio_service.clear_trades_for_account(account=acct)
+                    if preserve_balance_history:
+                        def _clear_import_trades(conn):
+                            cur = conn.cursor()
+                            cur.execute(
+                                """
+                                DELETE FROM trades
+                                WHERE account=?
+                                  AND (COALESCE(UPPER(trade_type), '')='IMPORT'
+                                       OR COALESCE(UPPER(source), '')='CSV_IMPORT')
+                                """,
+                                (acct,),
+                            )
+                            conn.commit()
+                        with_conn(_clear_import_trades)
+                    else:
+                        portfolio_service.clear_trades_for_account(account=acct)
                 except Exception:
                     pass
-                try:
-                    def _clear_cash(conn):
-                        cur = conn.cursor()
-                        cur.execute("DELETE FROM cash_flows WHERE account=?", (acct,))
-                        conn.commit()
-                    with_conn(_clear_cash)
-                except Exception:
-                    pass
+                if not preserve_balance_history:
+                    try:
+                        def _clear_cash(conn):
+                            cur = conn.cursor()
+                            cur.execute("DELETE FROM cash_flows WHERE account=?", (acct,))
+                            conn.commit()
+                        with_conn(_clear_cash)
+                    except Exception:
+                        pass
     trades_created = 0
     for row in positions:
         portfolio_service.upsert_position(row)
