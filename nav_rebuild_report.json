@@ -1,0 +1,400 @@
+{
+  "inputs": {
+    "positions": "/Users/stevenszeles/Downloads/-Positions-2026-03-03-020401.csv",
+    "balances": "/Users/stevenszeles/Downloads/All_Accounts_Balances_20260303-020349.CSV",
+    "realized": "/Users/stevenszeles/Downloads/All_Accounts_GainLoss_Realized_Details_20260303-020415.csv",
+    "transactions": "/Users/stevenszeles/Downloads/Limit_Liability_Company_XXX013_Transactions_20260303-030602.csv"
+  },
+  "imports": {
+    "transactions": [
+      {
+        "account": "Limit_Liability_Company ...013",
+        "file": "/Users/stevenszeles/Downloads/Limit_Liability_Company_XXX013_Transactions_20260303-030602.csv",
+        "result": {
+          "ok": true,
+          "account": "Limit_Liability_Company ...013",
+          "trades_created": 113,
+          "cash_flows": 88,
+          "auto_closed_expired": 12,
+          "skipped_close_rows": 10
+        }
+      }
+    ],
+    "positions": {
+      "ok": true,
+      "accounts": [
+        "Individual XXXX-7521",
+        "Limit_Liability_Company ...013",
+        "Limit_Liability_Company ...024",
+        "Limit_Liability_Company ...093",
+        "Limit_Liability_Company ...145",
+        "Limit_Liability_Company ...288",
+        "Limit_Liability_Company ...562",
+        "Limit_Liability_Company ...588",
+        "Limit_Liability_Company ...591",
+        "Limit_Liability_Company ...662",
+        "Limit_Liability_Company ...724",
+        "Limit_Liability_Company ...775"
+      ],
+      "positions_count": 135,
+      "count": 135,
+      "trades_created": 0
+    },
+    "balances": {
+      "ok": true,
+      "accounts_updated": 1,
+      "cash_adjustments": 0
+    },
+    "balance_targets": {
+      "accounts": 15,
+      "account_values_written": 12
+    },
+    "realized": [
+      {
+        "account": "Limit_Liability_Company ...024",
+        "file": "/Users/stevenszeles/Downloads/All_Accounts_GainLoss_Realized_Details_20260303-020415.csv",
+        "result": {
+          "ok": true,
+          "account": "Limit_Liability_Company ...024",
+          "trades_created": 14,
+          "cash_flows": 0,
+          "auto_closed_expired": 0,
+          "skipped_close_rows": 0
+        }
+      },
+      {
+        "account": "Limit_Liability_Company ...093",
+        "file": "/Users/stevenszeles/Downloads/All_Accounts_GainLoss_Realized_Details_20260303-020415.csv",
+        "result": {
+          "ok": true,
+          "account": "Limit_Liability_Company ...093",
+          "trades_created": 10,
+          "cash_flows": 0,
+          "auto_closed_expired": 0,
+          "skipped_close_rows": 0
+        }
+      },
+      {
+        "account": "Limit_Liability_Company ...145",
+        "file": "/Users/stevenszeles/Downloads/All_Accounts_GainLoss_Realized_Details_20260303-020415.csv",
+        "result": {
+          "ok": true,
+          "account": "Limit_Liability_Company ...145",
+          "trades_created": 2,
+          "cash_flows": 0,
+          "auto_closed_expired": 0,
+          "skipped_close_rows": 0
+        }
+      },
+      {
+        "account": "Limit_Liability_Company ...288",
+        "file": "/Users/stevenszeles/Downloads/All_Accounts_GainLoss_Realized_Details_20260303-020415.csv",
+        "result": {
+          "ok": true,
+          "account": "Limit_Liability_Company ...288",
+          "trades_created": 30,
+          "cash_flows": 0,
+          "auto_closed_expired": 0,
+          "skipped_close_rows": 0
+        }
+      },
+      {
+        "account": "Limit_Liability_Company ...562",
+        "file": "/Users/stevenszeles/Downloads/All_Accounts_GainLoss_Realized_Details_20260303-020415.csv",
+        "result": {
+          "ok": true,
+          "account": "Limit_Liability_Company ...562",
+          "trades_created": 66,
+          "cash_flows": 0,
+          "auto_closed_expired": 0,
+          "skipped_close_rows": 0
+        }
+      },
+      {
+        "account": "Limit_Liability_Company ...588",
+        "file": "/Users/stevenszeles/Downloads/All_Accounts_GainLoss_Realized_Details_20260303-020415.csv",
+        "result": {
+          "ok": true,
+          "account": "Limit_Liability_Company ...588",
+          "trades_created": 8,
+          "cash_flows": 0,
+          "auto_closed_expired": 0,
+          "skipped_close_rows": 0
+        }
+      },
+      {
+        "account": "Limit_Liability_Company ...591",
+        "file": "/Users/stevenszeles/Downloads/All_Accounts_GainLoss_Realized_Details_20260303-020415.csv",
+        "result": {
+          "ok": true,
+          "account": "Limit_Liability_Company ...591",
+          "trades_created": 8,
+          "cash_flows": 0,
+          "auto_closed_expired": 0,
+          "skipped_close_rows": 0
+        }
+      },
+      {
+        "account": "Limit_Liability_Company ...662",
+        "file": "/Users/stevenszeles/Downloads/All_Accounts_GainLoss_Realized_Details_20260303-020415.csv",
+        "result": {
+          "ok": true,
+          "account": "Limit_Liability_Company ...662",
+          "trades_created": 12,
+          "cash_flows": 0,
+          "auto_closed_expired": 0,
+          "skipped_close_rows": 0
+        }
+      },
+      {
+        "account": "Limit_Liability_Company ...724",
+        "file": "/Users/stevenszeles/Downloads/All_Accounts_GainLoss_Realized_Details_20260303-020415.csv",
+        "result": {
+          "ok": true,
+          "account": "Limit_Liability_Company ...724",
+          "trades_created": 4,
+          "cash_flows": 0,
+          "auto_closed_expired": 0,
+          "skipped_close_rows": 0
+        }
+      },
+      {
+        "account": "Limit_Liability_Company ...775",
+        "file": "/Users/stevenszeles/Downloads/All_Accounts_GainLoss_Realized_Details_20260303-020415.csv",
+        "result": {
+          "ok": true,
+          "account": "Limit_Liability_Company ...775",
+          "trades_created": 8,
+          "cash_flows": 0,
+          "auto_closed_expired": 0,
+          "skipped_close_rows": 0
+        }
+      }
+    ],
+    "rebuild_nav": {
+      "ALL": {
+        "ok": true,
+        "count": 40
+      },
+      "Limit_Liability_Company ...013": {
+        "ok": true,
+        "count": 28
+      },
+      "Limit_Liability_Company ...024": {
+        "ok": true,
+        "count": 25
+      },
+      "Limit_Liability_Company ...093": {
+        "ok": true,
+        "count": 28
+      },
+      "Limit_Liability_Company ...145": {
+        "ok": true,
+        "count": 40
+      },
+      "Limit_Liability_Company ...288": {
+        "ok": true,
+        "count": 28
+      },
+      "Limit_Liability_Company ...562": {
+        "ok": true,
+        "count": 40
+      },
+      "Limit_Liability_Company ...588": {
+        "ok": true,
+        "count": 18
+      },
+      "Limit_Liability_Company ...591": {
+        "ok": true,
+        "count": 23
+      },
+      "Limit_Liability_Company ...662": {
+        "ok": true,
+        "count": 27
+      },
+      "Limit_Liability_Company ...724": {
+        "ok": true,
+        "count": 18
+      },
+      "Limit_Liability_Company ...775": {
+        "ok": true,
+        "count": 28
+      }
+    },
+    "reconcile": {
+      "count": 2,
+      "adjustments": [
+        {
+          "account": "Limit_Liability_Company ...145",
+          "date": "2026-03-02",
+          "delta": -0.6999969482421875,
+          "expected": 174717.65,
+          "before_latest_nav": 174718.34999694824
+        },
+        {
+          "account": "Limit_Liability_Company ...562",
+          "date": "2026-03-02",
+          "delta": 8693.907961828576,
+          "expected": 334704.7,
+          "before_latest_nav": 326010.79203817144
+        }
+      ],
+      "rebuild": {
+        "ALL": {
+          "ok": true,
+          "count": 40
+        },
+        "Limit_Liability_Company ...013": {
+          "ok": true,
+          "count": 28
+        },
+        "Limit_Liability_Company ...024": {
+          "ok": true,
+          "count": 25
+        },
+        "Limit_Liability_Company ...093": {
+          "ok": true,
+          "count": 28
+        },
+        "Limit_Liability_Company ...145": {
+          "ok": true,
+          "count": 40
+        },
+        "Limit_Liability_Company ...288": {
+          "ok": true,
+          "count": 28
+        },
+        "Limit_Liability_Company ...562": {
+          "ok": true,
+          "count": 40
+        },
+        "Limit_Liability_Company ...588": {
+          "ok": true,
+          "count": 18
+        },
+        "Limit_Liability_Company ...591": {
+          "ok": true,
+          "count": 23
+        },
+        "Limit_Liability_Company ...662": {
+          "ok": true,
+          "count": 27
+        },
+        "Limit_Liability_Company ...724": {
+          "ok": true,
+          "count": 18
+        },
+        "Limit_Liability_Company ...775": {
+          "ok": true,
+          "count": 28
+        }
+      }
+    }
+  },
+  "accounts": [
+    {
+      "account": "Limit_Liability_Company ...013",
+      "account_value": 437583.82,
+      "latest_nav": 437583.82,
+      "difference": 0.0,
+      "difference_pct": 0.0,
+      "cash": 33665.69106600035,
+      "asof": "2026-01-07"
+    },
+    {
+      "account": "Limit_Liability_Company ...024",
+      "account_value": 15864.73,
+      "latest_nav": 15864.73,
+      "difference": 0.0,
+      "difference_pct": 0.0,
+      "cash": 1123.0,
+      "asof": "2026-01-25"
+    },
+    {
+      "account": "Limit_Liability_Company ...093",
+      "account_value": 13983.95,
+      "latest_nav": 13983.95,
+      "difference": 0.0,
+      "difference_pct": 0.0,
+      "cash": -3317.8399999999965,
+      "asof": "2026-01-20"
+    },
+    {
+      "account": "Limit_Liability_Company ...145",
+      "account_value": 174717.65,
+      "latest_nav": 174717.65,
+      "difference": 0.0,
+      "difference_pct": 0.0,
+      "cash": 153.70000000000073,
+      "asof": "2025-09-24"
+    },
+    {
+      "account": "Limit_Liability_Company ...288",
+      "account_value": 15573.59,
+      "latest_nav": 15573.590000000002,
+      "difference": 1.8189894035458565e-12,
+      "difference_pct": 1.167996206106528e-14,
+      "cash": 4242.879999999999,
+      "asof": "2026-01-20"
+    },
+    {
+      "account": "Limit_Liability_Company ...562",
+      "account_value": 334704.7,
+      "latest_nav": 335850.4501352051,
+      "difference": 1145.750135205104,
+      "difference_pct": 0.34231671536285685,
+      "cash": -79979.01368120118,
+      "asof": "2024-01-23"
+    },
+    {
+      "account": "Limit_Liability_Company ...588",
+      "account_value": 11831.1,
+      "latest_nav": 11831.100000000002,
+      "difference": 1.8189894035458565e-12,
+      "difference_pct": 1.5374643131626445e-14,
+      "cash": 1488.1000000000004,
+      "asof": "2026-02-03"
+    },
+    {
+      "account": "Limit_Liability_Company ...591",
+      "account_value": 12387.95,
+      "latest_nav": 12387.950000000003,
+      "difference": 1.8189894035458565e-12,
+      "difference_pct": 1.4683538467186713e-14,
+      "cash": 7255.539999999999,
+      "asof": "2026-01-27"
+    },
+    {
+      "account": "Limit_Liability_Company ...662",
+      "account_value": 13156.15,
+      "latest_nav": 13156.150000000001,
+      "difference": 1.8189894035458565e-12,
+      "difference_pct": 1.3826152814811754e-14,
+      "cash": 5557.0,
+      "asof": "2026-01-21"
+    },
+    {
+      "account": "Limit_Liability_Company ...724",
+      "account_value": 15623.16,
+      "latest_nav": 15623.16,
+      "difference": 0.0,
+      "difference_pct": 0.0,
+      "cash": -5081.0,
+      "asof": "2026-02-03"
+    },
+    {
+      "account": "Limit_Liability_Company ...775",
+      "account_value": 12281.6,
+      "latest_nav": 12281.6,
+      "difference": 0.0,
+      "difference_pct": 0.0,
+      "cash": 934.0,
+      "asof": "2026-01-20"
+    }
+  ],
+  "summary": {
+    "accounts_total": 11,
+    "within_0_25pct": 10,
+    "within_1_00pct": 11
+  }
+}

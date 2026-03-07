@@ -1,0 +1,192 @@
+{
+  "meta": {
+    "db_path": "/private/var/folders/pp/605zqy7x0h71dk2zl8qxqdyh0000gn/T/nav_contingency_audit.db",
+    "elapsed_seconds": 149.3998999595642,
+    "transactions_count": 12,
+    "positions": "/Users/stevenszeles/Downloads/-Positions-2026-03-03-191256.csv",
+    "realized": "/Users/stevenszeles/Downloads/All_Accounts_GainLoss_Realized_Details_20260303-191309.csv"
+  },
+  "summary": {
+    "pass": 6,
+    "fail": 1,
+    "skip": 0,
+    "failed_cases": [
+      "realized_short_direction_ambiguity"
+    ]
+  },
+  "cases": [
+    {
+      "name": "idempotent_replace_true",
+      "status": "pass",
+      "details": {
+        "account": "Limit_Liability_Company ...013",
+        "first_import": {
+          "ok": true,
+          "account": "Limit_Liability_Company ...013",
+          "source": "CSV_TRANSACTION",
+          "trades_created": 119,
+          "cash_flows": 94,
+          "auto_closed_expired": 12,
+          "skipped_close_rows": 12,
+          "duplicates_skipped": 0
+        },
+        "second_import": {
+          "ok": true,
+          "account": "Limit_Liability_Company ...013",
+          "source": "CSV_TRANSACTION",
+          "trades_created": 119,
+          "cash_flows": 94,
+          "auto_closed_expired": 12,
+          "skipped_close_rows": 12,
+          "duplicates_skipped": 0
+        },
+        "first_counts": {
+          "trades": 131,
+          "cash_flows": 94,
+          "positions": 22,
+          "nav_snapshots": 29
+        },
+        "second_counts": {
+          "trades": 131,
+          "cash_flows": 94,
+          "positions": 22,
+          "nav_snapshots": 29
+        },
+        "first_latest_nav": 3569.8553519226043,
+        "second_latest_nav": 3569.8553519226043,
+        "latest_nav_delta": 0.0
+      }
+    },
+    {
+      "name": "duplicate_append_hazard",
+      "status": "pass",
+      "details": {
+        "account": "Limit_Liability_Company ...013",
+        "import_once": {
+          "ok": true,
+          "account": "Limit_Liability_Company ...013",
+          "source": "CSV_TRANSACTION",
+          "trades_created": 119,
+          "cash_flows": 94,
+          "auto_closed_expired": 12,
+          "skipped_close_rows": 12,
+          "duplicates_skipped": 0
+        },
+        "import_twice_append": {
+          "ok": true,
+          "account": "Limit_Liability_Company ...013",
+          "source": "CSV_TRANSACTION",
+          "trades_created": 0,
+          "cash_flows": 0,
+          "auto_closed_expired": 0,
+          "skipped_close_rows": 0,
+          "duplicates_skipped": 140
+        },
+        "counts_once": {
+          "trades": 131,
+          "cash_flows": 94,
+          "positions": 22,
+          "nav_snapshots": 29
+        },
+        "counts_twice": {
+          "trades": 131,
+          "cash_flows": 94,
+          "positions": 22,
+          "nav_snapshots": 29
+        },
+        "latest_nav_once": 3569.8553519226043,
+        "latest_nav_twice_append": 3569.8553519226043,
+        "latest_nav_delta": 0.0,
+        "explanation": "Re-uploading same file with replace=false duplicates trades/cash flows."
+      }
+    },
+    {
+      "name": "realized_plus_full_ledger_overlap",
+      "status": "pass",
+      "details": {
+        "account": "Limit_Liability_Company ...013",
+        "blocked_by_guardrail": true,
+        "exception": "409: Realized lot CSV overlaps existing transaction history for this account. Use replace=true or pass allow_overlap=true only if you intentionally want double-count behavior.",
+        "counts_before": {
+          "trades": 131,
+          "cash_flows": 94,
+          "positions": 22,
+          "nav_snapshots": 29
+        },
+        "latest_nav_before": 3569.8553519226043,
+        "explanation": "Realized-on-full-ledger import should be blocked unless explicitly forced."
+      }
+    },
+    {
+      "name": "anchor_asof_same_day_exclusion",
+      "status": "pass",
+      "details": {
+        "trade_ok": true,
+        "trade_message": "Trade saved.",
+        "cash_balance_total": 1500.0,
+        "expected_if_same_day_included": 1500.0,
+        "difference": 0.0,
+        "explanation": "Flows on anchor asof date are excluded due `date > anchor_asof` filter."
+      }
+    },
+    {
+      "name": "realized_short_direction_ambiguity",
+      "status": "fail",
+      "details": {
+        "rows_emitted": [
+          {
+            "Date": "2026-01-02",
+            "Action": "BUY",
+            "Symbol": "TEST",
+            "Description": "TEST SYMBOL",
+            "Quantity": 10.0,
+            "Price": 10.0,
+            "Amount": -100.0
+          },
+          {
+            "Date": "2026-01-03",
+            "Action": "SELL",
+            "Symbol": "TEST",
+            "Description": "TEST SYMBOL",
+            "Quantity": 10.0,
+            "Price": 8.0,
+            "Amount": 80.0
+          }
+        ],
+        "explanation": "Realized CSV lacks explicit open-side in parser logic; synthetic short lot would be treated as long lot."
+      }
+    },
+    {
+      "name": "float_precision_accumulation",
+      "status": "pass",
+      "details": {
+        "entries": 200000,
+        "amount_each": 0.01,
+        "expected_total": 2000.0,
+        "computed_total": 2000.0,
+        "drift": 0.0
+      }
+    },
+    {
+      "name": "snapshot_vs_latest_nav_consistency",
+      "status": "pass",
+      "details": {
+        "checked_accounts": [
+          "Limit_Liability_Company ...013",
+          "Limit_Liability_Company ...024",
+          "Limit_Liability_Company ...093",
+          "Limit_Liability_Company ...145",
+          "Limit_Liability_Company ...288",
+          "Limit_Liability_Company ...562",
+          "Limit_Liability_Company ...588",
+          "Limit_Liability_Company ...591",
+          "Limit_Liability_Company ...662",
+          "Limit_Liability_Company ...724",
+          "Limit_Liability_Company ...775"
+        ],
+        "mismatches_ge_1usd": [],
+        "mismatch_count": 0
+      }
+    }
+  ]
+}
