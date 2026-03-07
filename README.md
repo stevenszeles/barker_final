@@ -62,6 +62,10 @@ After data edits, refresh the page. The backend auto-reloads file contents on fi
 
 Current Docker image serves both API and frontend in one service. Deploy this container to Railway/Render and expose container port `8000`.
 
+For Render production stability:
+- Set `DATABASE_URL` to your Render Postgres connection string (required for persistent imports).
+- Set `WS_LIVE_QUOTES=0` (reduces background market-data load).
+
 ## Full System Context
 
 For full architecture, return methodology, import workflows, schema details, and operational handoff instructions, see:

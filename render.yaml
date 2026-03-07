@@ -9,11 +9,13 @@ services:
     envVars:
       - key: ENVIRONMENT
         value: production
+      - key: DATABASE_URL
+        sync: false
       - key: WS_SEED_DEMO
         value: "0"
       - key: WS_STATIC_MODE
         value: "0"
       - key: WS_LIVE_QUOTES
-        value: "1"
+        value: "0"
       - key: WS_ALLOW_ALL_ORIGINS
         value: "1"
