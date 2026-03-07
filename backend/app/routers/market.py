@@ -7,12 +7,42 @@ import websockets
 import httpx
 
 from ..config import settings
-from ..services import polygon, schwab, stooq
+from ..services import polygon, schwab, stooq, openfigi
 from ..services import options as options_service
 from ..services import futures as futures_service
 
 router = APIRouter(prefix="/market", tags=["market"])
 logger = logging.getLogger(__name__)
+
+
+def _map_tickers_to_requested(tickers: list[dict], symbol_map: Dict[str, str]) -> list[dict]:
+    reverse_map: Dict[str, List[str]] = {}
+    for original, resolved in symbol_map.items():
+        o = (original or "").strip().upper()
+        r = (resolved or "").strip().upper()
+        if not o or not r:
+            continue
+        reverse_map.setdefault(r, [])
+        if o not in reverse_map[r]:
+            reverse_map[r].append(o)
+
+    out: list[dict] = []
+    for row in tickers or []:
+        if not isinstance(row, dict):
+            continue
+        symbol = (
+            str(row.get("ticker") or row.get("sym") or row.get("symbol") or "").strip().upper()
+        )
+        if not symbol:
+            continue
+        targets = reverse_map.get(symbol) or [symbol]
+        for target in targets:
+            mapped = dict(row)
+            mapped["ticker"] = target
+            if target != symbol:
+                mapped["resolved_ticker"] = symbol
+            out.append(mapped)
+    return out
 
 
 def _require_polygon():
@@ -29,17 +59,21 @@ def snapshot(symbols: str):
     sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
     if not sym_list:
         return {"source": "unavailable", "tickers": []}
+    resolved_symbols, symbol_map = openfigi.resolve_symbols(sym_list)
+    sym_list = list(dict.fromkeys([s for s in resolved_symbols if s]))
+    if not sym_list:
+        return {"source": "unavailable", "tickers": []}
     # Marketdata-only mode: prefer Schwab -> Stooq
     if settings.marketdata_only:
         try:
             quotes = schwab.get_quotes(sym_list)
             if quotes:
-                return {"source": "schwab", "tickers": quotes}
+                return {"source": "schwab", "tickers": _map_tickers_to_requested(quotes, symbol_map)}
         except Exception as schwab_exc:
             logger.exception("Schwab quote fallback failed: %s", schwab_exc)
         try:
             quotes = stooq.get_quotes(sym_list)
-            return {"source": "stooq", "tickers": quotes}
+            return {"source": "stooq", "tickers": _map_tickers_to_requested(quotes, symbol_map)}
         except Exception as exc:
             logger.exception("Stooq fallback failed: %s", exc)
             return {
@@ -50,7 +84,10 @@ def snapshot(symbols: str):
     # Try Polygon first if configured
     if settings.polygon.api_key:
         try:
-            return polygon.get_snapshot(sym_list)
+            payload = polygon.get_snapshot(sym_list)
+            if isinstance(payload, dict) and isinstance(payload.get("tickers"), list):
+                payload["tickers"] = _map_tickers_to_requested(payload.get("tickers") or [], symbol_map)
+            return payload
         except httpx.HTTPStatusError as exc:
             status = exc.response.status_code
             logger.exception("Polygon snapshot error")
@@ -64,13 +101,13 @@ def snapshot(symbols: str):
     try:
         quotes = schwab.get_quotes(sym_list)
         if quotes:
-            return {"source": "schwab", "tickers": quotes}
+            return {"source": "schwab", "tickers": _map_tickers_to_requested(quotes, symbol_map)}
     except Exception as schwab_exc:
         logger.exception("Schwab quote fallback failed: %s", schwab_exc)
     # Fallback to Stooq (free, delayed)
     try:
         quotes = stooq.get_quotes(sym_list)
-        return {"source": "stooq", "tickers": quotes}
+        return {"source": "stooq", "tickers": _map_tickers_to_requested(quotes, symbol_map)}
     except Exception as exc:
         logger.exception("Stooq fallback failed: %s", exc)
         return {

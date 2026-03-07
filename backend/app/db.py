@@ -49,6 +49,7 @@ _PK_MAP = {
     "risk_metrics": ["metric"],
     "oauth_tokens": ["provider"],
     "quotes": ["symbol"],
+    "import_event_keys": ["account", "kind", "event_key"],
 }
 
 
@@ -198,15 +199,19 @@ def ensure_schema() -> None:
             account TEXT PRIMARY KEY,
             cash REAL,
             asof TEXT,
-            account_value REAL
+            account_value REAL,
+            anchor_mode TEXT NOT NULL DEFAULT 'BOD'
         )
         """
     )
-    # Backfill accounts.account_value if missing
+    # Backfill accounts.account_value / accounts.anchor_mode if missing
     try:
         columns = _table_columns(conn, "accounts")
         if "account_value" not in [c.lower() for c in columns]:
             cur.execute("ALTER TABLE accounts ADD COLUMN account_value REAL")
+        if "anchor_mode" not in [c.lower() for c in columns]:
+            cur.execute("ALTER TABLE accounts ADD COLUMN anchor_mode TEXT")
+        cur.execute("UPDATE accounts SET anchor_mode='BOD' WHERE anchor_mode IS NULL OR TRIM(anchor_mode) = ''")
     except Exception:
         pass
     # Default benchmark start (year start) if not set
@@ -400,6 +405,17 @@ def ensure_schema() -> None:
     )
     cur.execute(
         """
+        CREATE TABLE IF NOT EXISTS import_event_keys (
+            account TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            event_key TEXT NOT NULL,
+            ts TEXT NOT NULL,
+            PRIMARY KEY(account, kind, event_key)
+        )
+        """
+    )
+    cur.execute(
+        """
         CREATE TABLE IF NOT EXISTS oauth_tokens (
             provider TEXT PRIMARY KEY,
             access_token TEXT,
@@ -411,9 +427,21 @@ def ensure_schema() -> None:
     )
     cur.execute("SELECT value FROM settings WHERE key='start_cash'")
     if not cur.fetchone():
+        default_cash = None
         cur.execute("SELECT value FROM settings WHERE key='cash'")
         cash_row = cur.fetchone()
-        default_cash = cash_row[0] if cash_row else "5000000"
+        if cash_row:
+            default_cash = cash_row[0] if not isinstance(cash_row, dict) else cash_row.get("value")
+        if default_cash in (None, "", "0", "0.0"):
+            try:
+                cur.execute("SELECT COALESCE(SUM(cash),0) as total FROM accounts WHERE account!='ALL'")
+                row = cur.fetchone()
+                acct_cash = row.get("total") if isinstance(row, dict) else (row[0] if row else 0)
+                default_cash = str(float(acct_cash or 0.0))
+            except Exception:
+                default_cash = None
+        if default_cash in (None, ""):
+            default_cash = "0"
         cur.execute(
             "INSERT OR REPLACE INTO settings(key, value) VALUES('start_cash', ?)",
             (default_cash,),

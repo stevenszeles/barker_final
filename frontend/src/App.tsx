@@ -1,11 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useAppStore } from "./store";
 import type { Position } from "./store";
 import { api } from "./services/api";
 import PortfolioChart from "./components/PortfolioChart";
 import ErrorBoundary from "./components/ErrorBoundary";
-
-const strategyGroups = ["US L/S", "Vol Overlay", "Macro Hedges"];
 
 const sectorOptions = [
   "Information Technology",
@@ -26,8 +24,36 @@ const NAV_LIMITS: Record<string, number> = {
   "5D": 60,
   "1M": 120,
   "3M": 180,
+  "TYD": 320,
   "MAX": 3650,
 };
+
+type RiskMetricRow = {
+  metric: string;
+  value: number;
+  limit?: number | null;
+  breached?: boolean;
+};
+
+type RiskProfilePayload = {
+  stamp?: { asof?: string; source?: string; method_version?: string };
+  metrics?: RiskMetricRow[];
+  correlation?: {
+    labels?: string[];
+    matrix?: number[][];
+    observations?: number;
+  };
+  rolling?: {
+    dates?: string[];
+    portfolio_vol_20d?: number[];
+    benchmark_vol_20d?: number[];
+    tracking_error_20d?: number[];
+    drawdown?: number[];
+  };
+};
+
+type SectorLinePoint = { date: string; sector?: number | null };
+type SectorSourceSeries = { sleeve: SectorLinePoint[]; etf: SectorLinePoint[] };
 
 function safeNumber(value: number | null | undefined): number {
   if (value === null || value === undefined) return 0;
@@ -115,6 +141,21 @@ function isFutureSymbol(value: string) {
   return /^[A-Z0-9]{1,4}[FGHJKMNQUVXZ][0-9]{2}$/.test(s);
 }
 
+function sparklinePath(values: number[], width = 240, height = 64, pad = 6) {
+  const cleaned = values.filter((v) => Number.isFinite(v));
+  if (cleaned.length < 2) return "";
+  const min = Math.min(...cleaned);
+  const max = Math.max(...cleaned);
+  const span = Math.max(max - min, 1e-9);
+  const step = (width - pad * 2) / Math.max(cleaned.length - 1, 1);
+  const points = cleaned.map((v, i) => {
+    const x = pad + i * step;
+    const y = height - pad - ((v - min) / span) * (height - pad * 2);
+    return `${x},${y}`;
+  });
+  return points.join(" ");
+}
+
 export default function App() {
   const [tab, setTab] = useState("Monitor");
   const [showLeft, setShowLeft] = useState(true);
@@ -148,38 +189,19 @@ export default function App() {
     }[]
   >([]);
   const [toast, setToast] = useState("");
-  const [clock, setClock] = useState("");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
-  const [collapsedStrategies, setCollapsedStrategies] = useState<Record<string, boolean>>({});
   const [focus, setFocus] = useState<{ left?: string; center?: string }>({});
-  const [activeTable, setActiveTable] = useState<"watchlist" | "positions" | null>(null);
-  const [selectedWatchIndex, setSelectedWatchIndex] = useState(0);
+  const [activeTable, setActiveTable] = useState<"positions" | null>(null);
   const [selectedPosIndex, setSelectedPosIndex] = useState(0);
-  const [watchlistSymbols, setWatchlistSymbols] = useState<string[]>(() => {
-    try {
-      const raw = window.localStorage.getItem("ws_watchlist");
-      return raw ? JSON.parse(raw) : [];
-    } catch {
-      return [];
-    }
-  });
-  const watchlistInitRef = useRef(false);
-  const [watchlistInput, setWatchlistInput] = useState("");
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
     symbol: string;
     selectSymbol?: string;
-    mode: "watchlist" | "positions";
+    mode: "positions";
     instrumentId?: string | null;
     isStrategySummary?: boolean;
   } | null>(null);
-  const [schwabConnected, setSchwabConnected] = useState(false);
-  const [authModalOpen, setAuthModalOpen] = useState(false);
-  const [authCode, setAuthCode] = useState("");
-  const [authDiag, setAuthDiag] = useState<any | null>(null);
-  const [authDiagError, setAuthDiagError] = useState("");
-  const [authError, setAuthError] = useState("");
   const [positionModalOpen, setPositionModalOpen] = useState(false);
   const [positionForm, setPositionForm] = useState({
     instrument_id: "",
@@ -194,6 +216,7 @@ export default function App() {
     strike: "",
     option_type: "CALL",
     multiplier: "",
+    owner: "",
     sector: "",
     strategy: "",
   });
@@ -201,13 +224,15 @@ export default function App() {
   const [csvError, setCsvError] = useState("");
   const [benchStart, setBenchStart] = useState("");
   const [resetCash, setResetCash] = useState("");
-  const [navRebuildRunning, setNavRebuildRunning] = useState(false);
+  const [resetDeleteAccounts, setResetDeleteAccounts] = useState(true);
   const [hotkeysOpen, setHotkeysOpen] = useState(false);
-  const [alertsOpen, setAlertsOpen] = useState(false);
+  const [riskProfile, setRiskProfile] = useState<RiskProfilePayload | null>(null);
   const [sectorView, setSectorView] = useState(sectorOptions[0]);
-  const [sectorSeries, setSectorSeries] = useState<any[]>([]);
-  const [sectorSeriesMap, setSectorSeriesMap] = useState<Record<string, any[]>>({});
+  const [sectorSeriesMap, setSectorSeriesMap] = useState<Record<string, SectorSourceSeries>>({});
   const [sectorError, setSectorError] = useState("");
+  const [sectorShowSleeve, setSectorShowSleeve] = useState(true);
+  const [sectorShowEtf, setSectorShowEtf] = useState(true);
+  const [sectorShowPortfolio, setSectorShowPortfolio] = useState(true);
   const [accountSeries, setAccountSeries] = useState<Array<{ name: string; data: any[] }>>([]);
   const [navPasteText, setNavPasteText] = useState("");
   const [navPasteError, setNavPasteError] = useState("");
@@ -219,13 +244,21 @@ export default function App() {
   const [chartFull, setChartFull] = useState(false);
   const [chartMode, setChartMode] = useState<"PORTFOLIO" | "SECTOR">("PORTFOLIO");
   const [chartShowBench, setChartShowBench] = useState(true);
-  const [dismissedError, setDismissedError] = useState("");
-  const [dismissedWarning, setDismissedWarning] = useState("");
-  const [sectorSource, setSectorSource] = useState<"auto" | "etf" | "sleeve">("sleeve");
   const [selectedSectors, setSelectedSectors] = useState<string[]>([]);
   const [sectorTouched, setSectorTouched] = useState(false);
-  const [strategyFilter, setStrategyFilter] = useState("");
   const [optionPreview, setOptionPreview] = useState<{ net: number; legs: number } | null>(null);
+  const [activityClosedOnly, setActivityClosedOnly] = useState(true);
+  const [tradeRealizedDrafts, setTradeRealizedDrafts] = useState<Record<string, string>>({});
+  const [sectorReloadKey, setSectorReloadKey] = useState(0);
+  const [sectorPerfAccount, setSectorPerfAccount] = useState("");
+  const [sectorPerfSector, setSectorPerfSector] = useState(sectorOptions[0]);
+  const [sectorPerfBaseline, setSectorPerfBaseline] = useState("");
+  const [sectorPerfTargetWeight, setSectorPerfTargetWeight] = useState("");
+  const [sectorPerfRows, setSectorPerfRows] = useState<Array<{
+    sector: string;
+    baseline_value?: number | null;
+    target_weight?: number | null;
+  }>>([]);
 
   const {
     snapshot,
@@ -234,11 +267,9 @@ export default function App() {
     blotter,
     status,
     accounts,
-    schwabStatus,
     account: accountId,
     setAccount,
     fetchAccounts,
-    fetchSchwabStatus,
     quotes,
     marketConnected,
     connectMarketStream,
@@ -247,7 +278,6 @@ export default function App() {
     fetchStatus,
     fetchRisk,
     fetchBlotter,
-    error,
     refreshAll,
     fetchNav,
   } = useAppStore();
@@ -288,7 +318,13 @@ export default function App() {
     return priceMap.get(tradeSymbol) ?? 0;
   }, [priceMap, tradeSymbol, tradeQuote]);
   const navLimit = useMemo(() => {
-    const base = NAV_LIMITS[timeframe] ?? 120;
+    let base = NAV_LIMITS[timeframe] ?? 120;
+    if (timeframe === "TYD") {
+      const now = new Date();
+      const yearStart = new Date(now.getFullYear(), 0, 1);
+      const days = Math.ceil((now.getTime() - yearStart.getTime()) / 86400000) + 5;
+      base = Math.max(base, days);
+    }
     if (!benchStart) return base;
     const startTs = Date.parse(benchStart);
     if (!Number.isFinite(startTs)) return base;
@@ -304,13 +340,12 @@ export default function App() {
       return portfolioStatus ? `STATIC · ${portfolioStatus.asof}` : "STATIC";
     }
     const flags: string[] = [];
-    if (!schwabConnected) flags.push("SCHWAB OFF");
     if (portfolioStatus && !portfolioStatus.ok) flags.push("PORTFOLIO STALE");
     if (market && !market.ok) flags.push("MARKET STALE");
     if (flags.length) return flags.join(" · ");
     if (!portfolioStatus) return "OK";
     return `OK · ${portfolioStatus.asof}`;
-  }, [status, schwabConnected, staticMode]);
+  }, [status, staticMode]);
 
   const positionsEmptyBanner = useMemo(() => {
     if (positions.length) return "";
@@ -328,29 +363,6 @@ export default function App() {
   const portfolioStatus = getPanelStatus("portfolio");
   const riskStatus = getPanelStatus("risk");
   const marketStatus = getPanelStatus("market");
-  const brokerLabel =
-    portfolioStatus.source === "demo"
-      ? "Demo"
-      : schwabConnected
-        ? "Schwab ✓"
-        : portfolioStatus.source === "local"
-          ? "Local"
-          : "Connect";
-
-  useEffect(() => {
-    const tick = () =>
-      setClock(
-        new Date().toLocaleTimeString("en-US", {
-          hour12: false,
-          hour: "2-digit",
-          minute: "2-digit",
-          second: "2-digit",
-        })
-      );
-    tick();
-    const timer = setInterval(tick, 1000);
-    return () => clearInterval(timer);
-  }, []);
 
   useEffect(() => {
     const allowedByTab: Record<string, string[]> = {
@@ -388,19 +400,6 @@ export default function App() {
   }, [fetchAccounts]);
 
   useEffect(() => {
-    if (staticMode) return;
-    fetchSchwabStatus();
-    const timer = setInterval(fetchSchwabStatus, 30000);
-    return () => clearInterval(timer);
-  }, [fetchSchwabStatus, staticMode]);
-
-  useEffect(() => {
-    if (schwabStatus) {
-      setSchwabConnected(Boolean(schwabStatus.connected));
-    }
-  }, [schwabStatus]);
-
-  useEffect(() => {
     const run = () => {
       fetchSnapshot();
       fetchStatus();
@@ -417,6 +416,25 @@ export default function App() {
     const timer = setInterval(run, 30000);
     return () => clearInterval(timer);
   }, [tab, fetchRisk, accountId]);
+
+  useEffect(() => {
+    if (tab !== "Risk") return;
+    let active = true;
+    const run = async () => {
+      try {
+        const resp = await api.get<RiskProfilePayload>("/risk/profile");
+        if (active) setRiskProfile(resp.data ?? null);
+      } catch {
+        if (active) setRiskProfile(null);
+      }
+    };
+    run();
+    const timer = setInterval(run, 45000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [tab, accountId]);
 
   useEffect(() => {
     if (tab !== "Activity") return;
@@ -439,18 +457,6 @@ export default function App() {
     const timer = setTimeout(() => setToast(""), 4000);
     return () => clearTimeout(timer);
   }, [toast]);
-
-  const fetchAuthDiagnostics = async () => {
-    try {
-      const resp = await api.get("/auth/schwab/diagnostics");
-      setAuthDiag(resp.data);
-      setAuthDiagError("");
-    } catch (err: any) {
-      setAuthDiag(null);
-      setAuthDiagError(err?.response?.data?.detail ?? "Diagnostics unavailable");
-    }
-  };
-
   useEffect(() => {
     const close = () => setContextMenu(null);
     window.addEventListener("click", close);
@@ -470,7 +476,6 @@ export default function App() {
     let active = true;
     const loadSectors = async () => {
       if (chartMode !== "SECTOR") {
-        setSectorSeries([]);
         setSectorSeriesMap({});
         setSectorError("");
         return;
@@ -481,31 +486,55 @@ export default function App() {
           ? [sectorView]
           : [];
       if (!targets.length) {
-        setSectorSeries([]);
         setSectorSeriesMap({});
         setSectorError("");
         return;
       }
+      const enabledSources: Array<"sleeve" | "etf"> = [];
+      const guardErrors: string[] = [];
+      const sleeveAllowed = Boolean(accountId && accountId !== "ALL");
+      if (sectorShowSleeve) {
+        if (sleeveAllowed) {
+          enabledSources.push("sleeve");
+        } else {
+          guardErrors.push("Sleeve sectors are account-scoped. Select one account to chart sleeve returns.");
+        }
+      }
+      if (sectorShowEtf) enabledSources.push("etf");
+      if (!enabledSources.length) {
+        setSectorSeriesMap({});
+        setSectorError(guardErrors.join(" · "));
+        return;
+      }
       try {
         const accountParam = accountId && accountId !== "ALL" ? `&account=${encodeURIComponent(accountId)}` : "";
-        const responses = await Promise.all(
-          targets.map((sector) =>
-            api.get(
-              `/portfolio/sector?sector=${encodeURIComponent(sector)}&limit=${navLimit}&source=${sectorSource}${accountParam}`
-            )
-          )
+        const jobs = targets.flatMap((sector) =>
+          enabledSources.map((source) => ({
+            sector,
+            source,
+            url: `/portfolio/sector?sector=${encodeURIComponent(sector)}&limit=${navLimit}&source=${source}${accountParam}`,
+          }))
         );
+        const settled = await Promise.allSettled(jobs.map((job) => api.get(job.url)));
         if (!active) return;
-        const nextMap: Record<string, any[]> = {};
-        responses.forEach((resp, idx) => {
-          nextMap[targets[idx]] = resp.data ?? [];
+        const nextMap: Record<string, SectorSourceSeries> = {};
+        targets.forEach((sector) => {
+          nextMap[sector] = { sleeve: [], etf: [] };
+        });
+        const errors: string[] = [...guardErrors];
+        settled.forEach((result, idx) => {
+          const job = jobs[idx];
+          if (result.status === "fulfilled") {
+            nextMap[job.sector][job.source] = result.value.data ?? [];
+            return;
+          }
+          const detail = (result.reason as any)?.response?.data?.detail ?? (result.reason as any)?.message ?? "Unavailable";
+          errors.push(`${job.sector} ${job.source.toUpperCase()}: ${detail}`);
         });
         setSectorSeriesMap(nextMap);
-        setSectorSeries(nextMap[targets[0]] ?? []);
-        setSectorError("");
+        setSectorError(errors.join(" · "));
       } catch (err: any) {
         if (!active) return;
-        setSectorSeries([]);
         setSectorSeriesMap({});
         setSectorError(err?.response?.data?.detail ?? "Sector series unavailable");
       }
@@ -514,7 +543,7 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, [selectedSectors, sectorView, navLimit, chartMode, sectorSource, accountId]);
+  }, [selectedSectors, sectorView, navLimit, chartMode, accountId, sectorShowSleeve, sectorShowEtf, sectorTouched, sectorReloadKey]);
 
   const dataQuality = snapshot?.data_quality;
   const pricingBanner = useMemo(() => {
@@ -534,129 +563,7 @@ export default function App() {
       text: `Pricing sources: ${sources || "—"} · Missing: ${missingAssets || "UNKNOWN"}`,
     };
   }, [dataQuality]);
-  const positionsDisplay = useMemo(() => {
-    if (!positions.length) return [];
-    const filtered = strategyFilter
-      ? positions.filter((row) => {
-          const value = (row.strategy_name || row.strategy || "").toString();
-          return value.toLowerCase().includes(strategyFilter.toLowerCase());
-        })
-      : positions;
-    if (!filtered.length) return [];
-    const grouped = new Map<string, typeof positions>();
-    const order: Array<{ type: "row"; row: (typeof positions)[number] } | { type: "group"; id: string }> = [];
-    for (const row of filtered) {
-      const asset = String(row.asset_class || "").toLowerCase();
-      const strategyId = row.strategy_id || (row.strategy ? String(row.strategy) : "");
-      if (asset === "option" && strategyId) {
-        if (!grouped.has(strategyId)) {
-          grouped.set(strategyId, []);
-          order.push({ type: "group", id: strategyId });
-        }
-        grouped.get(strategyId)?.push(row);
-      } else {
-        order.push({ type: "row", row });
-      }
-    }
-    const out: any[] = [];
-    for (const entry of order) {
-      if (entry.type === "row") {
-        out.push(entry.row);
-        continue;
-      }
-      const strategyId = entry.id;
-      const legs = grouped.get(strategyId) ?? [];
-      if (legs.length < 2) {
-        out.push(...legs);
-        continue;
-      }
-      const units =
-        Math.min(...legs.map((l) => Math.abs(Number(l.qty || 0))).filter((v) => v > 0)) ||
-        Math.abs(Number(legs[0]?.qty || 0)) ||
-        1;
-      const baseMultiplier = Number(legs[0]?.multiplier || 100) || 100;
-      let netValue = 0;
-      let netAvgValue = 0;
-      let netMv = 0;
-      let netPnl = 0;
-      let netDay = 0;
-      for (const leg of legs) {
-        const qty = Number(leg.qty || 0);
-        const rawPrice = Number(leg.price || 0);
-        const avg = Number(leg.avg_cost ?? leg.price ?? 0);
-        const price = rawPrice > 0 ? rawPrice : avg > 0 ? avg : 0;
-        const multiplier = Number(leg.multiplier || baseMultiplier) || baseMultiplier;
-        netValue += qty * price * multiplier;
-        netAvgValue += qty * avg * multiplier;
-        netMv += Number(leg.market_value || 0);
-        netPnl += Number(leg.total_pnl || 0);
-        netDay += Number(leg.day_pnl || 0);
-      }
-      const netPrice = units ? netValue / (units * baseMultiplier) : 0;
-      const netAvgCost = units ? netAvgValue / (units * baseMultiplier) : 0;
-      const pctDenom = Math.abs(netAvgCost) > 0 ? Math.abs(netAvgCost) * units * baseMultiplier : 0;
-      const totalPnlPct = pctDenom ? (netPnl / pctDenom) * 100 : 0;
-      const dayPnlPct = pctDenom ? (netDay / pctDenom) * 100 : 0;
-      const summarySide = netValue < 0 ? "SHORT" : "LONG";
-      const strategyName =
-        legs[0]?.strategy_name || legs[0]?.strategy || `Strategy ${strategyId.slice(0, 6)}`;
-      const summary = {
-        ...legs[0],
-        symbol: strategyName,
-        asset_class: "strategy",
-        qty: units,
-        price: netPrice,
-        avg_cost: netAvgCost,
-        market_value: netMv,
-        total_pnl: netPnl,
-        day_pnl: netDay,
-        total_pnl_pct: totalPnlPct,
-        day_pnl_pct: dayPnlPct,
-        position_side: summarySide,
-        expiry: null,
-        strike: null,
-        option_type: null,
-        strategy: strategyName,
-        strategy_id: strategyId,
-        strategy_name: strategyName,
-        isStrategySummary: true,
-        legCount: legs.length,
-      };
-      out.push(summary);
-      if (!collapsedStrategies[strategyId]) {
-        out.push(
-          ...legs.map((leg) => ({
-            ...leg,
-            isStrategyLeg: true,
-            strategy_id: strategyId,
-            strategy_name: strategyName,
-          }))
-        );
-      }
-    }
-    return out;
-  }, [positions, collapsedStrategies, strategyFilter]);
-
-  useEffect(() => {
-    if (watchlistInitRef.current) return;
-    if (watchlistSymbols.length) {
-      watchlistInitRef.current = true;
-      return;
-    }
-    if (positions.length) {
-      const symbols = Array.from(new Set(positions.map((row) => row.symbol).filter(Boolean)));
-      setWatchlistSymbols(symbols);
-      watchlistInitRef.current = true;
-    }
-  }, [positions, watchlistSymbols]);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem("ws_watchlist", JSON.stringify(watchlistSymbols));
-    } catch {
-      // ignore
-    }
-  }, [watchlistSymbols]);
+  const positionsDisplay = useMemo(() => positions, [positions]);
 
   useEffect(() => {
     const loadBench = async () => {
@@ -671,13 +578,47 @@ export default function App() {
     loadBench();
   }, []);
 
+  const timeframeStart = useMemo(() => {
+    if (timeframe !== "TYD") return "";
+    const year = new Date().getFullYear();
+    return `${year}-01-01`;
+  }, [timeframe]);
+
+  const chartStart = useMemo(() => {
+    const starts = [benchStart, timeframeStart].filter(Boolean).sort();
+    return starts.length ? starts[starts.length - 1] : "";
+  }, [benchStart, timeframeStart]);
+
   const navFiltered = useMemo(() => {
-    if (!benchStart) return nav;
-    const filtered = nav.filter((point) => point.date >= benchStart);
+    if (!chartStart) return nav;
+    const filtered = nav.filter((point) => point.date >= chartStart);
     return filtered.length ? filtered : nav;
-  }, [nav, benchStart]);
+  }, [nav, chartStart]);
 
   const chartData = useMemo(() => navFiltered, [navFiltered]);
+  const allAccountsPortfolioMode = chartMode === "PORTFOLIO" && accountId === "ALL";
+  const allSelectedIncludesTotal = selectedAccounts.includes("ALL");
+  const chartNeedsAccountSelection = allAccountsPortfolioMode && selectedAccounts.length === 0;
+  const chartNeedsSelection = chartMode === "SECTOR" && !sectorShowPortfolio && !chartShowBench && !sectorShowSleeve && !sectorShowEtf;
+  const chartShowNav =
+    chartMode === "SECTOR"
+      ? sectorShowPortfolio
+      : (!allAccountsPortfolioMode || allSelectedIncludesTotal);
+  const chartShowBenchEffective =
+    chartMode === "SECTOR"
+      ? chartShowBench
+      : chartShowBench && (!allAccountsPortfolioMode || selectedAccounts.length > 0);
+  const chartExtraSeries = allAccountsPortfolioMode
+    ? accountSeries.map((series) => ({
+        ...series,
+        data: chartStart ? series.data.filter((point) => point.date >= chartStart) : series.data,
+      })).filter((series) => series.name !== "ALL")
+    : [];
+  const chartEmptyMessage = chartNeedsAccountSelection
+    ? "Select an account and click Add to chart. Include ALL to view total portfolio return."
+    : chartNeedsSelection
+      ? "Enable at least one series (Sleeve, ETF, Portfolio, or SPX)."
+      : undefined;
 
   const sectorSeriesList = useMemo(() => {
     if (chartMode !== "SECTOR") return [];
@@ -686,22 +627,40 @@ export default function App() {
       : !sectorTouched && sectorView
         ? [sectorView]
         : [];
-    const base = benchStart ? chartData.filter((point) => point.date >= benchStart) : chartData;
-    return names.map((name) => {
-      const series = sectorSeriesMap[name] ?? [];
-      const filtered = benchStart ? series.filter((point: any) => point.date >= benchStart) : series;
-      const data = filtered.length
-        ? filtered
-        : base.map((point: any) => ({ ...point, sector: 0 }));
-      return { name, data };
+    const base = chartData;
+    const out: Array<{ name: string; data: any[] }> = [];
+    names.forEach((name) => {
+      const bySource = sectorSeriesMap[name] ?? { sleeve: [], etf: [] };
+      if (sectorShowSleeve) {
+        const filtered = chartStart ? bySource.sleeve.filter((point: any) => point.date >= chartStart) : bySource.sleeve;
+        const data = filtered.length ? filtered : base.map((point: any) => ({ ...point, sector: 0 }));
+        out.push({ name: `${name} Sleeve`, data });
+      }
+      if (sectorShowEtf) {
+        const filtered = chartStart ? bySource.etf.filter((point: any) => point.date >= chartStart) : bySource.etf;
+        const data = filtered.length ? filtered : base.map((point: any) => ({ ...point, sector: 0 }));
+        out.push({ name: `${name} ETF`, data });
+      }
     });
-  }, [chartMode, sectorSeriesMap, benchStart, sectorView, selectedSectors, sectorTouched, chartData]);
+    return out;
+  }, [
+    chartMode,
+    sectorSeriesMap,
+    chartStart,
+    sectorView,
+    selectedSectors,
+    sectorTouched,
+    chartData,
+    sectorShowSleeve,
+    sectorShowEtf,
+  ]);
 
   const sectorEmpty = useMemo(() => {
     if (chartMode !== "SECTOR") return false;
+    if (!sectorShowSleeve && !sectorShowEtf) return false;
     if (!sectorSeriesList.length) return true;
     return sectorSeriesList.every((series) => !series.data?.length);
-  }, [chartMode, sectorSeriesList]);
+  }, [chartMode, sectorSeriesList, sectorShowSleeve, sectorShowEtf]);
 
   const addSectorSelection = () => {
     if (!sectorView) return;
@@ -735,29 +694,6 @@ export default function App() {
     setSelectedAccounts([]);
   };
 
-  const connectionBanner = useMemo(() => {
-    const warnings: string[] = [];
-    if (!schwabConnected) warnings.push("Schwab not connected");
-    if (!marketStatus.ok) warnings.push("Market data stale");
-    if (!portfolioStatus.ok) warnings.push("Portfolio stale");
-    return warnings.join(" · ");
-  }, [schwabConnected, marketStatus.ok, portfolioStatus.ok]);
-
-  useEffect(() => {
-    if (error && error !== dismissedError) {
-      setDismissedError("");
-    }
-  }, [error]);
-
-  useEffect(() => {
-    if (connectionBanner && connectionBanner !== dismissedWarning) {
-      setDismissedWarning("");
-    }
-  }, [connectionBanner]);
-
-  const showErrorBanner = Boolean(error) && error !== dismissedError;
-  const showWarningBanner = Boolean(connectionBanner) && connectionBanner !== dismissedWarning;
-
   const accountSummary = useMemo(() => {
     if (!snapshot) return null;
     const marginRequired = snapshot.margin_required ?? 0;
@@ -789,11 +725,18 @@ export default function App() {
   }, [accounts]);
 
   const accountChartOptions = useMemo(() => {
-    return accounts
+    const names = accounts
       .map((row) => row.account)
       .filter(Boolean)
       .filter((name) => name.toUpperCase() !== "ALL");
+    const unique = Array.from(new Set(names));
+    return ["ALL", ...unique];
   }, [accounts]);
+
+  const accountSpecificOptions = useMemo(
+    () => accountChartOptions.filter((name) => name && name.toUpperCase() !== "ALL"),
+    [accountChartOptions]
+  );
 
   useEffect(() => {
     if (!accountChartOptions.length) {
@@ -807,6 +750,42 @@ export default function App() {
     }
     setSelectedAccounts((prev) => prev.filter((name) => accountChartOptions.includes(name)));
   }, [accountChartOptions, accountView]);
+
+  useEffect(() => {
+    if (!accountSpecificOptions.length) {
+      setSectorPerfAccount("");
+      setSectorPerfRows([]);
+      return;
+    }
+    if (accountId && accountId !== "ALL" && accountSpecificOptions.includes(accountId)) {
+      setSectorPerfAccount(accountId);
+      return;
+    }
+    if (!sectorPerfAccount || !accountSpecificOptions.includes(sectorPerfAccount)) {
+      setSectorPerfAccount(accountSpecificOptions[0]);
+    }
+  }, [accountId, accountSpecificOptions, sectorPerfAccount]);
+
+  const loadSectorPerformanceInputs = async (accountName: string) => {
+    if (!accountName || accountName === "ALL") {
+      setSectorPerfRows([]);
+      return;
+    }
+    try {
+      const resp = await api.get("/admin/sector-performance-inputs", {
+        params: { account: accountName },
+      });
+      const rows = Array.isArray(resp.data?.rows) ? resp.data.rows : [];
+      setSectorPerfRows(rows);
+    } catch {
+      setSectorPerfRows([]);
+    }
+  };
+
+  useEffect(() => {
+    if (!sectorPerfAccount) return;
+    loadSectorPerformanceInputs(sectorPerfAccount);
+  }, [sectorPerfAccount]);
 
   useEffect(() => {
     let cancelled = false;
@@ -855,21 +834,41 @@ export default function App() {
 
   const riskMetricMap = useMemo(() => {
     const map = new Map<string, { metric: string; value: number; limit?: number | null; breached?: boolean }>();
-    (risk?.metrics ?? []).forEach((row) => {
+    const source = (riskProfile?.metrics && riskProfile.metrics.length ? riskProfile.metrics : risk?.metrics) ?? [];
+    source.forEach((row) => {
       map.set(row.metric, row);
     });
     return map;
-  }, [risk]);
+  }, [risk, riskProfile]);
 
   const formatRiskValue = (metric: string, value: number) => {
     if (!Number.isFinite(value)) return "—";
-    if (metric.includes("concentration") || metric.includes("drawdown") || metric.startsWith("matrix_")) {
+    if (
+      metric.includes("concentration") ||
+      metric.includes("drawdown") ||
+      metric.startsWith("matrix_") ||
+      metric.includes("volatility") ||
+      metric.endsWith("_pct") ||
+      metric === "annualized_return" ||
+      metric === "tracking_error" ||
+      metric === "win_rate" ||
+      metric === "best_day_return" ||
+      metric === "worst_day_return"
+    ) {
       return formatSignedPct(value * 100, 2);
     }
-    if (metric === "beta" || metric === "delta" || metric === "sharpe") {
+    if (
+      metric === "beta" ||
+      metric === "delta" ||
+      metric === "sharpe" ||
+      metric === "sortino" ||
+      metric === "calmar" ||
+      metric === "benchmark_correlation" ||
+      metric === "information_ratio"
+    ) {
       return formatSignedNumber(value, 2);
     }
-    if (metric.includes("exposure") || metric.includes("notional") || metric.includes("var")) {
+    if (metric.includes("exposure") || metric.includes("notional") || metric === "var_95") {
       return formatSignedMoney(value, 0);
     }
     return formatSignedNumber(value, 2);
@@ -882,9 +881,23 @@ export default function App() {
       "long_exposure",
       "short_exposure",
       "beta",
+      "benchmark_correlation",
       "sharpe",
+      "sortino",
+      "calmar",
+      "annualized_return",
+      "annualized_volatility",
+      "downside_volatility",
       "max_drawdown",
+      "current_drawdown",
       "var_95",
+      "var_95_pct",
+      "cvar_95_pct",
+      "tracking_error",
+      "information_ratio",
+      "win_rate",
+      "best_day_return",
+      "worst_day_return",
       "delta",
       "delta_exposure",
       "gamma_exposure",
@@ -906,9 +919,23 @@ export default function App() {
     long_exposure: "Long Exposure",
     short_exposure: "Short Exposure",
     beta: "Beta vs SPX",
+    benchmark_correlation: "Correlation vs SPX",
     sharpe: "Sharpe Ratio",
+    sortino: "Sortino Ratio",
+    calmar: "Calmar Ratio",
+    annualized_return: "Annualized Return",
+    annualized_volatility: "Annualized Volatility",
+    downside_volatility: "Downside Volatility",
     max_drawdown: "Max Drawdown",
+    current_drawdown: "Current Drawdown",
     var_95: "VaR (95%)",
+    var_95_pct: "VaR (95%) %",
+    cvar_95_pct: "CVaR (95%) %",
+    tracking_error: "Tracking Error",
+    information_ratio: "Information Ratio",
+    win_rate: "Win Rate",
+    best_day_return: "Best Day",
+    worst_day_return: "Worst Day",
     delta: "Delta (−1..1)",
     delta_exposure: "Delta Exposure",
     gamma_exposure: "Gamma Exposure",
@@ -929,8 +956,132 @@ export default function App() {
     });
   }, [riskMetricMap]);
 
+  const riskCorrelation = riskProfile?.correlation;
+  const riskRolling = riskProfile?.rolling;
+  const correlationLabels = riskCorrelation?.labels ?? [];
+  const correlationMatrix = riskCorrelation?.matrix ?? [];
+  const rollingLatest = useMemo(() => {
+    const idx = (riskRolling?.dates?.length ?? 0) - 1;
+    if (!riskRolling || idx < 0) {
+      return {
+        date: "—",
+        portfolioVol: 0,
+        benchVol: 0,
+        trackingError: 0,
+        drawdown: 0,
+      };
+    }
+    return {
+      date: riskRolling.dates?.[idx] ?? "—",
+      portfolioVol: Number(riskRolling.portfolio_vol_20d?.[idx] ?? 0),
+      benchVol: Number(riskRolling.benchmark_vol_20d?.[idx] ?? 0),
+      trackingError: Number(riskRolling.tracking_error_20d?.[idx] ?? 0),
+      drawdown: Number(riskRolling.drawdown?.[idx] ?? 0),
+    };
+  }, [riskRolling]);
+  const riskVisualCards = useMemo(() => {
+    const cards = [
+      {
+        key: "annualized_volatility",
+        label: "Portfolio Vol",
+        value: Number(riskMetricMap.get("annualized_volatility")?.value ?? 0),
+        cap: 0.5,
+      },
+      {
+        key: "current_drawdown",
+        label: "Current Drawdown",
+        value: Number(riskMetricMap.get("current_drawdown")?.value ?? rollingLatest.drawdown ?? 0),
+        cap: 0.3,
+      },
+      {
+        key: "var_95_pct",
+        label: "1-Day VaR (95%)",
+        value: Number(riskMetricMap.get("var_95_pct")?.value ?? 0),
+        cap: 0.08,
+      },
+      {
+        key: "beta",
+        label: "Beta vs SPX",
+        value: Number(riskMetricMap.get("beta")?.value ?? 0),
+        cap: 2.0,
+      },
+    ];
+    return cards.map((card) => {
+      const ratio = Math.max(0, Math.min(1, Math.abs(card.value) / Math.max(card.cap, 1e-9)));
+      return {
+        ...card,
+        display: formatRiskValue(card.key, card.value),
+        ratio,
+      };
+    });
+  }, [riskMetricMap, rollingLatest, formatRiskValue]);
+  const riskSparkSeries = useMemo(() => {
+    const pVol = (riskRolling?.portfolio_vol_20d ?? []).map((v) => Number(v ?? 0));
+    const te = (riskRolling?.tracking_error_20d ?? []).map((v) => Number(v ?? 0));
+    const dd = (riskRolling?.drawdown ?? []).map((v) => Number(v ?? 0));
+    return [
+      {
+        key: "pvol",
+        label: "Portfolio Volatility (20D)",
+        metric: "annualized_volatility",
+        values: pVol,
+        latest: pVol.length ? pVol[pVol.length - 1] : 0,
+      },
+      {
+        key: "te",
+        label: "Tracking Error (20D)",
+        metric: "tracking_error",
+        values: te,
+        latest: te.length ? te[te.length - 1] : 0,
+      },
+      {
+        key: "dd",
+        label: "Drawdown",
+        metric: "current_drawdown",
+        values: dd,
+        latest: dd.length ? dd[dd.length - 1] : 0,
+      },
+    ];
+  }, [riskRolling]);
+  const correlationCellStyle = (value: number) => {
+    const v = Math.max(-1, Math.min(1, Number.isFinite(value) ? value : 0));
+    const intensity = Math.abs(v);
+    const hue = v >= 0 ? 145 : 2;
+    const saturation = 66 + intensity * 18;
+    const lightness = 20 + intensity * 18;
+    const alpha = 0.2 + intensity * 0.75;
+    return {
+      backgroundColor: `hsla(${hue}, ${saturation.toFixed(0)}%, ${lightness.toFixed(0)}%, ${alpha.toFixed(3)})`,
+      color: intensity > 0.58 ? "#f5f8ff" : "#d7dce2",
+      fontWeight: intensity > 0.75 ? 700 : 600,
+    } as const;
+  };
+
+  const activityTrades = useMemo(() => {
+    const rows = blotter?.trades ?? [];
+    if (!activityClosedOnly) return rows;
+    return rows.filter((row) => {
+      const source = String(row.source || "").toUpperCase();
+      const status = String(row.status || "").toUpperCase();
+      return (
+        source === "CSV_REALIZED" ||
+        row.realized_pl != null ||
+        status.includes("CLOSE") ||
+        status.includes("EXPIRE")
+      );
+    });
+  }, [blotter, activityClosedOnly]);
+
 
   const notify = (message: string) => setToast(message);
+  const resolveRowAccount = (row: any, action: string): string | null => {
+    if (accountId && accountId !== "ALL") return accountId;
+    const rowAccount = String(row?.account || "").trim();
+    if (rowAccount && rowAccount.toUpperCase() !== "ALL") return rowAccount;
+    const msg = `Select a specific account (not ALL) to ${action}.`;
+    notify(msg);
+    return null;
+  };
   const requireAccount = (action: string, setError?: (message: string) => void) => {
     if (!accountId || accountId === "ALL") {
       const msg = `Select a specific account (not ALL) to ${action}.`;
@@ -939,17 +1090,6 @@ export default function App() {
       return null;
     }
     return accountId;
-  };
-
-  const addWatchSymbol = () => {
-    const symbol = watchlistInput.trim().toUpperCase();
-    if (!symbol) return;
-    setWatchlistSymbols((prev) => (prev.includes(symbol) ? prev : [...prev, symbol]));
-    setWatchlistInput("");
-  };
-
-  const removeWatchSymbol = (symbol: string) => {
-    setWatchlistSymbols((prev) => prev.filter((s) => s !== symbol));
   };
 
   const addLeg = () => {
@@ -1015,11 +1155,6 @@ export default function App() {
     setCollapsed((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
-  const toggleStrategy = (strategyId: string) => {
-    if (!strategyId) return;
-    setCollapsedStrategies((prev) => ({ ...prev, [strategyId]: !prev[strategyId] }));
-  };
-
   const toggleFocus = (column: "left" | "center", key: string) => {
     setFocus((prev) => ({ ...prev, [column]: prev[column] === key ? undefined : key }));
   };
@@ -1028,7 +1163,6 @@ export default function App() {
 
   const resetLayout = () => {
     setCollapsed({});
-    setCollapsedStrategies({});
     setFocus({});
     setShowLeft(true);
     setShowChart(true);
@@ -1082,6 +1216,7 @@ export default function App() {
         strike: position.strike != null ? String(position.strike) : "",
         option_type: (position.option_type ?? "CALL").toUpperCase(),
         multiplier: position.multiplier != null ? String(position.multiplier) : "",
+        owner: position.owner ?? "",
         sector: position.sector ?? "",
         strategy: position.strategy ?? "",
       });
@@ -1099,6 +1234,7 @@ export default function App() {
         strike: "",
         option_type: "CALL",
         multiplier: "",
+        owner: "",
         sector: "",
         strategy: "",
       });
@@ -1123,6 +1259,7 @@ export default function App() {
       strike: positionForm.strike ? Number(positionForm.strike) : undefined,
       option_type: positionForm.option_type,
       multiplier: positionForm.asset_class === "OPTION" ? 100 : undefined,
+      owner: positionForm.owner || undefined,
       sector: positionForm.sector || undefined,
       strategy: positionForm.strategy || undefined,
     };
@@ -1145,7 +1282,10 @@ export default function App() {
       notify("Missing instrument id.");
       return;
     }
-    const account = requireAccount("remove positions");
+    const row =
+      positions.find((p) => p.instrument_id === instrumentId) ||
+      positions.find((p) => p.symbol === instrumentId);
+    const account = resolveRowAccount(row, "remove positions") || requireAccount("remove positions");
     if (!account) return;
     try {
       await api.delete(`/positions/${encodeURIComponent(instrumentId)}?account=${encodeURIComponent(account)}`);
@@ -1161,7 +1301,7 @@ export default function App() {
       notify("Missing instrument id.");
       return;
     }
-    const account = requireAccount("update positions");
+    const account = resolveRowAccount(row, "update positions");
     if (!account) return;
     try {
       await api.post("/positions", {
@@ -1194,7 +1334,7 @@ export default function App() {
       notify("Missing instrument id.");
       return;
     }
-    const account = requireAccount("update positions");
+    const account = resolveRowAccount(row, "update positions");
     if (!account) return;
     const trimmed = owner.trim();
     const current = (row.owner || "").trim();
@@ -1221,9 +1361,9 @@ export default function App() {
         strategy: row.strategy_name || row.strategy || undefined,
       });
       refreshAll();
-      notify(`Owner updated: ${trimmed || "Unassigned"}`);
+      notify(`Label updated: ${trimmed || "Unassigned"}`);
     } catch (err: any) {
-      notify(err?.response?.data?.detail ?? "Failed to update owner");
+      notify(err?.response?.data?.detail ?? "Failed to update label");
     }
   };
 
@@ -1232,7 +1372,7 @@ export default function App() {
       notify("Missing instrument id.");
       return;
     }
-    const account = requireAccount("update positions");
+    const account = resolveRowAccount(row, "update positions");
     if (!account) return;
     const trimmed = value.trim();
     const current = (row.entry_date || "").trim();
@@ -1300,48 +1440,19 @@ export default function App() {
       return;
     }
     try {
-      await api.post("/admin/reset", { start_cash: value });
-      refreshAll();
-      fetchNav();
-      notify("Portfolio reset complete");
+      await api.post("/admin/reset", {
+        start_cash: value,
+        delete_accounts: resetDeleteAccounts,
+      });
+      setAccount("ALL");
+      setAccountView("");
+      setSelectedAccounts([]);
+      await fetchAccounts();
+      await refreshAll();
+      await fetchNav(navLimit);
+      notify(`Portfolio reset complete (${resetDeleteAccounts ? "accounts deleted" : "accounts kept"})`);
     } catch (err: any) {
       notify(err?.response?.data?.detail ?? "Reset failed");
-    }
-  };
-
-  const rebuildNavHistory = async () => {
-    if (navRebuildRunning) return;
-    setNavRebuildRunning(true);
-    try {
-      const accountParam = accountId && accountId !== "ALL" ? `?account=${encodeURIComponent(accountId)}` : "";
-      const resp = await api.post(`/admin/rebuild-nav${accountParam}`);
-      const count = resp.data?.count ?? 0;
-      const start = resp.data?.start ?? "";
-      const end = resp.data?.end ?? "";
-      setToast(`NAV history rebuilt (${count} points${start && end ? ` · ${start} → ${end}` : ""}).`);
-      await fetchNav(navLimit);
-      await refreshAll();
-    } catch (err: any) {
-      setToast(err?.response?.data?.detail ?? err?.message ?? "Failed to rebuild NAV history.");
-    } finally {
-      setNavRebuildRunning(false);
-    }
-  };
-
-  const clearNavHistory = async () => {
-    if (navRebuildRunning) return;
-    setNavRebuildRunning(true);
-    try {
-      const accountParam = accountId && accountId !== "ALL" ? `?account=${encodeURIComponent(accountId)}` : "";
-      const resp = await api.post(`/admin/clear-nav${accountParam}`);
-      const removed = resp.data?.removed ?? 0;
-      setToast(`NAV history cleared (${removed} rows).`);
-      await fetchNav(navLimit);
-      await refreshAll();
-    } catch (err: any) {
-      setToast(err?.response?.data?.detail ?? err?.message ?? "Failed to clear NAV history.");
-    } finally {
-      setNavRebuildRunning(false);
     }
   };
 
@@ -1356,6 +1467,87 @@ export default function App() {
       notify("Benchmark start updated.");
     } catch (err: any) {
       notify(err?.response?.data?.detail ?? "Benchmark update failed");
+    }
+  };
+
+  const updateTradeSectorRow = async (tradeId: string, sector: string) => {
+    if (!tradeId) {
+      notify("Cannot update this row: missing trade id. Re-import realized activity for this account.");
+      return;
+    }
+    const sectorValue = (sector || "").trim() || "Unassigned";
+    try {
+      await api.post("/admin/trades/update-sector", { trade_id: tradeId, sector: sectorValue });
+      setSectorReloadKey((prev) => prev + 1);
+      await fetchBlotter();
+      notify(`Trade sector set to ${sectorValue}.`);
+    } catch (err: any) {
+      notify(err?.response?.data?.detail ?? "Failed to update trade sector");
+    }
+  };
+
+  const commitTradeRealizedRow = async (tradeId: string) => {
+    if (!tradeId) return;
+    const raw = (tradeRealizedDrafts[tradeId] ?? "").trim();
+    let realizedValue: number | null = null;
+    if (raw) {
+      const parsed = Number(raw.replace(/,/g, ""));
+      if (!Number.isFinite(parsed)) {
+        notify("Realized P/L must be a valid number.");
+        return;
+      }
+      realizedValue = parsed;
+    }
+    try {
+      await api.post("/admin/trades/update-realized", { trade_id: tradeId, realized_pl: realizedValue });
+      setTradeRealizedDrafts((prev) => {
+        const next = { ...prev };
+        delete next[tradeId];
+        return next;
+      });
+      setSectorReloadKey((prev) => prev + 1);
+      refreshAll();
+      fetchBlotter();
+      notify("Realized P/L updated.");
+    } catch (err: any) {
+      notify(err?.response?.data?.detail ?? "Failed to update realized P/L");
+    }
+  };
+
+  const saveSectorPerformanceInput = async () => {
+    if (!sectorPerfAccount || sectorPerfAccount === "ALL") {
+      notify("Select a specific account for sector performance inputs.");
+      return;
+    }
+    const sector = (sectorPerfSector || "").trim();
+    if (!sector) {
+      notify("Select a sector.");
+      return;
+    }
+    const baselineRaw = sectorPerfBaseline.trim();
+    const targetRaw = sectorPerfTargetWeight.trim();
+    const baselineValue = baselineRaw ? Number(baselineRaw.replace(/,/g, "")) : null;
+    const targetWeight = targetRaw ? Number(targetRaw.replace(/,/g, "")) : null;
+    if (baselineValue != null && (!Number.isFinite(baselineValue) || baselineValue < 0)) {
+      notify("Baseline must be a number >= 0.");
+      return;
+    }
+    if (targetWeight != null && (!Number.isFinite(targetWeight) || targetWeight < -100 || targetWeight > 100)) {
+      notify("Target weight must be between -100 and 100.");
+      return;
+    }
+    try {
+      await api.post("/admin/sector-performance-inputs", {
+        account: sectorPerfAccount,
+        sector,
+        baseline_value: baselineValue,
+        target_weight: targetWeight,
+      });
+      await loadSectorPerformanceInputs(sectorPerfAccount);
+      setSectorReloadKey((prev) => prev + 1);
+      notify(`Saved sector inputs for ${sector}.`);
+    } catch (err: any) {
+      notify(err?.response?.data?.detail ?? "Failed to save sector inputs");
     }
   };
 
@@ -1672,32 +1864,84 @@ export default function App() {
       return row.map(cell => stripBom(cell || "").toLowerCase()).join(" ");
     });
     const filenameLower = (file?.name || "").toLowerCase();
+    const isBalanceFilename = filenameLower.includes("balance");
+    const dateIdx = headerRow.indexOf("date");
+    const amountIdx = headerRow.indexOf("amount");
+    const hasDateAmountHeader = dateIdx >= 0 && amountIdx >= 0;
+    const hasBalancesMarker = firstRows.some((rowText) => rowText.includes("balances for"));
     const isBalancesReport =
+      isBalanceFilename ||
+      hasBalancesMarker ||
       firstRows.some((rowText) => rowText.includes("balances for all-accounts") || rowText.includes("balances for all accounts")) ||
-      firstRows.some((rowText) => rowText.includes("total accounts value") && rowText.includes("cash & cash investments total"));
+      firstRows.some((rowText) => rowText.includes("total accounts value") && rowText.includes("cash & cash investments total")) ||
+      (filenameLower.includes("balances") && hasDateAmountHeader);
+    const isBalanceHistoryCsv =
+      hasDateAmountHeader &&
+      rawRows.length >= 3 &&
+      rawRows.slice(1, Math.min(rawRows.length, 20)).some((row) => {
+        if (dateIdx >= row.length || amountIdx >= row.length) return false;
+        const dateText = stripBom(row[dateIdx] || "").trim();
+        const amountText = stripBom(row[amountIdx] || "").trim();
+        if (!dateText || !amountText) return false;
+        const normalizedDate = dateText.replace(/^"|"$/g, "");
+        const normalizedAmount = amountText
+          .replace(/^"|"$/g, "")
+          .replace(/\$/g, "")
+          .replace(/,/g, "")
+          .replace(/\(/g, "-")
+          .replace(/\)/g, "")
+          .trim();
+        const looksLikeDate = /^(\d{1,2}\/\d{1,2}\/\d{2,4}|\d{4}-\d{2}-\d{2})$/.test(normalizedDate);
+        const looksLikeAmount = /^-?\d+(\.\d+)?$/.test(normalizedAmount);
+        return looksLikeDate && looksLikeAmount;
+      });
     const isAccountStatement = firstRows.some((rowText) => rowText.includes("account statement"));
+    const isRealizedGainLossReport =
+      textLower.includes("realized gain/loss - lot details") ||
+      firstRows.some((rowText) => rowText.includes("realized gain/loss - lot details")) ||
+      filenameLower.includes("gainloss_realized");
     const isSchwabPositionsFilename = /positions[_-]\d{4}[-_]\d{2}[-_]\d{2}/.test(filenameLower);
+    const hasPositionsHeader = rawRows.slice(0, 40).some((row) => {
+      const cols = row.map((cell) => stripBom(cell || "").toLowerCase().trim());
+      if (!cols.length) return false;
+      const hasSymbol = cols.includes("symbol");
+      const hasQty = cols.some((cell) => cell === "qty" || cell.includes("qty (quantity)"));
+      const hasSecurityType = cols.some((cell) => cell.includes("security type"));
+      return hasSymbol && hasQty && hasSecurityType;
+    });
     const looksLikeSchwabPositionsDump =
       textLower.includes("positions for custaccs") ||
       isSchwabPositionsFilename ||
-      (textLower.includes("account total") && textLower.includes("cash & cash investments"));
+      hasPositionsHeader;
     const isPositionsReport =
-      looksLikeSchwabPositionsDump ||
+      (!isBalancesReport && looksLikeSchwabPositionsDump) ||
       firstRows.some((rowText) => rowText.includes("positions for") || rowText.includes("custaccs")) ||
-      filenameLower.includes("positions");
-    if (isBalancesReport) {
+      (!isBalancesReport && filenameLower.includes("positions"));
+    if (isBalancesReport || isBalanceHistoryCsv) {
       try {
         setToast("Importing balances CSV...");
         const form = new FormData();
         form.append("file", file);
-        const resp = await api.post("/admin/import-balances", form, {
+        const accountParam =
+          accountId && accountId.trim() && accountId !== "ALL"
+            ? `?account=${encodeURIComponent(accountId)}`
+            : "";
+        const resp = await api.post(`/admin/import-balances${accountParam}`, form, {
           headers: { "Content-Type": "multipart/form-data" },
           timeout: 120000,
         });
+        const historyPoints = Number(resp.data?.history_points ?? 0);
         const updated = resp.data?.accounts_updated ?? 0;
+        const adjustmentMode = String(resp.data?.history_adjustment_mode || "").toLowerCase();
         fetchAccounts();
         refreshAll();
-        notify(`Imported balances for ${updated} accounts.`);
+        if (historyPoints > 0) {
+          const target = String(resp.data?.account || accountId || "account");
+          const modeLabel = adjustmentMode ? ` (${adjustmentMode} cash-flow mode)` : "";
+          notify(`Imported ${historyPoints} historical balance points for ${target}${modeLabel}.`);
+        } else {
+          notify(`Imported balances for ${updated} accounts.`);
+        }
         return;
       } catch (err: any) {
         const detail = err?.response?.data?.detail ?? err?.message ?? "CSV import failed";
@@ -1726,6 +1970,73 @@ export default function App() {
         } else {
           notify(`Imported positions from Schwab CSV (${count} rows).`);
         }
+        return;
+      } catch (err: any) {
+        const detail = err?.response?.data?.detail ?? err?.message ?? "CSV import failed";
+        setCsvError(detail);
+        setToast(detail);
+        return;
+      }
+    }
+    if (isRealizedGainLossReport) {
+      const targetAccounts =
+        accountId && accountId !== "ALL"
+          ? [accountId]
+          : accountOptions.filter((name) => name && name.toUpperCase() !== "ALL");
+      if (!targetAccounts.length) {
+        const msg = "Select an account (or load account list) before importing realized gain/loss CSV.";
+        setCsvError(msg);
+        notify(msg);
+        return;
+      }
+      try {
+        setToast("Importing realized gain/loss CSV...");
+        let importedAccounts = 0;
+        let noRowsAccounts = 0;
+        let tradesCreated = 0;
+        const failures: string[] = [];
+
+        for (const account of targetAccounts) {
+          const form = new FormData();
+          form.append("file", file);
+          try {
+            const resp = await api.post(
+              `/admin/import-transactions?account=${encodeURIComponent(account)}&replace=false`,
+              form,
+              {
+                headers: { "Content-Type": "multipart/form-data" },
+                timeout: 180000,
+              }
+            );
+            importedAccounts += 1;
+            tradesCreated += Number(resp.data?.trades_created ?? 0);
+          } catch (err: any) {
+            const detailRaw = err?.response?.data?.detail ?? err?.message ?? "CSV import failed";
+            const detail = typeof detailRaw === "string" ? detailRaw : JSON.stringify(detailRaw);
+            if (detail.includes("No transactions found")) {
+              noRowsAccounts += 1;
+              continue;
+            }
+            failures.push(`${account}: ${detail}`);
+          }
+        }
+
+        fetchAccounts();
+        refreshAll();
+        fetchNav(navLimit);
+
+        if (failures.length) {
+          const msg = `Realized import finished with ${failures.length} error(s). First error: ${failures[0]}`;
+          setCsvError(msg);
+          setToast(
+            `Realized import: ${importedAccounts} accounts imported, ${noRowsAccounts} no rows, ${failures.length} errors.`
+          );
+          return;
+        }
+
+        notify(
+          `Imported realized gain/loss for ${importedAccounts} account(s) (${tradesCreated} trades, ${noRowsAccounts} with no rows).`
+        );
         return;
       } catch (err: any) {
         const detail = err?.response?.data?.detail ?? err?.message ?? "CSV import failed";
@@ -1806,6 +2117,7 @@ export default function App() {
       strike: ["strike", "strike_price"],
       option_type: ["option_type", "right", "put_call", "call_put", "cp", "p_c"],
       multiplier: ["multiplier", "contract_multiplier", "mult"],
+      owner: ["owner", "label", "book", "desk", "sleeve"],
       sector: ["sector", "industry"],
       strategy: ["strategy", "strategy_name", "book", "portfolio"],
       side: ["side", "direction", "long_short", "longshort"],
@@ -1892,6 +2204,7 @@ export default function App() {
         option_type: right ? right.toUpperCase() : undefined,
         multiplier: pick("multiplier") ? Number(parseNumber(pick("multiplier"))) : undefined,
         entry_date,
+        owner: pick("owner") || undefined,
         sector: pick("sector") || undefined,
         strategy: pick("strategy") || undefined,
       };
@@ -1926,6 +2239,47 @@ export default function App() {
     } catch (err: any) {
       setCsvError(err?.response?.data?.detail ?? "CSV import failed");
     }
+  };
+
+  const importBalanceFiles = async (files: File[] | FileList | null | undefined) => {
+    const list = Array.isArray(files) ? files : Array.from(files ?? []);
+    if (!list.length) return;
+    setCsvError("");
+    const accountParam =
+      accountId && accountId.trim() && accountId !== "ALL"
+        ? `?account=${encodeURIComponent(accountId)}`
+        : "";
+    setToast(`Importing ${list.length} balance file${list.length === 1 ? "" : "s"}...`);
+    let imported = 0;
+    let historyPoints = 0;
+    const failures: string[] = [];
+    for (const file of list) {
+      try {
+        const form = new FormData();
+        form.append("file", file);
+        const resp = await api.post(`/admin/import-balances${accountParam}`, form, {
+          headers: { "Content-Type": "multipart/form-data" },
+          timeout: 180000,
+        });
+        imported += 1;
+        historyPoints += Number(resp.data?.history_points ?? 0);
+      } catch (err: any) {
+        const detailRaw = err?.response?.data?.detail ?? err?.message ?? "Balance CSV import failed";
+        const detail = typeof detailRaw === "string" ? detailRaw : JSON.stringify(detailRaw);
+        failures.push(`${file.name}: ${detail}`);
+      }
+    }
+    fetchAccounts();
+    refreshAll();
+    fetchNav(navLimit);
+    if (failures.length) {
+      const msg = `Imported ${imported}/${list.length} balance files. First error: ${failures[0]}`;
+      setCsvError(msg);
+      notify(msg);
+      return;
+    }
+    const suffix = historyPoints > 0 ? ` (${historyPoints} historical points)` : "";
+    notify(`Imported ${imported} balance file${imported === 1 ? "" : "s"}${suffix}.`);
   };
 
   const importNavText = async () => {
@@ -2034,38 +2388,6 @@ export default function App() {
     }
   }, [tradeAssetClass, tradeLegs.length, tradeSymbol, tradeExpiry, tradeOptionType, tradeStrike, tradeSide, tradeQty]);
 
-  const watchlistSymbolsEffective = useMemo(() => {
-    if (watchlistSymbols.length) return watchlistSymbols;
-    if (positions.length)
-      return positions
-        .map((row) => {
-          const asset = String(row.asset_class || "").toLowerCase();
-          if (asset === "option" && row.underlying) return String(row.underlying).toUpperCase();
-          return row.symbol;
-        })
-        .filter(Boolean);
-    return [];
-  }, [watchlistSymbols, positions]);
-
-  const watchlistRows = useMemo(() => {
-    if (!watchlistSymbolsEffective.length) return [];
-    const posMap = new Map(positions.map((row) => [row.symbol, row]));
-    return watchlistSymbolsEffective.map((symbol) => {
-      const quote = quotes[symbol];
-      const pos = posMap.get(symbol);
-      const last = quote ? (quote.bid + quote.ask) / 2 : safeNumber(pos?.price);
-      const dayPct = safeNumber(pos?.day_pnl_pct);
-      const change = last * (dayPct / 100);
-      return {
-        symbol,
-        last: formatNumber(last),
-        chg: formatSignedNumber(change),
-        pct: formatSignedPct(dayPct),
-        rawPct: dayPct,
-      };
-    });
-  }, [positions, quotes, watchlistSymbolsEffective]);
-
   const streamSymbols = useMemo(() => {
     const symbols = new Set<string>();
     positions.forEach((row) => {
@@ -2077,14 +2399,10 @@ export default function App() {
         symbols.add(String(row.symbol).toUpperCase());
       }
     });
-    watchlistSymbolsEffective.forEach((sym) => {
-      const upper = sym.toUpperCase();
-      if (!parseOsiSymbol(upper)) symbols.add(upper);
-    });
     if (currentSymbol && !parseOsiSymbol(currentSymbol)) symbols.add(currentSymbol.toUpperCase());
     if (tradeSymbol && !parseOsiSymbol(tradeSymbol)) symbols.add(tradeSymbol.toUpperCase());
     return Array.from(symbols);
-  }, [positions, watchlistSymbolsEffective, currentSymbol, tradeSymbol]);
+  }, [positions, currentSymbol, tradeSymbol]);
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -2094,24 +2412,14 @@ export default function App() {
       if (key === "arrowup" || key === "arrowdown") {
         if (tab === "Monitor") {
           event.preventDefault();
-          if (activeTable === "watchlist") {
-            setSelectedWatchIndex((prev) => {
-              const max = watchlistRows.length - 1;
-              const next = key === "arrowdown" ? Math.min(prev + 1, max) : Math.max(prev - 1, 0);
-              const symbol = watchlistRows[next]?.symbol;
-              if (symbol) setCurrentSymbol(symbol);
-              return next;
-            });
-          } else if (activeTable === "positions") {
+          if (activeTable === "positions") {
             setSelectedPosIndex((prev) => {
               const max = positionsDisplay.length - 1;
               const next = key === "arrowdown" ? Math.min(prev + 1, max) : Math.max(prev - 1, 0);
               const row: any = positionsDisplay[next];
               const asset = String(row?.asset_class || "").toLowerCase();
               const symbol =
-                row?.isStrategySummary && row?.underlying
-                  ? row.underlying
-                  : asset === "option" && row?.underlying
+                asset === "option" && row?.underlying
                     ? row.underlying
                     : row?.symbol;
               if (symbol) setCurrentSymbol(symbol);
@@ -2145,7 +2453,7 @@ export default function App() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [tab, activeTable, watchlistRows, positionsDisplay]);
+  }, [tab, activeTable, positionsDisplay]);
 
   useEffect(() => {
     if (staticMode) return;
@@ -2165,14 +2473,6 @@ export default function App() {
       if (timer) window.clearInterval(timer);
     };
   }, [marketConnected, streamSymbols.join("|"), marketStatus.source, marketStatus.ok, fetchQuotes, staticMode]);
-
-  useEffect(() => {
-    if (selectedWatchIndex >= watchlistRows.length) {
-      setSelectedWatchIndex(0);
-    }
-    const symbol = watchlistRows[selectedWatchIndex]?.symbol;
-    if (symbol) setCurrentSymbol(symbol);
-  }, [watchlistRows, selectedWatchIndex]);
 
   useEffect(() => {
     if (selectedPosIndex >= positionsDisplay.length) {
@@ -2561,78 +2861,13 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [tradeAssetClass, optionLegsKey, optionLegCheck.ok]);
 
-  const startSchwabAuth = async () => {
-    try {
-      const resp = await api.get("/auth/schwab/start");
-      const url = resp.data.auth_url;
-      if (url) window.open(url, "_blank", "width=540,height=720");
-    } catch (err: any) {
-      notify(err?.response?.data?.detail ?? "Schwab auth failed");
-    }
-  };
-
-  const openAuthModal = () => {
-    setAuthModalOpen(true);
-    fetchAuthDiagnostics();
-  };
-
-  const exchangeAuthCode = async () => {
-    if (!authCode.trim()) {
-      notify("Paste the Schwab auth code first.");
-      return;
-    }
-    try {
-      await api.post("/auth/schwab/exchange", { code: authCode.trim() });
-      setAuthCode("");
-      setAuthModalOpen(false);
-      setSchwabConnected(true);
-      refreshAll();
-      notify("Schwab connected.");
-      setAuthError("");
-    } catch (err: any) {
-      const detail = err?.response?.data?.detail ?? "Code exchange failed";
-      setAuthError(detail);
-      notify(detail);
-    }
-  };
-
-  const SchwabStatusIndicator = () => {
-    if (!schwabStatus) {
-      return null;
-    }
-    const connected = Boolean(schwabStatus.connected);
-    const canFetch = Boolean(schwabStatus.can_fetch_data);
-    const minutes = Math.max(0, Math.floor((schwabStatus.expires_in_seconds || 0) / 60));
-    let label = connected ? "Schwab Connected" : "Schwab Offline";
-    if (connected && !canFetch) {
-      label = schwabStatus.status === "cooldown" ? "Schwab Cooldown" : "Schwab Limited";
-    } else if (connected && minutes) {
-      label = `${label} (${minutes}m)`;
-    }
-    const statusMessage = schwabStatus.message || schwabStatus.reason;
-    return (
-      <div
-        className="status-bar-schwab"
-        onClick={() => {
-          if (!connected) {
-            startSchwabAuth();
-          }
-        }}
-        title={statusMessage || label}
-      >
-        <span className={connected ? "status-connected" : "status-disconnected"}>{connected ? "✓" : "✗"} {label}</span>
-      </div>
-    );
-  };
-
   const tabs = useMemo(
-    () => (staticMode ? ["Monitor", "Analyze", "Activity", "Admin"] : ["Monitor", "Trade", "Analyze", "Risk", "Activity", "Admin"]),
+    () => (staticMode ? ["Monitor", "Analyze", "Risk", "Activity", "Admin"] : ["Monitor", "Trade", "Analyze", "Risk", "Activity", "Admin"]),
     [staticMode]
   );
 
   return (
     <div className={`ws ${chartFull ? "chart-full" : ""}`}>
-      {!staticMode && <SchwabStatusIndicator />}
       <div className="topbar">
         <div className="top-tabs">
           {tabs.map((label) => (
@@ -2644,19 +2879,12 @@ export default function App() {
         <div className="top-meta">
           <div className="topcell">
             <span className="label">Status</span>
-            <div className="status">{statusLine}</div>
+            <div className="status">{toast || statusLine}</div>
           </div>
           <div className="topcell">
-            <span className="label">Broker</span>
-            {staticMode ? (
-              <div className="status">Static</div>
-            ) : (
-              <button className="tool" type="button" onClick={openAuthModal} disabled={portfolioStatus.source === "demo"}>
-                {brokerLabel}
-              </button>
-            )}
+            <span className="label">Data</span>
+            <div className="status">{portfolioStatus.source === "demo" ? "Demo" : "Local"}</div>
           </div>
-          <div className="topcell clock">{clock || "—"}</div>
         </div>
       </div>
 
@@ -2688,87 +2916,10 @@ export default function App() {
         <button className="tool" type="button" onClick={() => setHotkeysOpen(true)}>
           Hotkeys
         </button>
-        <button className="tool" type="button" onClick={() => setAlertsOpen(true)}>
-          Alerts
-        </button>
         <button className="tool" type="button" onClick={resetLayout}>
           Reset Layout
         </button>
       </div>
-
-      <div className={`error-banner ${showErrorBanner ? "" : "hidden"}`}>
-        {showErrorBanner ? (
-          <div className="banner-row">
-            <span>{`ERROR · ${error}`}</span>
-            <button type="button" className="banner-close" onClick={() => setDismissedError(error || "")}>
-              ×
-            </button>
-          </div>
-        ) : null}
-      </div>
-      <div className={`warning-banner ${showWarningBanner ? "" : "hidden"}`}>
-        {showWarningBanner ? (
-          <div className="banner-row">
-            <span>{`STATUS · ${connectionBanner}`}</span>
-            <button type="button" className="banner-close" onClick={() => setDismissedWarning(connectionBanner || "")}>
-              ×
-            </button>
-          </div>
-        ) : null}
-      </div>
-
-      {!staticMode && authModalOpen && (
-        <div className="modal">
-          <div className="modal-card">
-            <div className="modal-header">
-              <span>Schwab Connection</span>
-              <button type="button" onClick={() => setAuthModalOpen(false)}>×</button>
-            </div>
-            <div className="modal-body">
-              <div className="modal-section">
-                <div className="modal-label">Status</div>
-                <div className="modal-value">{schwabConnected ? "Connected" : "Not connected"}</div>
-              </div>
-              <div className="modal-section">
-                <div className="modal-label">Redirect URI</div>
-                <div className="modal-value mono">{authDiag?.redirect_uri || "—"}</div>
-              </div>
-              {authDiag?.scope && (
-                <div className="modal-section">
-                  <div className="modal-label">Token Scope</div>
-                  <div className="modal-value mono">{authDiag.scope}</div>
-                </div>
-              )}
-              {authError && <div className="modal-error">{authError}</div>}
-              {authDiagError && schwabConnected && <div className="modal-error">{authDiagError}</div>}
-              {!schwabConnected && (
-                <div className="modal-text muted">Diagnostics available after connecting Schwab.</div>
-              )}
-              <div className="modal-section">
-                <div className="modal-label">Step 1</div>
-                <div className="modal-text">
-                  Open Schwab login and approve access. The redirect URI above must exactly match the Schwab app setting.
-                </div>
-                <button className="tool" type="button" onClick={startSchwabAuth}>Open Schwab Login</button>
-              </div>
-              <div className="modal-section">
-                <div className="modal-label">Step 2 (manual fallback)</div>
-                <div className="modal-text">
-                  If the redirect page fails, paste the full redirect URL or just the <span className="mono">code</span> value below.
-                  Do not paste the log output.
-                </div>
-                <input
-                  className="input mono"
-                  value={authCode}
-                  onChange={(e) => setAuthCode(e.target.value)}
-                  placeholder="Paste auth code or full redirect URL"
-                  />
-                  <button className="tool" type="button" onClick={exchangeAuthCode}>Exchange Code</button>
-                </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       {positionModalOpen && (
         <div className="modal">
@@ -2882,6 +3033,15 @@ export default function App() {
                     </select>
                   </label>
                   <label className="field">
+                    <span>Label</span>
+                    <input
+                      className="input"
+                      value={positionForm.owner}
+                      onChange={(e) => setPositionForm((prev) => ({ ...prev, owner: e.target.value }))}
+                      list="label-options"
+                    />
+                  </label>
+                  <label className="field">
                     <span>Sector</span>
                     <input
                       className="input"
@@ -2902,6 +3062,11 @@ export default function App() {
                 <datalist id="sector-options">
                   {sectorOptions.map((sector) => (
                     <option key={sector} value={sector} />
+                  ))}
+                </datalist>
+                <datalist id="label-options">
+                  {ownerOptions.map((owner) => (
+                    <option key={owner} value={owner} />
                   ))}
                 </datalist>
                 <button className="tool" type="button" onClick={savePosition}>Save Position</button>
@@ -2952,22 +3117,6 @@ export default function App() {
         </div>
       )}
 
-      {alertsOpen && (
-        <div className="modal">
-          <div className="modal-card">
-            <div className="modal-header">
-              <span>Alerts</span>
-              <button type="button" onClick={() => setAlertsOpen(false)}>×</button>
-            </div>
-            <div className="modal-body">
-              <div className="modal-section">
-                <div className="modal-text">No active alerts.</div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
       <div className={`layout ${showLeft ? "" : "no-left"} ${chartFull ? "full" : ""}`}>
         <aside className={`left ${showLeft ? "" : "hidden"}`}>
           {showPanel("left", "account") && (
@@ -2983,11 +3132,7 @@ export default function App() {
               </div>
               {!collapsed.account && (
                 <div className="panel-body account-panel">
-                  <div className="table account-summary">
-                    <div className="row head account">
-                      <div>Metric</div>
-                      <div className="num">Value</div>
-                    </div>
+                  <div className="account-summary-grid">
                     {accountSummary ? (
                       [
                         ["Account", accountSummary.name],
@@ -2997,18 +3142,16 @@ export default function App() {
                         ["Cash", accountSummary.cashTotal],
                         ["Cash (Avail)", accountSummary.cash],
                         ["Buying Power", accountSummary.buyingPower],
-                      ].map(([k, v], idx) => (
-                        <div className={`row account ${idx % 2 ? "alt" : ""}`} key={k as string}>
-                          <div>{k}</div>
-                          <div className={`num mono ${(k as string).includes("PnL") && String(v).startsWith("-") ? "neg" : ""}`}>
-                            {v}
-                          </div>
+                      ].map(([k, v]) => (
+                        <div className="account-kpi" key={k as string}>
+                          <div className="label">{k}</div>
+                          <div className={`mono ${(k as string).includes("PnL") && String(v).startsWith("-") ? "neg" : ""}`}>{v}</div>
                         </div>
                       ))
                     ) : (
-                      <div className="row account">
-                        <div>Loading</div>
-                        <div className="num">—</div>
+                      <div className="account-kpi">
+                        <div className="label">Loading</div>
+                        <div className="mono">—</div>
                       </div>
                     )}
                   </div>
@@ -3031,126 +3174,6 @@ export default function App() {
             </>
           )}
 
-          {showPanel("left", "watchlist") && (
-            <>
-              <div className="panel-header">
-                <span>Watchlists</span>
-                <div className="panel-controls">
-                  <button type="button" onClick={() => toggleCollapsed("watchlist")}>{collapsed.watchlist ? "+" : "−"}</button>
-                  <button type="button" onClick={() => toggleFocus("left", "watchlist")}>□</button>
-                  <button type="button" onClick={() => notify("Detach not available.")}>↗</button>
-                  <button type="button" onClick={() => notify("Watchlist settings opened.")}>⚙</button>
-                </div>
-              </div>
-              {!collapsed.watchlist && (
-                <div className="table zebra">
-                  <div className="watchlist-controls">
-                    <input
-                      className="input input-mini"
-                      placeholder="Add symbol"
-                      value={watchlistInput}
-                      onChange={(e) => setWatchlistInput(e.target.value.toUpperCase())}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") addWatchSymbol();
-                      }}
-                    />
-                    <button className="btn ghost" type="button" onClick={addWatchSymbol}>
-                      Add
-                    </button>
-                  </div>
-                  <div className="row head watchlist">
-                    <div>Symbol</div>
-                    <div className="num">Last</div>
-                    <div className="num">Change</div>
-                    <div className="num">%</div>
-                  </div>
-                  {watchlistRows.length === 0 ? (
-                    <div className="row watchlist">
-                      <div>No symbols</div>
-                      <div />
-                      <div />
-                      <div />
-                    </div>
-                  ) : (
-                    watchlistRows.map((row, idx) => (
-                      <div
-                        className={`row watchlist ${idx % 2 ? "alt" : ""} ${currentSymbol === row.symbol ? "selected" : ""} ${selectedWatchIndex === idx ? "selected" : ""}`}
-                        key={row.symbol}
-                        onClick={() => {
-                          setActiveTable("watchlist");
-                          setSelectedWatchIndex(idx);
-                          setCurrentSymbol(row.symbol);
-                        }}
-                        onContextMenu={(event) => {
-                          event.preventDefault();
-                          setActiveTable("watchlist");
-                          setSelectedWatchIndex(idx);
-                          setCurrentSymbol(row.symbol);
-                          setContextMenu({ x: event.clientX, y: event.clientY, symbol: row.symbol, mode: "watchlist" });
-                        }}
-                        role="button"
-                        tabIndex={0}
-                      >
-                        <div className="mono">
-                          {row.symbol}
-                          <button
-                            className="watchlist-remove"
-                            type="button"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              removeWatchSymbol(row.symbol);
-                            }}
-                          >
-                            ×
-                          </button>
-                        </div>
-                        <div className="num mono">{row.last}</div>
-                        <div className={`num mono ${String(row.rawPct).startsWith("-") ? "neg" : "pos"}`}>{row.chg}</div>
-                        <div className={`num mono ${String(row.rawPct).startsWith("-") ? "neg" : "pos"}`}>{row.pct}</div>
-                      </div>
-                    ))
-                  )}
-                </div>
-              )}
-            </>
-          )}
-
-          {showPanel("left", "strategy") && (
-            <>
-              <div className="panel-header">
-                <span>Strategy Groups</span>
-                <div className="panel-controls">
-                  <button type="button" onClick={() => toggleCollapsed("strategy")}>{collapsed.strategy ? "+" : "−"}</button>
-                  <button type="button" onClick={() => toggleFocus("left", "strategy")}>□</button>
-                  <button type="button" onClick={() => notify("Detach not available.")}>↗</button>
-                  <button type="button" onClick={() => notify("Strategy settings opened.")}>⚙</button>
-                </div>
-              </div>
-              {!collapsed.strategy && (
-                <div className="list">
-                  <div
-                    className={`list-row ${!strategyFilter ? "active" : ""}`}
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => setStrategyFilter("")}
-                  >
-                    All Strategies
-                  </div>
-                  {strategyGroups.map((group) => (
-                    <div
-                      key={group}
-                      className={`list-row ${strategyFilter === group ? "active" : ""}`}
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => setStrategyFilter(strategyFilter === group ? "" : group)}
-                    >
-                      {group}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </>
-          )}
         </aside>
 
         <main className="center">
@@ -3176,7 +3199,7 @@ export default function App() {
                   )}
                   {!collapsed.positions && (
                     <div className="table scroll">
-                      <datalist id="owner-options">
+                      <datalist id="label-options">
                         {ownerOptions.map((owner) => (
                           <option key={owner} value={owner} />
                         ))}
@@ -3193,7 +3216,7 @@ export default function App() {
                         <div className="centered">Expiry</div>
                         <div className="centered cell-strike">Strike</div>
                         <div className="centered">Entry</div>
-                        <div>Owner</div>
+                        <div>Label</div>
                         <div>Sector</div>
                       </div>
                       {positionsDisplay.length === 0 ? (
@@ -3228,32 +3251,14 @@ export default function App() {
                                   row.strike ?? 0
                                 ) || row.symbol
                               : row.symbol;
-                          const selectSymbol =
-                            row.isStrategySummary && row.underlying
-                              ? row.underlying
-                              : isOptionSymbol && row.underlying
-                                ? row.underlying
-                                : row.symbol;
+                          const selectSymbol = isOptionSymbol && row.underlying ? row.underlying : row.symbol;
                           const isShort = Number(row.qty || 0) < 0;
                           const typeBase = row.asset_class ? String(row.asset_class).toUpperCase() : "—";
-                          const summarySide = row.position_side === "SHORT" ? "SHORT" : "LONG";
-                          const typeDisplay = row.isStrategySummary
-                            ? `${typeBase} ${summarySide}`
-                            : isShort
-                              ? `${typeBase} SHORT`
-                              : typeBase;
-                          const strategyId = row.strategy_id as string | undefined;
-                          const isCollapsed = strategyId ? !!collapsedStrategies[strategyId] : false;
+                          const typeDisplay = isShort ? `${typeBase} SHORT` : typeBase;
                           return (
                             <div
-                              className={`row positions ${idx % 2 ? "alt" : ""} ${row.isStrategySummary ? "strategy" : ""} ${row.isStrategyLeg ? "leg" : ""} ${currentSymbol === selectSymbol ? "selected" : ""} ${selectedPosIndex === idx ? "selected" : ""}`}
-                              key={
-                                row.isStrategySummary
-                                  ? `strategy-${row.strategy_id}-${idx}`
-                                  : row.isStrategyLeg
-                                    ? `leg-${row.instrument_id ?? row.symbol}-${idx}`
-                                    : row.instrument_id ?? `${row.symbol}-${idx}`
-                              }
+                              className={`row positions ${idx % 2 ? "alt" : ""} ${currentSymbol === selectSymbol ? "selected" : ""} ${selectedPosIndex === idx ? "selected" : ""}`}
+                              key={row.instrument_id ?? `${row.symbol}-${idx}`}
                               onClick={() => {
                                 setActiveTable("positions");
                                 setSelectedPosIndex(idx);
@@ -3264,38 +3269,21 @@ export default function App() {
                                 setActiveTable("positions");
                                 setSelectedPosIndex(idx);
                                 setCurrentSymbol(selectSymbol);
-                                const contextSymbol =
-                                  row.isStrategySummary && row.underlying ? row.underlying : row.symbol;
                                 setContextMenu({
                                   x: event.clientX,
                                   y: event.clientY,
-                                  symbol: contextSymbol,
+                                  symbol: row.symbol,
                                   selectSymbol,
                                   mode: "positions",
-                                  instrumentId: row.isStrategySummary ? null : row.instrument_id,
-                                  isStrategySummary: !!row.isStrategySummary,
+                                  instrumentId: row.instrument_id,
+                                  isStrategySummary: false,
                                 });
                               }}
                               role="button"
                               tabIndex={0}
                             >
                               <div className="mono">
-                                {row.isStrategySummary && strategyId ? (
-                                  <button
-                                    type="button"
-                                    className="strategy-toggle"
-                                    onClick={(event) => {
-                                      event.stopPropagation();
-                                      toggleStrategy(strategyId);
-                                    }}
-                                  >
-                                    {isCollapsed ? "▸" : "▾"}
-                                  </button>
-                                ) : null}
                                 <span>{displaySymbol}</span>
-                                {row.isStrategySummary && row.legCount ? (
-                                  <span className="strategy-count">({row.legCount})</span>
-                                ) : null}
                               </div>
                               <div className="mono">{typeDisplay}</div>
                               <div className="num mono">{formatNumber(row.qty)}</div>
@@ -3309,59 +3297,47 @@ export default function App() {
                                 {row.strike ? formatNumber(row.strike) : "—"}
                               </div>
                               <div className="centered cell-entry-date">
-                                {row.isStrategySummary ? (
-                                  row.entry_date || "—"
-                                ) : (
-                                  <input
-                                    key={`${row.instrument_id ?? row.symbol}-entry-${row.entry_date ?? ""}`}
-                                    className="input input-mini mono"
-                                    type="date"
-                                    defaultValue={row.entry_date ?? ""}
-                                    onBlur={(e) => updatePositionEntryDate(row, e.target.value)}
-                                    onKeyDown={(e) => {
-                                      if (e.key === "Enter") {
-                                        (e.target as HTMLInputElement).blur();
-                                      }
-                                    }}
-                                  />
-                                )}
+                                <input
+                                  key={`${row.instrument_id ?? row.symbol}-entry-${row.entry_date ?? ""}`}
+                                  className="input input-mini mono"
+                                  type="date"
+                                  defaultValue={row.entry_date ?? ""}
+                                  onBlur={(e) => updatePositionEntryDate(row, e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") {
+                                      (e.target as HTMLInputElement).blur();
+                                    }
+                                  }}
+                                />
                               </div>
                               <div className="cell-owner">
-                                {row.isStrategySummary ? (
-                                  row.owner ? row.owner : "—"
-                                ) : (
-                                  <input
-                                    key={`${row.instrument_id ?? row.symbol}-owner-${row.owner ?? ""}`}
-                                    className="input input-mini"
-                                    list="owner-options"
-                                    placeholder="Owner"
-                                    defaultValue={row.owner ?? ""}
-                                    onBlur={(e) => updatePositionOwner(row, e.target.value)}
-                                    onKeyDown={(e) => {
-                                      if (e.key === "Enter") {
-                                        (e.target as HTMLInputElement).blur();
-                                      }
-                                    }}
-                                  />
-                                )}
+                                <input
+                                  key={`${row.instrument_id ?? row.symbol}-owner-${row.owner ?? ""}`}
+                                  className="input input-mini"
+                                  list="label-options"
+                                  placeholder="Label"
+                                  defaultValue={row.owner ?? ""}
+                                  onBlur={(e) => updatePositionOwner(row, e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") {
+                                      (e.target as HTMLInputElement).blur();
+                                    }
+                                  }}
+                                />
                               </div>
                               <div className="cell-sector">
-                                {row.isStrategySummary ? (
-                                  row.sector ?? "—"
-                                ) : (
-                                  <select
-                                    className="input input-mini"
-                                    value={row.sector ?? ""}
-                                    onChange={(e) => updatePositionSector(row, e.target.value)}
-                                  >
-                                    <option value="">Unassigned</option>
-                                    {sectorOptions.map((sector) => (
-                                      <option key={sector} value={sector}>
-                                        {sector}
-                                      </option>
-                                    ))}
-                                  </select>
-                                )}
+                                <select
+                                  className="input input-mini"
+                                  value={row.sector ?? ""}
+                                  onChange={(e) => updatePositionSector(row, e.target.value)}
+                                >
+                                  <option value="">Unassigned</option>
+                                  {sectorOptions.map((sector) => (
+                                    <option key={sector} value={sector}>
+                                      {sector}
+                                    </option>
+                                  ))}
+                                </select>
                               </div>
                             </div>
                           );
@@ -3375,11 +3351,11 @@ export default function App() {
               {showPanel("center", "chart") && showChart && (
                 <div className="monitor-chart">
                   <div className={`panel-header ${portfolioStatus.ok ? "" : "stale"}`}>
-                    <span>{chartMode === "SECTOR" ? "Sector vs Portfolio vs SPX" : "Portfolio vs SPX"} · {timeframe} · {portfolioStatus.label}</span>
+                    <span>{chartMode === "SECTOR" ? "Sector Comparison" : "Portfolio Comparison"}</span>
                     <div className="panel-controls">
                       <select className="input input-mini" value={chartMode} onChange={(e) => setChartMode(e.target.value as "PORTFOLIO" | "SECTOR")}>
-                        <option value="PORTFOLIO">Portfolio vs SPX</option>
-                        <option value="SECTOR">Sector vs Portfolio vs SPX</option>
+                        <option value="PORTFOLIO">Portfolio</option>
+                        <option value="SECTOR">Sector Comparison</option>
                       </select>
                       {chartMode === "PORTFOLIO" && accountId === "ALL" && accountChartOptions.length > 0 && (
                         <>
@@ -3438,15 +3414,27 @@ export default function App() {
                           >
                             Clear
                           </button>
-                          <select
-                            className="input input-mini"
-                            value={sectorSource}
-                            onChange={(e) => setSectorSource(e.target.value as "auto" | "etf" | "sleeve")}
+                          <button
+                            type="button"
+                            className={`tool ${sectorShowSleeve ? "active" : ""}`}
+                            onClick={() => setSectorShowSleeve((prev) => !prev)}
                           >
-                            <option value="auto">Auto</option>
-                            <option value="etf">ETF</option>
-                            <option value="sleeve">Sleeve</option>
-                          </select>
+                            Sleeve
+                          </button>
+                          <button
+                            type="button"
+                            className={`tool ${sectorShowEtf ? "active" : ""}`}
+                            onClick={() => setSectorShowEtf((prev) => !prev)}
+                          >
+                            ETF
+                          </button>
+                          <button
+                            type="button"
+                            className={`tool ${sectorShowPortfolio ? "active" : ""}`}
+                            onClick={() => setSectorShowPortfolio((prev) => !prev)}
+                          >
+                            Portfolio
+                          </button>
                         </>
                       )}
                       <select className="input input-mini" value={timeframe} onChange={(e) => setTimeframe(e.target.value)}>
@@ -3454,8 +3442,16 @@ export default function App() {
                         <option>5D</option>
                         <option>1M</option>
                         <option>3M</option>
+                        <option>TYD</option>
                         <option>MAX</option>
                       </select>
+                      <button
+                        type="button"
+                        className={`tool ${chartShowBench ? "active" : ""}`}
+                        onClick={() => setChartShowBench((prev) => !prev)}
+                      >
+                        {chartShowBench ? "SPX On" : "SPX Off"}
+                      </button>
                       <button
                         type="button"
                         onClick={() =>
@@ -3507,17 +3503,19 @@ export default function App() {
                         </div>
                       )}
                       {sectorEmpty && chartMode === "SECTOR" && (
-                        <div className="warning-banner">No sector data yet. Add a sector or check that positions are assigned.</div>
+                        <div className="warning-banner">No sector data yet. Add sectors and enable Sleeve and/or ETF.</div>
                       )}
                       {sectorError && chartMode === "SECTOR" && <div className="error-banner">{sectorError}</div>}
                       <ErrorBoundary fallback={<div className="error-banner">Chart error. Please refresh.</div>}>
                         <PortfolioChart
                           key={`monitor-${chartMode}-${chartShowBench}-${sectorSeriesList.length}`}
                           data={chartData}
+                          showNav={chartShowNav}
                           showSector={chartMode === "SECTOR"}
-                          showBench={chartShowBench}
+                          showBench={chartShowBenchEffective}
                           sectorSeries={sectorSeriesList}
-                          extraSeries={accountId === "ALL" ? accountSeries : []}
+                          extraSeries={chartExtraSeries}
+                          emptyMessage={chartEmptyMessage}
                         />
                       </ErrorBoundary>
                     </>
@@ -3528,7 +3526,7 @@ export default function App() {
           )}
 
           {tab === "Risk" && (
-            <div className="tab-body">
+            <div className="tab-body risk-body">
               {showPanel("center", "risk") && (
                 <>
                   <div className={`panel-header ${riskStatus.ok ? "" : "stale"}`}>
@@ -3541,38 +3539,115 @@ export default function App() {
                     </div>
                   </div>
                   {!collapsed.risk && (
-                    <>
-                      <div className="table">
-                        <div className="row head risk">
-                          <div>Metric</div>
-                          <div className="num">Value</div>
-                          <div className="num">Limit</div>
+                    <div className="risk-grid">
+                      <section className="risk-card">
+                        <div className="risk-card-title">Risk Snapshot</div>
+                        <div className="risk-hero-grid">
+                          {riskVisualCards.map((card) => (
+                            <div className="risk-hero-card" key={card.key}>
+                              <div className="label">{card.label}</div>
+                              <div className="risk-hero-value mono">{card.display}</div>
+                              <div className="risk-bar">
+                                <div className="risk-bar-fill" style={{ width: `${(card.ratio * 100).toFixed(1)}%` }} />
+                              </div>
+                            </div>
+                          ))}
                         </div>
-                        {riskRows.map((row, idx) => (
-                          <div className={`row risk ${row.breached ? "warn" : ""} ${idx % 2 ? "alt" : ""}`} key={row.metric}>
-                            <div className="mono">{riskLabels[row.metric] ?? row.metric.replaceAll("_", " ")}</div>
-                            <div className="num mono">{formatRiskValue(row.metric, row.value)}</div>
-                            <div className="num mono">{row.limit ? formatRiskValue(row.metric, row.limit) : "—"}</div>
-                          </div>
-                        ))}
-                      </div>
-                      <div className="table">
-                        <div className="row head risk-matrix">
-                          <div>Asset</div>
-                          <div className="num">Long%</div>
-                          <div className="num">Short%</div>
-                          <div className="num">Net%</div>
+                      </section>
+
+                      <section className="risk-card">
+                        <div className="risk-card-title">Exposure Map</div>
+                        <div className="exposure-bars">
+                          {riskMatrix.map((row, idx) => (
+                            <div className={`exposure-row ${idx % 2 ? "alt" : ""}`} key={row.cls}>
+                              <div className="mono">{row.cls.toUpperCase()}</div>
+                              <div className="exposure-track">
+                                <div className="exposure-fill long" style={{ width: `${Math.min(100, Math.abs(row.long) * 100)}%` }} />
+                                <div className="exposure-fill short" style={{ width: `${Math.min(100, Math.abs(row.short) * 100)}%` }} />
+                              </div>
+                              <div className="num mono">{formatSignedPct(row.net * 100, 1)}</div>
+                            </div>
+                          ))}
                         </div>
-                        {riskMatrix.map((row, idx) => (
-                          <div className={`row risk-matrix ${idx % 2 ? "alt" : ""}`} key={row.cls}>
-                            <div className="mono">{row.cls.toUpperCase()}</div>
-                            <div className="num mono">{formatSignedPct(row.long * 100, 1)}</div>
-                            <div className="num mono">{formatSignedPct(row.short * 100, 1)}</div>
-                            <div className="num mono">{formatSignedPct(row.net * 100, 1)}</div>
+                      </section>
+
+                      <section className="risk-card">
+                        <div className="risk-card-title">Rolling Visuals</div>
+                        <div className="risk-spark-grid">
+                          {riskSparkSeries.map((series) => (
+                            <div className="risk-spark-card" key={series.key}>
+                              <div className="risk-spark-head">
+                                <span>{series.label}</span>
+                                <span className="mono">{formatRiskValue(series.metric, series.latest)}</span>
+                              </div>
+                              <svg viewBox="0 0 240 64" className="risk-sparkline" preserveAspectRatio="none">
+                                <polyline points={sparklinePath(series.values)} />
+                              </svg>
+                            </div>
+                          ))}
+                          <div className="risk-footnote">As of {rollingLatest.date}</div>
+                        </div>
+                      </section>
+
+                      <section className="risk-card">
+                        <div className="risk-card-title">Top Metrics</div>
+                        <div className="table">
+                          <div className="row head risk">
+                            <div>Metric</div>
+                            <div className="num">Value</div>
+                            <div className="num">Limit</div>
                           </div>
-                        ))}
-                      </div>
-                    </>
+                          {riskRows.slice(0, 10).map((row, idx) => (
+                            <div className={`row risk ${row.breached ? "warn" : ""} ${idx % 2 ? "alt" : ""}`} key={row.metric}>
+                              <div className="mono">{riskLabels[row.metric] ?? row.metric.replaceAll("_", " ")}</div>
+                              <div className="num mono">{formatRiskValue(row.metric, row.value)}</div>
+                              <div className="num mono">{row.limit ? formatRiskValue(row.metric, row.limit) : "—"}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </section>
+
+                      <section className="risk-card">
+                        <div className="risk-card-title">Correlation Matrix</div>
+                        {correlationLabels.length > 1 ? (
+                          <div className="corr-matrix-wrap">
+                            <table className="corr-matrix">
+                              <thead>
+                                <tr>
+                                  <th />
+                                  {correlationLabels.map((label) => (
+                                    <th key={`col-${label}`}>{label}</th>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {correlationLabels.map((rowLabel, rowIdx) => (
+                                  <tr key={`row-${rowLabel}`}>
+                                    <th>{rowLabel}</th>
+                                    {correlationLabels.map((colLabel, colIdx) => {
+                                      const value = Number(correlationMatrix[rowIdx]?.[colIdx] ?? 0);
+                                      return (
+                                        <td key={`${rowLabel}-${colLabel}`} style={correlationCellStyle(value)}>
+                                          {value.toFixed(2)}
+                                        </td>
+                                      );
+                                    })}
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                            <div className="corr-legend">
+                              <span className="mono">-1.0</span>
+                              <div className="corr-legend-bar" />
+                              <span className="mono">+1.0</span>
+                            </div>
+                            <div className="risk-footnote">Observations: {riskCorrelation?.observations ?? 0}</div>
+                          </div>
+                        ) : (
+                          <div className="risk-empty">Correlation data will appear after enough daily history is available.</div>
+                        )}
+                      </section>
+                    </div>
                   )}
                 </>
               )}
@@ -3586,6 +3661,14 @@ export default function App() {
                   <div className={`panel-header ${portfolioStatus.ok ? "" : "stale"}`}>
                   <span>Transactions · {portfolioStatus.label}</span>
                     <div className="panel-controls">
+                      <button
+                        type="button"
+                        className={`tool ${activityClosedOnly ? "active" : ""}`}
+                        onClick={() => setActivityClosedOnly((prev) => !prev)}
+                        title="Toggle closed/realized only"
+                      >
+                        Closed
+                      </button>
                       <button type="button" onClick={() => toggleCollapsed("blotter")}>{collapsed.blotter ? "+" : "−"}</button>
                       <button type="button" onClick={() => toggleFocus("center", "blotter")}>□</button>
                       <button type="button" onClick={() => notify("Detach not available.")}>↗</button>
@@ -3593,24 +3676,69 @@ export default function App() {
                     </div>
                   </div>
                   {!collapsed.blotter && (
-                    <div className="table">
+                    <div className="table scroll activity-table">
                       <div className="row head blotter">
                         <div className="centered">Time</div>
                         <div className="centered">Trade Date</div>
+                        <div>Account</div>
                         <div>Symbol</div>
                         <div className="centered">Side</div>
                         <div className="num">Qty</div>
                         <div className="num">Price</div>
+                        <div>Sector</div>
+                        <div className="num">Realized P/L</div>
                         <div>Status</div>
                       </div>
-                      {(blotter?.trades ?? []).map((row, idx) => (
-                        <div className={`row blotter ${idx % 2 ? "alt" : ""}`} key={`${row.ts}-${row.symbol}`}>
+                      {activityTrades.map((row, idx) => (
+                        <div className={`row blotter ${idx % 2 ? "alt" : ""}`} key={row.trade_id || `${row.ts}-${row.symbol}-${idx}`}>
                           <div className="centered mono">{row.ts}</div>
                           <div className="centered mono">{row.trade_date ?? row.ts?.slice(0, 10)}</div>
+                          <div className="mono">{row.account ?? "—"}</div>
                           <div className="mono">{row.symbol}</div>
                           <div className={`centered ${row.side === "BUY" ? "pos" : "neg"}`}>{row.side}</div>
                           <div className="num mono">{formatNumber(row.qty)}</div>
                           <div className="num mono">{formatNumber(row.price)}</div>
+                          <div className="cell-sector">
+                            <select
+                              className="input"
+                              value={(row.sector || "").trim() || "Unassigned"}
+                              onChange={(e) => updateTradeSectorRow(row.trade_id, e.target.value)}
+                            >
+                              <option value="Unassigned">Unassigned</option>
+                              {sectorOptions.map((sector) => (
+                                <option key={`trade-sector-${row.trade_id}-${sector}`} value={sector}>
+                                  {sector}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="cell-realized">
+                            <input
+                              className="input mono"
+                              value={
+                                row.trade_id && tradeRealizedDrafts[row.trade_id] != null
+                                  ? tradeRealizedDrafts[row.trade_id]
+                                  : row.realized_pl == null
+                                    ? ""
+                                    : String(Number(row.realized_pl.toFixed(2)))
+                              }
+                              placeholder="0.00"
+                              onChange={(e) => {
+                                if (!row.trade_id) return;
+                                setTradeRealizedDrafts((prev) => ({ ...prev, [row.trade_id]: e.target.value }));
+                              }}
+                              onBlur={() => {
+                                if (!row.trade_id) return;
+                                commitTradeRealizedRow(row.trade_id);
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  (e.target as HTMLInputElement).blur();
+                                }
+                              }}
+                              disabled={!row.trade_id}
+                            />
+                          </div>
                           <div>{row.status}</div>
                         </div>
                       ))}
@@ -3630,8 +3758,9 @@ export default function App() {
                     <button type="button" onClick={() => notify("Admin settings opened.")}>⚙</button>
                   </div>
                 </div>
-                <div className="panel-body trade-form">
-                  <div className="field">
+                <div className="panel-body admin-grid">
+                  <section className="field admin-card">
+                    <div className="admin-card-title">Cash</div>
                     <label>Cash (Total)</label>
                     <input
                       className="input"
@@ -3641,13 +3770,17 @@ export default function App() {
                       onChange={(e) => setCashInput(e.target.value)}
                     />
                     <button className="btn buy" type="button" onClick={updateCash}>Update Cash</button>
-                  </div>
-                  <div className="field">
+                  </section>
+
+                  <section className="field admin-card">
+                    <div className="admin-card-title">Benchmark</div>
                     <label>Benchmark Start (YYYY-MM-DD)</label>
                     <input className="input" type="date" value={benchStart} onChange={(e) => setBenchStart(e.target.value)} />
                     <button className="btn ghost" type="button" onClick={setBenchmarkStart}>Set Benchmark</button>
-                  </div>
-                  <div className="field">
+                  </section>
+
+                  <section className="field admin-card">
+                    <div className="admin-card-title">Portfolio Reset</div>
                     <label>Reset Portfolio (Start Cash)</label>
                     <input
                       className="input"
@@ -3656,26 +3789,152 @@ export default function App() {
                       placeholder={snapshot ? String(snapshot.cash ?? "") : ""}
                       onChange={(e) => setResetCash(e.target.value)}
                     />
+                    <label style={{ display: "flex", alignItems: "center", gap: 8, textTransform: "none" }}>
+                      <input
+                        type="checkbox"
+                        checked={resetDeleteAccounts}
+                        onChange={(e) => setResetDeleteAccounts(e.target.checked)}
+                      />
+                      Delete accounts on reset
+                    </label>
                     <button className="btn sell" type="button" onClick={resetPortfolio}>Reset Portfolio</button>
-                  </div>
-                  <div className="field">
-                    <label>Positions</label>
+                  </section>
+
+                  <section className="field admin-card">
+                    <div className="admin-card-title">Positions</div>
+                    <label>Manual Entry</label>
                     <button className="btn ghost" type="button" onClick={() => openPositionModal()}>
                       Add / Update Position
                     </button>
-                  </div>
-                  <div className="field">
-                    <label>NAV History</label>
+                  </section>
+
+                  <section className="field admin-card admin-card-wide">
+                    <div className="admin-card-title">Balance Imports</div>
+                    <label>Balance CSVs (Batch)</label>
+                    <div className="modal-text muted mono">
+                      Select multiple balance/history CSV files to import all accounts in one run.
+                    </div>
+                    <input
+                      className="input"
+                      type="file"
+                      accept=".csv,text/csv"
+                      multiple
+                      onChange={async (e) => {
+                        const files = e.target.files;
+                        if (files && files.length) {
+                          await importBalanceFiles(files);
+                        }
+                        e.currentTarget.value = "";
+                      }}
+                    />
+                  </section>
+
+                  <section className="field admin-card admin-card-wide">
+                    <div className="admin-card-title">Sector Performance Inputs</div>
+                    <div className="modal-text muted mono">
+                      Baseline anchors sector return when sleeve capital is near zero. Target weight is stored for attribution overlays.
+                    </div>
+                    <div className="trade-form">
+                      <label className="field">
+                        <span>Account</span>
+                        <select
+                          className="input"
+                          value={sectorPerfAccount}
+                          onChange={(e) => setSectorPerfAccount(e.target.value)}
+                        >
+                          {accountSpecificOptions.map((name) => (
+                            <option key={`perf-account-${name}`} value={name}>
+                              {name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="field">
+                        <span>Sector</span>
+                        <select
+                          className="input"
+                          value={sectorPerfSector}
+                          onChange={(e) => setSectorPerfSector(e.target.value)}
+                        >
+                          {sectorOptions.map((sector) => (
+                            <option key={`perf-sector-${sector}`} value={sector}>
+                              {sector}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="field">
+                        <span>Baseline ($)</span>
+                        <input
+                          className="input mono"
+                          value={sectorPerfBaseline}
+                          onChange={(e) => setSectorPerfBaseline(e.target.value)}
+                          placeholder="e.g. 500000"
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Target Weight (%)</span>
+                        <input
+                          className="input mono"
+                          value={sectorPerfTargetWeight}
+                          onChange={(e) => setSectorPerfTargetWeight(e.target.value)}
+                          placeholder="e.g. 12.5"
+                        />
+                      </label>
+                    </div>
                     <div className="btn-row">
-                      <button className="btn ghost" type="button" onClick={rebuildNavHistory} disabled={navRebuildRunning}>
-                        {navRebuildRunning ? "Rebuilding..." : "Rebuild NAV"}
+                      <button className="btn ghost" type="button" onClick={saveSectorPerformanceInput}>
+                        Save Sector Inputs
                       </button>
-                      <button className="btn ghost" type="button" onClick={clearNavHistory} disabled={navRebuildRunning}>
-                        Clear NAV
+                      <button
+                        className="btn ghost"
+                        type="button"
+                        onClick={() => {
+                          setSectorPerfBaseline("");
+                          setSectorPerfTargetWeight("");
+                        }}
+                      >
+                        Clear Inputs
                       </button>
                     </div>
-                  </div>
-                  <div className="field">
+                    <div className="table scroll">
+                      <div className="row head" style={{ gridTemplateColumns: "1.2fr 1fr 1fr 0.8fr" }}>
+                        <div>Sector</div>
+                        <div className="num">Baseline</div>
+                        <div className="num">Target %</div>
+                        <div className="centered">Use</div>
+                      </div>
+                      {sectorPerfRows.map((row, idx) => (
+                        <div
+                          className={`row ${idx % 2 ? "alt" : ""}`}
+                          style={{ gridTemplateColumns: "1.2fr 1fr 1fr 0.8fr" }}
+                          key={`sector-perf-${row.sector}`}
+                        >
+                          <div>{row.sector}</div>
+                          <div className="num mono">{row.baseline_value == null ? "—" : formatMoney(row.baseline_value)}</div>
+                          <div className="num mono">
+                            {row.target_weight == null ? "—" : `${Number(row.target_weight).toFixed(2)}%`}
+                          </div>
+                          <div className="centered">
+                            <button
+                              className="tool"
+                              type="button"
+                              onClick={() => {
+                                setSectorPerfSector(row.sector);
+                                setSectorPerfBaseline(row.baseline_value == null ? "" : String(row.baseline_value));
+                                setSectorPerfTargetWeight(row.target_weight == null ? "" : String(row.target_weight));
+                              }}
+                            >
+                              Use
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+
+                  <section className="field admin-card admin-card-wide">
+                    <div className="admin-card-title">NAV History (Paste)</div>
                     <label>Paste NAV History</label>
                     <div className="modal-text muted mono">
                       One line per entry. Formats: YYYY-MM-DD, 123456.78 or MM/DD/YYYY, 123456.78
@@ -3691,8 +3950,10 @@ export default function App() {
                       Import NAV Paste
                     </button>
                     {navPasteError && <div className="error-banner">{navPasteError}</div>}
-                  </div>
-                  <div className="field">
+                  </section>
+
+                  <section className="field admin-card admin-card-wide">
+                    <div className="admin-card-title">Benchmark History (Paste)</div>
                     <label>Paste Benchmark (SPX) History</label>
                     <div className="modal-text muted mono">
                       One line per entry. Formats: YYYY-MM-DD, 1234.56 or MM/DD/YYYY, 1234.56
@@ -3708,13 +3969,7 @@ export default function App() {
                       Import Benchmark Paste
                     </button>
                     {benchPasteError && <div className="error-banner">{benchPasteError}</div>}
-                  </div>
-                  <div className="field">
-                    <label>Schwab Market Data</label>
-                    <button className="btn ghost" type="button" onClick={openAuthModal}>
-                      {schwabConnected ? "Schwab Connected ✓" : "Connect Schwab"}
-                    </button>
-                  </div>
+                  </section>
                 </div>
               </div>
             </div>
@@ -3956,7 +4211,7 @@ export default function App() {
                 <div className="analyze-controls">
                   <select className="input input-mini" value={chartMode} onChange={(e) => setChartMode(e.target.value as "PORTFOLIO" | "SECTOR")}>
                     <option value="PORTFOLIO">Portfolio</option>
-                    <option value="SECTOR">Sector vs Portfolio</option>
+                    <option value="SECTOR">Sector Comparison</option>
                   </select>
                   {chartMode === "PORTFOLIO" && accountId === "ALL" && accountChartOptions.length > 0 && (
                     <>
@@ -4015,15 +4270,27 @@ export default function App() {
                       >
                         Clear
                       </button>
-                      <select
-                        className="input input-mini"
-                        value={sectorSource}
-                        onChange={(e) => setSectorSource(e.target.value as "auto" | "etf" | "sleeve")}
+                      <button
+                        type="button"
+                        className={`btn ghost ${sectorShowSleeve ? "on" : ""}`}
+                        onClick={() => setSectorShowSleeve((prev) => !prev)}
                       >
-                        <option value="auto">Auto</option>
-                        <option value="etf">ETF</option>
-                        <option value="sleeve">Sleeve</option>
-                      </select>
+                        {sectorShowSleeve ? "Sleeve On" : "Sleeve Off"}
+                      </button>
+                      <button
+                        type="button"
+                        className={`btn ghost ${sectorShowEtf ? "on" : ""}`}
+                        onClick={() => setSectorShowEtf((prev) => !prev)}
+                      >
+                        {sectorShowEtf ? "ETF On" : "ETF Off"}
+                      </button>
+                      <button
+                        type="button"
+                        className={`btn ghost ${sectorShowPortfolio ? "on" : ""}`}
+                        onClick={() => setSectorShowPortfolio((prev) => !prev)}
+                      >
+                        {sectorShowPortfolio ? "Portfolio On" : "Portfolio Off"}
+                      </button>
                     </>
                   )}
                   <select className="input input-mini" value={timeframe} onChange={(e) => setTimeframe(e.target.value)}>
@@ -4031,6 +4298,7 @@ export default function App() {
                     <option>5D</option>
                     <option>1M</option>
                     <option>3M</option>
+                    <option>TYD</option>
                     <option>MAX</option>
                   </select>
                   <button
@@ -4072,33 +4340,24 @@ export default function App() {
                   </div>
                 )}
                 {sectorEmpty && chartMode === "SECTOR" && (
-                  <div className="warning-banner">No sector data yet. Add a sector or check that positions are assigned.</div>
+                  <div className="warning-banner">No sector data yet. Add sectors and enable Sleeve and/or ETF.</div>
                 )}
                 <ErrorBoundary fallback={<div className="error-banner">Chart error. Please refresh.</div>}>
                   <PortfolioChart
                     key={`analyze-${chartMode}-${chartShowBench}-${sectorSeriesList.length}`}
                     data={chartData}
+                    showNav={chartShowNav}
                     showSector={chartMode === "SECTOR"}
-                    showBench={chartShowBench}
+                    showBench={chartShowBenchEffective}
                     sectorSeries={sectorSeriesList}
-                    extraSeries={accountId === "ALL" ? accountSeries : []}
+                    extraSeries={chartExtraSeries}
+                    emptyMessage={chartEmptyMessage}
                   />
                 </ErrorBoundary>
               </div>
             </div>
           )}
         </main>
-      </div>
-
-      <div className="statusbar">
-        <div>
-          {toast ||
-            (staticMode
-              ? `Connected · Static Mode · ${snapshot?.stamp.asof ?? "—"}`
-              : `Connected · Market ${marketConnected ? "Live" : "Offline"} · ${snapshot?.stamp.asof ?? "—"}`)}
-        </div>
-        <div>Quick Search: /</div>
-        <div>Account {accountSummary?.name ?? "—"} · BP {accountSummary?.buyingPower ?? "—"} · Day Trades 0</div>
       </div>
 
       {contextMenu && (
@@ -4133,6 +4392,26 @@ export default function App() {
                   const row =
                     positions.find((p) => p.instrument_id === contextMenu.instrumentId) ||
                     positions.find((p) => p.symbol === contextMenu.symbol);
+                  if (!row) {
+                    notify("Position not found.");
+                    setContextMenu(null);
+                    return;
+                  }
+                  const next = window.prompt("Assign label", row.owner ?? "");
+                  if (next != null) {
+                    updatePositionOwner(row, next);
+                  }
+                  setContextMenu(null);
+                }}
+              >
+                Assign Label
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const row =
+                    positions.find((p) => p.instrument_id === contextMenu.instrumentId) ||
+                    positions.find((p) => p.symbol === contextMenu.symbol);
                   openPositionModal(row);
                   setContextMenu(null);
                 }}
@@ -4149,17 +4428,6 @@ export default function App() {
                 Remove Position
               </button>
             </>
-          )}
-          {contextMenu.mode === "watchlist" && (
-            <button
-              type="button"
-              onClick={() => {
-                removeWatchSymbol(contextMenu.symbol);
-                setContextMenu(null);
-              }}
-            >
-              Remove from Watchlist
-            </button>
           )}
           <button
             type="button"

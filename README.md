@@ -23,6 +23,17 @@ docker compose up --build -d
 
 Open: `http://localhost:8080`
 
+## Closed/Realized Sector Categorization
+
+1. Import positions and balance history first (so account + sector context exists).
+2. Import realized gain/loss CSVs in Admin.
+3. In **Admin → Closed / Realized Categorization**:
+   - choose account,
+   - choose sector (and optional symbol),
+   - click **Assign Sector to Realized Trades**.
+4. Use **Auto-Classify from Position Labels** to tag unassigned realized rows from existing position sector mappings.
+5. In **Activity**, keep `Closed` enabled and use each trade row’s **Sector** dropdown for one-off overrides.
+
 ## Key API endpoints
 
 - `GET /api/health`
@@ -50,3 +61,9 @@ After data edits, refresh the page. The backend auto-reloads file contents on fi
 ## Deployment
 
 Current Docker image serves both API and frontend in one service. Deploy this container to Railway/Render and expose container port `8000`.
+
+## Full System Context
+
+For full architecture, return methodology, import workflows, schema details, and operational handoff instructions, see:
+
+`/Users/stevenszeles/Downloads/barker_final/SYSTEM_CONTEXT_GUIDE.md`

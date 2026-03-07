@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { api } from "../services/api";
 
 export type Position = {
+  account?: string | null;
   symbol: string;
   instrument_id?: string | null;
   asset_class?: string | null;
@@ -56,7 +57,20 @@ export type RiskMetric = { metric: string; value: number; limit?: number | null;
 
 export type RiskSummary = { stamp: { asof: string; source: string; method_version: string }; metrics: RiskMetric[] };
 
-export type Trade = { ts: string; trade_date?: string | null; symbol: string; side: string; qty: number; price: number; status: string };
+export type Trade = {
+  trade_id: string;
+  ts: string;
+  trade_date?: string | null;
+  account?: string | null;
+  symbol: string;
+  side: string;
+  qty: number;
+  price: number;
+  status: string;
+  source?: string | null;
+  sector?: string | null;
+  realized_pl?: number | null;
+};
 
 export type TradeBlotter = { stamp: { asof: string; source: string; method_version: string }; trades: Trade[] };
 export type StatusComponent = { component: string; asof: string; source: string; ok: boolean };
@@ -123,6 +137,17 @@ let marketSocket: WebSocket | null = null;
 let marketSymbols: string[] = [];
 let reconnectTimer: number | null = null;
 let reconnectAttempts = 0;
+const ACCOUNT_STORAGE_KEY = "ws_selected_account";
+
+const loadInitialAccount = (): string => {
+  try {
+    const stored = window.localStorage.getItem(ACCOUNT_STORAGE_KEY) || "";
+    const value = stored.trim();
+    return value || "ALL";
+  } catch {
+    return "ALL";
+  }
+};
 
 export const useAppStore = create<StoreState>((set) => ({
   snapshot: null,
@@ -132,8 +157,16 @@ export const useAppStore = create<StoreState>((set) => ({
   status: [],
   accounts: [],
   schwabStatus: null,
-  account: "ALL",
-  setAccount: (account: string) => set({ account }),
+  account: loadInitialAccount(),
+  setAccount: (account: string) => {
+    const normalized = (account || "ALL").trim() || "ALL";
+    try {
+      window.localStorage.setItem(ACCOUNT_STORAGE_KEY, normalized);
+    } catch {
+      // ignore storage errors
+    }
+    set({ account: normalized });
+  },
   fetchAccounts: async () => {
     try {
       const resp = await api.get<{ accounts: AccountInfo[] }>("/admin/accounts");
@@ -272,7 +305,10 @@ export const useAppStore = create<StoreState>((set) => ({
   },
   fetchBlotter: async () => {
     try {
-      const blotterRes = await api.get<TradeBlotter>("/trade/blotter");
+      const account = useAppStore.getState().account;
+      const qs = account && account !== "ALL" ? `?account=${encodeURIComponent(account)}` : "";
+      const join = qs ? "&" : "?";
+      const blotterRes = await api.get<TradeBlotter>(`/trade/blotter${qs}${join}limit=50000`);
       set({ blotter: blotterRes.data, error: "" });
     } catch (err: any) {
       const status = err?.response?.status;

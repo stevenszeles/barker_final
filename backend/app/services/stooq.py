@@ -29,7 +29,7 @@ def _rate_limited() -> bool:
     return time.time() < _RATE_LIMIT_UNTIL
 
 
-def _mark_rate_limited(window_sec: int = 3600) -> None:
+def _mark_rate_limited(window_sec: int = 900) -> None:
     global _RATE_LIMIT_UNTIL
     until = time.time() + float(window_sec)
     if until > _RATE_LIMIT_UNTIL:

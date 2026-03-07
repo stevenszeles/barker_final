@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from ..schemas import RiskSummary
-from ..services.risk import get_risk_summary
+from ..services.risk import get_risk_summary, get_risk_profile
 
 router = APIRouter(prefix="/risk", tags=["risk"])
 
@@ -9,5 +9,13 @@ router = APIRouter(prefix="/risk", tags=["risk"])
 def summary():
     try:
         return get_risk_summary()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.get("/profile")
+def profile():
+    try:
+        return get_risk_profile()
     except Exception as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc

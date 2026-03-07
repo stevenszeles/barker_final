@@ -9,6 +9,7 @@ class DataStamp(BaseModel):
 
 
 class Position(BaseModel):
+    account: Optional[str] = None
     symbol: str
     instrument_id: Optional[str] = None
     asset_class: Optional[str] = None
@@ -71,6 +72,7 @@ class Trade(BaseModel):
     trade_id: str
     ts: str
     trade_date: Optional[str] = None
+    account: Optional[str] = None
     instrument_id: Optional[str] = None
     symbol: str
     side: str
@@ -85,6 +87,8 @@ class Trade(BaseModel):
     strike: Optional[float] = None
     option_type: Optional[str] = None
     multiplier: Optional[float] = None
+    sector: Optional[str] = None
+    realized_pl: Optional[float] = None
 
 
 class TradeBlotter(BaseModel):

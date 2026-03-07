@@ -30,22 +30,51 @@ const percentFormatter = (value: number) => `${value.toFixed(2)}%`;
 
 export default function PortfolioChart({
   data,
+  showNav = true,
   showSector = false,
   showBench = true,
   sectorSeries = [],
   extraSeries = [],
+  emptyMessage,
 }: {
   data: SeriesPoint[];
+  showNav?: boolean;
   showSector?: boolean;
   showBench?: boolean;
   sectorSeries?: SectorSeries[];
   extraSeries?: SectorSeries[];
+  emptyMessage?: string;
 }) {
-  const cleaned = data.filter((point) => Number.isFinite(Number(point.nav)) && Boolean(point.date));
-  const hasData = cleaned.length > 0;
+  const navAccessor = (point: SeriesPoint) => {
+    const twr = Number(point.twr);
+    if (Number.isFinite(twr) && Math.abs(twr) > 1e-12) return twr;
+    return Number(point.nav);
+  };
+  const cleaned = data.filter(
+    (point) =>
+      Boolean(point.date) &&
+      Number.isFinite(navAccessor(point)) &&
+      Math.abs(navAccessor(point)) > 1e-12
+  );
+  const hasBaseData = cleaned.length > 0;
+  const hasInlineSectorData = cleaned.some(
+    (point) => point.sector != null && Number.isFinite(Number(point.sector))
+  );
+  const hasSectorSeriesData = sectorSeries.some((series) =>
+    series.data.some((point) => point.sector != null && Number.isFinite(Number(point.sector)))
+  );
+  const hasExtraSeriesData = extraSeries.some((series) =>
+    series.data.some((point) => Boolean(point.date) && Number.isFinite(navAccessor(point)) && Math.abs(navAccessor(point)) > 1e-12)
+  );
+  const hasRenderableData =
+    (showNav && hasBaseData) ||
+    (showBench && hasBaseData) ||
+    (showSector && (hasInlineSectorData || hasSectorSeriesData)) ||
+    hasExtraSeriesData;
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const navSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
-  const benchSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const spreadCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const navSeriesRef = useRef<ISeriesApi<"Area"> | null>(null);
+  const benchSeriesRef = useRef<ISeriesApi<"Area"> | null>(null);
   const sectorSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const sectorMultiRefs = useRef<ISeriesApi<"Line">[]>([]);
   const extraSeriesRefs = useRef<ISeriesApi<"Line">[]>([]);
@@ -60,14 +89,18 @@ export default function PortfolioChart({
       height: containerRef.current.clientHeight || 220,
     });
     chartRef.current = chart;
-    navSeriesRef.current = chart.addLineSeries({
-      color: "#00C851",
-      lineWidth: 1,
+    navSeriesRef.current = chart.addAreaSeries({
+      lineColor: "#00C851",
+      topColor: "rgba(0, 200, 81, 0.14)",
+      bottomColor: "rgba(0, 200, 81, 0.01)",
+      lineWidth: 2,
       priceFormat: { type: "custom", formatter: percentFormatter },
     });
-    benchSeriesRef.current = chart.addLineSeries({
-      color: "#2196F3",
-      lineWidth: 1,
+    benchSeriesRef.current = chart.addAreaSeries({
+      lineColor: "#F2F2F2",
+      topColor: "rgba(255, 255, 255, 0.12)",
+      bottomColor: "rgba(255, 255, 255, 0.01)",
+      lineWidth: 2,
       priceFormat: { type: "custom", formatter: percentFormatter },
     });
     sectorSeriesRef.current = chart.addLineSeries({
@@ -82,6 +115,14 @@ export default function PortfolioChart({
         width: containerRef.current.clientWidth,
         height: containerRef.current.clientHeight || 220,
       });
+      const canvas = spreadCanvasRef.current;
+      if (canvas && containerRef.current) {
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = Math.max(1, Math.floor(containerRef.current.clientWidth * dpr));
+        canvas.height = Math.max(1, Math.floor((containerRef.current.clientHeight || 220) * dpr));
+        canvas.style.width = `${containerRef.current.clientWidth}px`;
+        canvas.style.height = `${containerRef.current.clientHeight || 220}px`;
+      }
       chart.timeScale().fitContent();
     };
     const resizeObserver = new ResizeObserver(handleResize);
@@ -101,10 +142,7 @@ export default function PortfolioChart({
       const parts = date.split("-").map((v) => Number(v));
       return { year: parts[0], month: parts[1], day: parts[2] };
     };
-    if (!hasData) {
-      navSeriesRef.current.setData([]);
-      benchSeriesRef.current.setData([]);
-      sectorSeriesRef.current.setData([]);
+    const resetDynamicSeries = () => {
       sectorMultiRefs.current.forEach((series) => {
         try {
           chartRef.current?.removeSeries(series);
@@ -113,22 +151,36 @@ export default function PortfolioChart({
         }
       });
       sectorMultiRefs.current = [];
+      extraSeriesRefs.current.forEach((series) => {
+        try {
+          chartRef.current?.removeSeries(series);
+        } catch {
+          // ignore
+        }
+      });
+      extraSeriesRefs.current = [];
+    };
+    if (!hasRenderableData) {
+      navSeriesRef.current.setData([]);
+      benchSeriesRef.current.setData([]);
+      sectorSeriesRef.current.setData([]);
+      resetDynamicSeries();
       chartRef.current.timeScale().fitContent();
       return;
     }
-    const navAccessor = (point: SeriesPoint) => Number(point.twr ?? point.nav);
-    const firstNav = cleaned.find((p) => navAccessor(p) > 0);
-    let baseNav = navAccessor(firstNav ?? cleaned[0]);
-    if (!Number.isFinite(baseNav) || baseNav <= 0) baseNav = 1;
+    const firstNav = cleaned[0];
+    let baseNav = firstNav ? navAccessor(firstNav) : 1;
+    if (!Number.isFinite(baseNav) || Math.abs(baseNav) <= 1e-12) baseNav = 1;
+    const basePoint = cleaned[0];
     const firstBench = cleaned.find((p) => Number(p.bench) > 0)?.bench;
-    let baseBench = Number(firstBench ?? cleaned[0].bench ?? cleaned[0].nav);
+    let baseBench = Number(firstBench ?? basePoint?.bench ?? basePoint?.nav ?? baseNav);
     if (!Number.isFinite(baseBench) || baseBench <= 0) baseBench = baseNav;
-    const navData = hasData
+    const navData = hasBaseData
       ? cleaned
           .map((p) => ({ time: toBusinessDay(p.date), value: ((navAccessor(p) / baseNav) - 1) * 100 }))
           .filter((p) => Number.isFinite(p.value))
       : [];
-    const benchData = hasData
+    const benchData = hasBaseData
       ? cleaned
           .map((p) => ({
             time: toBusinessDay(p.date),
@@ -136,6 +188,16 @@ export default function PortfolioChart({
           }))
           .filter((p) => Number.isFinite(p.value))
       : [];
+    const spreadData =
+      hasBaseData
+        ? cleaned
+            .map((p) => ({
+              time: toBusinessDay(p.date),
+              nav: ((navAccessor(p) / baseNav) - 1) * 100,
+              bench: ((Number(p.bench ?? p.nav) / (baseBench || baseNav)) - 1) * 100,
+            }))
+            .filter((p) => Number.isFinite(p.nav) && Number.isFinite(p.bench))
+        : [];
     const buildSectorPoints = (points: SeriesPoint[]) =>
       points
         .filter((p) => p.sector != null && Number.isFinite(Number(p.sector)))
@@ -144,15 +206,23 @@ export default function PortfolioChart({
     const buildReturnPoints = (points: SeriesPoint[]) => {
       const cleanedPoints = points.filter((p) => Number.isFinite(Number(navAccessor(p))) && Boolean(p.date));
       if (!cleanedPoints.length) return [];
-      const first = cleanedPoints.find((p) => navAccessor(p) > 0) ?? cleanedPoints[0];
+      const first =
+        cleanedPoints.find((p) => {
+          const v = navAccessor(p);
+          return Number.isFinite(v) && Math.abs(v) > 1e-12;
+        }) ?? cleanedPoints[0];
       let base = navAccessor(first);
-      if (!Number.isFinite(base) || base <= 0) base = 1;
+      if (!Number.isFinite(base) || Math.abs(base) <= 1e-12) base = 1;
       return cleanedPoints
         .map((p) => ({ time: toBusinessDay(p.date), value: ((navAccessor(p) / base) - 1) * 100 }))
         .filter((p) => Number.isFinite(p.value));
     };
-    const sectorData = hasData ? buildSectorPoints(cleaned) : [];
-    navSeriesRef.current.setData(navData);
+    const sectorData = hasBaseData ? buildSectorPoints(cleaned) : [];
+    if (showNav) {
+      navSeriesRef.current.setData(navData);
+    } else {
+      navSeriesRef.current.setData([]);
+    }
     if (showBench) {
       benchSeriesRef.current.setData(benchData);
     } else {
@@ -172,7 +242,7 @@ export default function PortfolioChart({
       }
     });
     sectorMultiRefs.current = [];
-    if (showSector && sectorSeries.length && hasData) {
+    if (showSector && sectorSeries.length) {
       sectorSeries.forEach((series, idx) => {
         const line = chartRef.current?.addLineSeries({
           color: palette[idx % palette.length],
@@ -196,7 +266,7 @@ export default function PortfolioChart({
       }
     });
     extraSeriesRefs.current = [];
-    if (extraSeries.length && hasData) {
+    if (extraSeries.length) {
       extraSeries.forEach((series, idx) => {
         const line = chartRef.current?.addLineSeries({
           color: palette[(idx + sectorSeries.length) % palette.length],
@@ -211,15 +281,68 @@ export default function PortfolioChart({
       });
     }
     chartRef.current.timeScale().fitContent();
-  }, [data, showSector, showBench, sectorSeries, extraSeries]);
+
+    const drawSpread = () => {
+      const canvas = spreadCanvasRef.current;
+      const container = containerRef.current;
+      if (!canvas || !container || !chartRef.current || !navSeriesRef.current || !benchSeriesRef.current) return;
+      const dpr = window.devicePixelRatio || 1;
+      const width = container.clientWidth;
+      const height = container.clientHeight || 220;
+      if (width <= 0 || height <= 0) return;
+      canvas.width = Math.max(1, Math.floor(width * dpr));
+      canvas.height = Math.max(1, Math.floor(height * dpr));
+      canvas.style.width = `${width}px`;
+      canvas.style.height = `${height}px`;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, width, height);
+      if (!showNav || !showBench || spreadData.length < 2) return;
+
+      type Pt = { x: number; yNav: number; yBench: number; diff: number };
+      const pts: Pt[] = [];
+      for (const point of spreadData) {
+        const x = chartRef.current.timeScale().timeToCoordinate(point.time);
+        const yNav = navSeriesRef.current.priceToCoordinate(point.nav);
+        const yBench = benchSeriesRef.current.priceToCoordinate(point.bench);
+        if (x == null || yNav == null || yBench == null) continue;
+        pts.push({ x, yNav, yBench, diff: point.nav - point.bench });
+      }
+      if (pts.length < 2) return;
+
+      for (let i = 1; i < pts.length; i += 1) {
+        const a = pts[i - 1];
+        const b = pts[i];
+        const avgDiff = (a.diff + b.diff) / 2;
+        ctx.fillStyle = avgDiff >= 0 ? "rgba(35, 193, 107, 0.22)" : "rgba(242, 95, 92, 0.22)";
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.yNav);
+        ctx.lineTo(b.x, b.yNav);
+        ctx.lineTo(b.x, b.yBench);
+        ctx.lineTo(a.x, a.yBench);
+        ctx.closePath();
+        ctx.fill();
+      }
+    };
+
+    requestAnimationFrame(drawSpread);
+  }, [data, showNav, showSector, showBench, sectorSeries, extraSeries, hasRenderableData, hasBaseData]);
 
   return (
     <div className="chart-box chart-wrap" ref={containerRef}>
-      {!hasData && <div className="chart-empty">No NAV data</div>}
+      <canvas ref={spreadCanvasRef} className="chart-spread-overlay" />
+      {!hasRenderableData && (
+        <div className="chart-empty">
+          {emptyMessage || "No NAV data - ensure price history is available and benchmark start is configured"}
+        </div>
+      )}
       <div className="chart-legend">
-        <span className="legend-item">
-          <span className="swatch nav" /> Portfolio
-        </span>
+        {showNav && (
+          <span className="legend-item">
+            <span className="swatch nav" /> Portfolio
+          </span>
+        )}
         {showBench && (
           <span className="legend-item">
             <span className="swatch bench" /> SPX

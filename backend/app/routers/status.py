@@ -89,6 +89,17 @@ def schwab_status():
 @router.get("/market-data")
 def market_data_status():
     sources = []
+    if settings.openfigi.api_key:
+        sources.append(
+            {
+                "name": "OpenFIGI",
+                "type": "resolver",
+                "status": "configured",
+                "realtime": False,
+                "priority": 0,
+                "note": "Identifier mapping only (no direct price feed)",
+            }
+        )
     if settings.polygon.api_key:
         sources.append(
             {
@@ -126,5 +137,8 @@ def market_data_status():
     return {
         "sources": sources,
         "has_realtime": any(source.get("realtime") for source in sources),
-        "primary_source": sources[0]["name"] if sources else None,
+        "primary_source": (
+            next((source.get("name") for source in sources if source.get("type") == "primary"), None)
+            or (sources[0]["name"] if sources else None)
+        ),
     }

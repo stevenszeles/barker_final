@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
+from typing import Optional
 
 # Load .env from repo root for local/dev runs (no-op if missing)
 # Avoid loading .env in production so platform env vars (Render/Railway) are authoritative.
@@ -31,6 +32,13 @@ class PolygonConfig:
 
 
 @dataclass
+class OpenFigiConfig:
+    api_key: str
+    base_url: str
+    timeout: float
+
+
+@dataclass
 class CacheConfig:
     redis_url: str
     default_ttl: int
@@ -38,7 +46,7 @@ class CacheConfig:
 
 class Settings:
     def __init__(self) -> None:
-        def _clean_optional(value: str | None) -> str:
+        def _clean_optional(value: Optional[str]) -> str:
             raw = (value or "").strip()
             if not raw:
                 return ""
@@ -50,6 +58,7 @@ class Settings:
                 "your_client_id",
                 "your_client_secret",
                 "your_polygon_api_key",
+                "your_openfigi_api_key",
             )
             if any(token in lowered for token in placeholder_tokens):
                 return ""
@@ -113,6 +122,17 @@ class Settings:
             api_key=_clean_optional(os.environ.get("POLYGON_API_KEY", "")),
             rest_base=os.environ.get("POLYGON_REST_BASE", "https://api.polygon.io"),
             ws_base=os.environ.get("POLYGON_WS_BASE", "wss://socket.polygon.io"),
+        )
+
+        # OpenFIGI configuration (identifier mapping, not price feed)
+        try:
+            openfigi_timeout = float(os.environ.get("OPENFIGI_TIMEOUT", "6"))
+        except Exception:
+            openfigi_timeout = 6.0
+        self.openfigi = OpenFigiConfig(
+            api_key=_clean_optional(os.environ.get("OPENFIGI_API_KEY", "")),
+            base_url=os.environ.get("OPENFIGI_BASE_URL", "https://api.openfigi.com"),
+            timeout=openfigi_timeout,
         )
 
         # Cache configuration

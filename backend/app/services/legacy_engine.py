@@ -1,4 +1,5 @@
 import math
+import re
 import threading
 import time
 from datetime import datetime, date, timedelta
@@ -9,8 +10,14 @@ import pandas as pd
 
 from ..db import with_conn
 from ..config import settings
-from . import schwab, stooq, options as options_service, futures as futures_service
+from . import schwab, stooq, openfigi, options as options_service, futures as futures_service
 from .cache import cache
+
+try:
+    import yfinance as _yf
+    _YFINANCE_AVAILABLE = True
+except Exception:  # pragma: no cover - optional dependency
+    _YFINANCE_AVAILABLE = False
 
 DEFAULT_SECTORS = [
     "Information Technology",
@@ -43,7 +50,7 @@ SECTOR_ETF = {
 }
 
 DEFAULT_BENCH = "^GSPC"
-START_CASH_DEFAULT = 5_000_000.0
+START_CASH_DEFAULT = 0.0
 
 SHORT_EXTRA_MARGIN_PCT = 0.50
 SHORT_PROCEEDS_LOCK_PCT = 1.00
@@ -208,14 +215,41 @@ def _earliest_portfolio_date(account: Optional[str]) -> Optional[str]:
     return with_conn(_run)
 
 
+def _earliest_balance_history_date(account: Optional[str]) -> Optional[str]:
+    def _run(conn):
+        where, params = _account_where(conn, account)
+        cur = conn.cursor()
+        cur.execute(
+            f"""
+            SELECT MIN(date) AS d
+            FROM cash_flows
+            WHERE {where}
+              AND note = 'BALANCE_ADJ_HISTORY'
+              AND date IS NOT NULL
+              AND TRIM(date) != ''
+            """,
+            params,
+        )
+        row = cur.fetchone()
+        raw = row.get("d") if isinstance(row, dict) else (row[0] if row else None)
+        return parse_iso_date(raw)
+
+    return with_conn(_run)
+
+
 def _effective_nav_start(account: Optional[str]) -> str:
     bench_start = _get_bench_start()
-    earliest = _earliest_portfolio_date(account)
+    dates = [bench_start]
+    earliest_portfolio = _earliest_portfolio_date(account)
+    earliest_history = _earliest_balance_history_date(account)
+    if earliest_portfolio:
+        dates.append(earliest_portfolio)
+    if earliest_history:
+        dates.append(earliest_history)
     # If we have explicit portfolio dating (entry dates / trades),
-    # anchor NAV + benchmark at that date so relative returns align.
-    if earliest:
-        return earliest
-    return bench_start
+    # or imported balance-history calibration points, anchor NAV + benchmark
+    # at the earliest known date so charts include full historical series.
+    return min(dates)
 
 
 def _has_trade_or_entry_data(account: Optional[str]) -> bool:
@@ -238,6 +272,26 @@ def _has_trade_or_entry_data(account: Optional[str]) -> bool:
         row = cur.fetchone()
         entry_cnt = int((row.get("cnt") if isinstance(row, dict) else row[0]) or 0) if row else 0
         return trade_cnt > 0 or entry_cnt > 0
+
+    return bool(with_conn(_run))
+
+
+def _has_non_import_trades(account: Optional[str]) -> bool:
+    def _run(conn):
+        where, params = _account_where(conn, account)
+        cur = conn.cursor()
+        cur.execute(
+            f"""
+            SELECT 1
+            FROM trades
+            WHERE {where}
+              AND (trade_type IS NULL OR UPPER(trade_type) != 'IMPORT')
+              AND (source IS NULL OR UPPER(source) != 'CSV_IMPORT')
+            LIMIT 1
+            """,
+            params,
+        )
+        return cur.fetchone() is not None
 
     return bool(with_conn(_run))
 
@@ -287,6 +341,30 @@ def _normalize_asof(value: Optional[str]) -> Optional[str]:
     if len(text) >= 10:
         text = text[:10]
     return parse_iso_date(text)
+
+
+def _normalize_anchor_mode(value: Optional[str]) -> str:
+    text = str(value or "").strip().upper()
+    if text == "EOD":
+        return "EOD"
+    return "BOD"
+
+
+def _get_anchor_mode(account: Optional[str]) -> str:
+    label = _account_label(account)
+    if label == "ALL":
+        return "BOD"
+
+    def _run(conn):
+        cur = conn.cursor()
+        cur.execute("SELECT anchor_mode FROM accounts WHERE account=?", (label,))
+        row = cur.fetchone()
+        if not row:
+            return "BOD"
+        mode = row.get("anchor_mode") if isinstance(row, dict) else row[0]
+        return _normalize_anchor_mode(mode)
+
+    return str(with_conn(_run) or "BOD")
 
 
 def _get_cash_anchor_info(account: Optional[str]) -> Tuple[Optional[float], Optional[str]]:
@@ -475,7 +553,8 @@ def _ensure_account(conn, account: str) -> None:
     cur = conn.cursor()
     cur.execute(
         "INSERT OR IGNORE INTO accounts(account, cash, asof) VALUES(?,?,?)",
-        (account, 0.0, now_ts_str()),
+        # Keep asof empty for auto-created accounts so historical flows are not filtered out.
+        (account, 0.0, None),
     )
     conn.commit()
 
@@ -627,6 +706,47 @@ def _fetch_history_schwab(symbol: str, start_date: str) -> List[Dict[str, Any]]:
     return out
 
 
+def _fetch_history_yfinance(symbol: str, start_date: str) -> List[Dict[str, Any]]:
+    """Fetch daily close history via yfinance as a final fallback provider."""
+    if not _YFINANCE_AVAILABLE:
+        return []
+
+    raw = (symbol or "").strip().upper()
+    if not raw:
+        return []
+    yf_symbol = normalize_benchmark_symbol(raw) if raw in {"^GSPC", "^SPX", "SPX", "$SPX"} else raw
+
+    try:
+        ticker = _yf.Ticker(yf_symbol)
+        df = ticker.history(start=start_date, auto_adjust=True, actions=False)
+    except Exception:
+        return []
+    if df is None or df.empty or "Close" not in df.columns:
+        return []
+
+    try:
+        idx = pd.to_datetime(df.index, errors="coerce")
+        if getattr(idx, "tz", None) is not None:
+            idx = idx.tz_convert(None)
+        df = df.copy()
+        df.index = idx
+    except Exception:
+        return []
+
+    out: List[Dict[str, Any]] = []
+    for ts, row in df.iterrows():
+        if pd.isna(ts):
+            continue
+        try:
+            close = float(row.get("Close"))
+        except Exception:
+            continue
+        if not np.isfinite(close) or close <= 0:
+            continue
+        out.append({"date": ts.date().isoformat(), "close": close})
+    return out
+
+
 def _fetch_history_stooq(symbol: str, start_date: str) -> List[Dict[str, Any]]:
     history = stooq.get_history(symbol, start_date)
     out = []
@@ -648,6 +768,10 @@ def _fetch_history_primary(symbol: str, start_date: str, is_bench: bool) -> List
         df = _sanitize_price_df(pd.DataFrame(history), is_bench)
         return [{"date": row["date"], "close": row["close"]} for _, row in df.iterrows()]
     history = _fetch_history_stooq(symbol, start_date)
+    if history:
+        df = _sanitize_price_df(pd.DataFrame(history), is_bench)
+        return [{"date": row["date"], "close": row["close"]} for _, row in df.iterrows()]
+    history = _fetch_history_yfinance(symbol, start_date)
     if history:
         df = _sanitize_price_df(pd.DataFrame(history), is_bench)
         return [{"date": row["date"], "close": row["close"]} for _, row in df.iterrows()]
@@ -681,7 +805,8 @@ def ensure_symbol_history(symbol: str, start_date: str, is_bench: bool = False) 
 
     if need_refetch:
         try:
-            history = _fetch_history_primary(symbol, start_iso, is_bench)
+            fetch_symbol = openfigi.resolve_symbol(symbol)
+            history = _fetch_history_primary(fetch_symbol, start_iso, is_bench)
         except Exception:
             history = []
         if history:
@@ -691,6 +816,11 @@ def ensure_symbol_history(symbol: str, start_date: str, is_bench: bool = False) 
 
 
 def fetch_prices_incremental(symbol: str, lookback_iso: str, is_bench: bool = False) -> bool:
+    symbol = (symbol or "").strip().upper()
+    if is_bench:
+        symbol = normalize_benchmark_symbol(symbol)
+    if not symbol:
+        return False
     if settings.static_mode:
         return last_cached_close(symbol) is not None
     try:
@@ -703,7 +833,8 @@ def fetch_prices_incremental(symbol: str, lookback_iso: str, is_bench: bool = Fa
             except Exception:
                 pass
         fetch_from = last_date or lookback_iso
-        history = _fetch_history_primary(symbol, fetch_from, is_bench)
+        fetch_symbol = openfigi.resolve_symbol(symbol)
+        history = _fetch_history_primary(fetch_symbol, fetch_from, is_bench)
         if history:
             _overwrite_price_cache(symbol, fetch_from, history)
         return True
@@ -807,18 +938,38 @@ def snapshot_quotes_into_cache(symbols: List[str], date_iso: str) -> None:
     op_syms = [s for s in missing if is_option_symbol(s)]
 
     quotes: Dict[str, float] = {}
-    if eq_syms and schwab.can_use_marketdata():
+    resolved_eq, eq_map = openfigi.resolve_symbols(eq_syms)
+    eq_query = sorted(set([s for s in resolved_eq if s]))
+    resolved_to_original: Dict[str, List[str]] = {}
+    for original, resolved in eq_map.items():
+        o = (original or "").strip().upper()
+        r = (resolved or "").strip().upper()
+        if not o or not r:
+            continue
+        resolved_to_original.setdefault(r, [])
+        if o not in resolved_to_original[r]:
+            resolved_to_original[r].append(o)
+
+    def _record_equity_price(resolved_symbol: str, price: float) -> None:
+        key = (resolved_symbol or "").strip().upper()
+        if not key:
+            return
+        targets = resolved_to_original.get(key) or [key]
+        for target in targets:
+            quotes[target] = float(price)
+
+    if eq_query and schwab.can_use_marketdata():
         try:
-            qmap = schwab.get_quotes(eq_syms, as_map=True)
+            qmap = schwab.get_quotes(eq_query, as_map=True)
             for sym, q in qmap.items():
                 price = q.get("price") if isinstance(q, dict) else None
                 if price:
-                    quotes[sym.upper()] = float(price)
+                    _record_equity_price(sym, float(price))
         except Exception:
             quotes = {}
-    if eq_syms and not quotes:
+    if eq_query and not quotes:
         try:
-            tickers = stooq.get_quotes(eq_syms)
+            tickers = stooq.get_quotes(eq_query)
             for row in tickers or []:
                 symbol = (row.get("ticker") or row.get("sym") or row.get("symbol") or "").upper()
                 if not symbol:
@@ -830,7 +981,7 @@ def snapshot_quotes_into_cache(symbols: List[str], date_iso: str) -> None:
                 ask = float(quote.get("ask") or quote.get("ap") or 0)
                 price = last or ((bid + ask) / 2.0 if bid and ask else bid or ask)
                 if price:
-                    quotes[symbol] = float(price)
+                    _record_equity_price(symbol, float(price))
         except Exception:
             pass
 
@@ -898,6 +1049,7 @@ def compute_cash_balance_total(account: Optional[str] = None) -> float:
             return float(total)
 
     start_cash, anchor_asof = _get_cash_anchor_info(label)
+    anchor_mode = _get_anchor_mode(label)
     if start_cash is None:
         start_cash = _get_start_cash(label)
 
@@ -909,8 +1061,9 @@ def compute_cash_balance_total(account: Optional[str] = None) -> float:
         cash_filter = ""
         trade_filter = ""
         if anchor_asof:
-            cash_filter = " AND date > ?"
-            trade_filter = " AND trade_date > ?"
+            op = ">=" if anchor_mode == "BOD" else ">"
+            cash_filter = f" AND date {op} ?"
+            trade_filter = f" AND trade_date {op} ?"
             cash_params.append(anchor_asof)
             trade_params.append(anchor_asof)
         cur.execute(f"SELECT COALESCE(SUM(amount),0) as total FROM cash_flows WHERE {where}{cash_filter}", cash_params)
@@ -947,6 +1100,43 @@ def compute_cash_available(cash_total: float, positions: pd.DataFrame) -> float:
     short_mv = _compute_short_market_value(positions)
     locked = (SHORT_PROCEEDS_LOCK_PCT + SHORT_EXTRA_MARGIN_PCT) * short_mv
     return float(cash_total - locked)
+
+
+def _cash_flow_is_external(note: Optional[str]) -> bool:
+    text = str(note or "").strip().upper()
+    if not text:
+        return True
+    if text.startswith("BALANCE_ADJ_HISTORY_EXTERNAL"):
+        # Balance reconciliation residuals for accounts with real transaction history
+        # are modeled as external cash adjustments for Schwab-style TWR.
+        return True
+    if text.startswith("BALANCE_ADJ_HISTORY"):
+        # Daily NAV calibration residuals are performance reconciliation,
+        # not external contributions/withdrawals.
+        return False
+    if text.startswith("BALANCE_ADJ"):
+        return True
+    if text.startswith("FEE_ADJ"):
+        return False
+    if text.startswith("CASH_FLOW|"):
+        parts = text.split("|")
+        action = parts[1] if len(parts) > 1 else ""
+        if any(k in action for k in ("DIVIDEND", "INTEREST", "WITHHOLD", "FEE", "TAX", "REINVEST")):
+            return False
+        if any(k in action for k in ("TRANSFER", "JOURNAL", "WITHDRAW", "DEPOSIT", "CONTRIB", "WIRE", "ACH", "CASH")):
+            return True
+        return True
+    if text.startswith("CASH_FLOW "):
+        # Legacy format (no explicit action): symbol-tagged entries are usually income/fees.
+        token = text.split(" ", 1)[1].strip() if " " in text else ""
+        if token and re.fullmatch(r"[A-Z0-9./_\-]{1,15}", token):
+            return False
+        return True
+    if any(k in text for k in ("DIVIDEND", "INTEREST", "WITHHOLD", "FEE", "TAX", "REINVEST")):
+        return False
+    if any(k in text for k in ("TRANSFER", "JOURNAL", "WITHDRAW", "DEPOSIT", "CONTRIB", "WIRE", "ACH")):
+        return True
+    return True
 
 
 def _load_positions_df(account: Optional[str]) -> pd.DataFrame:
@@ -998,42 +1188,8 @@ def _load_positions_df(account: Optional[str]) -> pd.DataFrame:
     if missing_under.any():
         df.loc[missing_under, "underlying"] = df.loc[missing_under, "symbol"].map(infer_underlying_from_symbol)
 
-    label = _account_label(account)
-    if label == "ALL":
-        group_cols = [
-            "instrument_id",
-            "symbol",
-            "asset_class",
-            "underlying",
-            "expiry",
-            "strike",
-            "option_type",
-            "multiplier",
-            "sector",
-            "owner",
-            "strategy",
-            "strategy_id",
-            "strategy_name",
-        ]
-        def _weighted_avg(values: pd.Series) -> float:
-            if values.empty:
-                return 0.0
-            weights = np.abs(df.loc[values.index, "qty"].to_numpy(dtype=float))
-            total = float(np.sum(weights))
-            if total <= 0:
-                return float(np.mean(values))
-            return float(np.sum(values.to_numpy(dtype=float) * weights) / total)
-
-        agg = df.groupby(group_cols, as_index=False, dropna=False).agg(
-            {
-                "qty": "sum",
-                "market_value": "sum",
-                "price": "mean",
-                "avg_cost": _weighted_avg,
-                "entry_date": "min",
-            }
-        )
-        df = agg
+    # Keep per-account rows in ALL view so admin edits (sector/label/entry date)
+    # can be written back to the correct account reliably.
     return df
 
 
@@ -1042,6 +1198,7 @@ def build_positions_live(pricing_date_iso: str, start_date_iso: str, account: Op
     pos = _load_positions_df(account)
     if pos is None or pos.empty:
         return pd.DataFrame(columns=[
+            "account",
             "symbol",
             "instrument_id",
             "asset_class",
@@ -1193,6 +1350,7 @@ def build_daily_nav_series(start_iso: str, bench_series: pd.DataFrame, account: 
     close_expired_options(account=account)
     anchor_cash, anchor_asof = _get_cash_anchor_info(account)
     start_cash = anchor_cash if anchor_cash is not None else _get_start_cash(account)
+    anchor_mode = _get_anchor_mode(account)
     start_iso = parse_iso_date(start_iso) or year_start_date()
     account_value = _get_account_value(account)
 
@@ -1200,6 +1358,15 @@ def build_daily_nav_series(start_iso: str, bench_series: pd.DataFrame, account: 
         dates = bench_series["d"].astype(str).tolist()
     else:
         dates = _fallback_business_dates(start_iso, today_str())
+    # Keep NAV timeline current even when benchmark history lags.
+    if dates:
+        last_date = str(dates[-1])
+        today_iso = today_str()
+        if today_iso > last_date:
+            tail = _fallback_business_dates(last_date, today_iso)
+            for d in tail:
+                if d > last_date and d not in dates:
+                    dates.append(d)
     if not dates:
         return pd.DataFrame(columns=["d", "nav", "ret", "day_pl"])
 
@@ -1222,7 +1389,7 @@ def build_daily_nav_series(start_iso: str, bench_series: pd.DataFrame, account: 
         cur = conn.cursor()
         cur.execute(
             f"""
-            SELECT date, amount
+            SELECT date, amount, note
             FROM cash_flows
             WHERE date>=? AND {where}
             ORDER BY date ASC, id ASC
@@ -1243,8 +1410,6 @@ def build_daily_nav_series(start_iso: str, bench_series: pd.DataFrame, account: 
         return pd.DataFrame({"d": dates, "nav": nav, "day_pl": day_pl, "ret": ret, "twr": twr})
 
     cash_rows_for_cash = cash_rows
-    if anchor_asof:
-        cash_rows_for_cash = [row for row in cash_rows if str(row.get("date") or "") > anchor_asof]
 
     first_trade_date = None
     if trades:
@@ -1252,11 +1417,59 @@ def build_daily_nav_series(start_iso: str, bench_series: pd.DataFrame, account: 
             first_trade_date = min(str(r.get("trade_date")) for r in trades if r.get("trade_date"))
         except Exception:
             first_trade_date = None
-    nav_anchor = None
-    if anchor_asof and first_trade_date:
-        nav_anchor = min(anchor_asof, first_trade_date)
-    else:
-        nav_anchor = anchor_asof or first_trade_date
+    first_date = str(dates[0])
+    trade_cash_rows: List[Dict[str, Any]] = []
+    for row in trades:
+        tdate = str(row.get("trade_date") or "")
+        if not tdate:
+            continue
+        ttype = str(row.get("trade_type") or "").upper()
+        src = str(row.get("source") or "").upper()
+        if ttype == "IMPORT" or src == "CSV_IMPORT":
+            continue
+        try:
+            cflow = float(row.get("cash_flow") or 0.0)
+        except Exception:
+            cflow = 0.0
+        if abs(cflow) <= 1e-12:
+            continue
+        trade_cash_rows.append({"date": tdate, "amount": cflow})
+
+    # Align cash baseline to the requested series start date.
+    # account.cash is anchored at account.asof; move that anchor to the first chart date.
+    start_cash_effective = float(start_cash)
+    if anchor_asof:
+        include_anchor_day = anchor_mode == "BOD"
+        if anchor_asof < first_date:
+            cash_shift = 0.0
+            for row in cash_rows_for_cash:
+                d = str(row.get("date") or "")
+                if ((d >= anchor_asof) if include_anchor_day else (d > anchor_asof)) and d < first_date:
+                    try:
+                        cash_shift += float(row.get("amount") or 0.0)
+                    except Exception:
+                        continue
+            for row in trade_cash_rows:
+                d = str(row.get("date") or "")
+                if ((d >= anchor_asof) if include_anchor_day else (d > anchor_asof)) and d < first_date:
+                    cash_shift += float(row.get("amount") or 0.0)
+            start_cash_effective += cash_shift
+        elif anchor_asof >= first_date:
+            cash_shift = 0.0
+            for row in cash_rows_for_cash:
+                d = str(row.get("date") or "")
+                upper_ok = d < anchor_asof if include_anchor_day else d <= anchor_asof
+                if first_date <= d and upper_ok:
+                    try:
+                        cash_shift += float(row.get("amount") or 0.0)
+                    except Exception:
+                        continue
+            for row in trade_cash_rows:
+                d = str(row.get("date") or "")
+                upper_ok = d < anchor_asof if include_anchor_day else d <= anchor_asof
+                if first_date <= d and upper_ok:
+                    cash_shift += float(row.get("amount") or 0.0)
+            start_cash_effective -= cash_shift
 
     pos_now = _load_positions_df(account)
     syms = set()
@@ -1275,19 +1488,41 @@ def build_daily_nav_series(start_iso: str, bench_series: pd.DataFrame, account: 
         if not prev or trade_date < prev:
             symbol_start_map[sym] = trade_date
 
+    # Align latest NAV point with live-marked snapshot values on today's date.
+    if syms and dates and dates[-1] == today_str() and not settings.static_mode and settings.live_quotes:
+        try:
+            snapshot_quotes_into_cache(syms, dates[-1])
+        except Exception:
+            pass
+
     if not syms:
         cash_adj = pd.Series(dtype=float)
+        ext_adj = pd.Series(dtype=float)
         cash_series = pd.Series(index=pd.to_datetime(dates), dtype=float).fillna(0.0)
         ext_flow = pd.Series(0.0, index=cash_series.index)
         if cash_rows_for_cash:
             cash_df = pd.DataFrame(cash_rows_for_cash)
             cash_df["date"] = cash_df["date"].astype(str)
             cash_df["amount"] = pd.to_numeric(cash_df["amount"], errors="coerce").fillna(0.0)
+            cash_df["note"] = cash_df.get("note", "").astype(str)
             cash_adj = cash_df.groupby("date")["amount"].sum()
-            ext_flow += cash_adj.reindex(ext_flow.index.strftime("%Y-%m-%d")).fillna(0.0).to_numpy(dtype=float)
+            ext_df = cash_df[cash_df["note"].apply(_cash_flow_is_external)].copy()
+            if not ext_df.empty:
+                ext_adj = ext_df.groupby("date")["amount"].sum()
+                ext_flow += ext_adj.reindex(ext_flow.index.strftime("%Y-%m-%d")).fillna(0.0).to_numpy(dtype=float)
         if len(cash_adj):
             cash_series = cash_series.add(cash_adj.reindex(cash_series.index.strftime("%Y-%m-%d")).values, fill_value=0.0)
-        cash_cum = cash_series.cumsum() + start_cash
+        tr_flow_day = pd.Series(dtype=float)
+        if trade_cash_rows:
+            tr_df = pd.DataFrame(trade_cash_rows)
+            tr_df["date"] = tr_df["date"].astype(str)
+            tr_df["amount"] = pd.to_numeric(tr_df["amount"], errors="coerce").fillna(0.0)
+            tr_flow_day = tr_df.groupby("date")["amount"].sum()
+            cash_series = cash_series.add(
+                tr_flow_day.reindex(cash_series.index.strftime("%Y-%m-%d")).fillna(0.0).values,
+                fill_value=0.0,
+            )
+        cash_cum = cash_series.cumsum() + start_cash_effective
         nav = cash_cum.values
         nav_begin = nav[0] if abs(nav[0]) > 1e-12 else 1.0
         day_pl = np.concatenate([[0.0], np.diff(nav)])
@@ -1330,9 +1565,42 @@ def build_daily_nav_series(start_iso: str, bench_series: pd.DataFrame, account: 
     if len(px):
         px_piv = px.pivot_table(index="date", columns="symbol", values="close", aggfunc="last")
         px_piv.index = pd.to_datetime(px_piv.index)
-        px_piv = px_piv.reindex(date_index).sort_index().ffill().bfill().fillna(0.0)
+        px_piv = px_piv.reindex(date_index).sort_index().ffill().fillna(0.0)
     else:
         px_piv = pd.DataFrame(index=date_index, columns=syms).fillna(0.0)
+
+    # Fallback to current position prices when a symbol has no usable history.
+    fallback_px: Dict[str, float] = {}
+    if pos_now is not None and not pos_now.empty:
+        try:
+            px_src = pos_now.copy()
+            px_src["symbol"] = px_src["symbol"].astype(str).str.upper()
+            px_src["price"] = pd.to_numeric(px_src["price"], errors="coerce").fillna(0.0)
+            px_src["qty"] = pd.to_numeric(px_src["qty"], errors="coerce").fillna(0.0)
+            px_src = px_src[px_src["price"] > 0].copy()
+            if not px_src.empty:
+                for sym, grp in px_src.groupby("symbol"):
+                    weights = np.abs(grp["qty"].to_numpy(dtype=float))
+                    prices = grp["price"].to_numpy(dtype=float)
+                    total_w = float(np.sum(weights))
+                    if total_w > 0:
+                        fallback_px[str(sym)] = float(np.sum(prices * weights) / total_w)
+                    else:
+                        fallback_px[str(sym)] = float(np.mean(prices))
+        except Exception:
+            fallback_px = {}
+    for sym in syms:
+        fb = float(fallback_px.get(sym) or 0.0)
+        if fb <= 0:
+            continue
+        if sym not in px_piv.columns:
+            px_piv[sym] = fb
+            continue
+        col = pd.to_numeric(px_piv[sym], errors="coerce").fillna(0.0).astype(float)
+        if bool((col <= 0).all()):
+            px_piv[sym] = fb
+        else:
+            px_piv[sym] = col.where(col > 0, fb)
 
     mult_map = {}
     if syms:
@@ -1377,15 +1645,6 @@ def build_daily_nav_series(start_iso: str, bench_series: pd.DataFrame, account: 
     else:
         tr_effective = pd.DataFrame()
 
-    pre_anchor_syms: set[str] = set()
-    if anchor_asof and not tr_effective.empty:
-        try:
-            pre_anchor_syms = set(
-                tr_effective.loc[tr_effective["trade_date"] < anchor_asof, "symbol"].tolist()
-            )
-        except Exception:
-            pre_anchor_syms = set()
-
     if tr_effective.empty:
         qty_piv = pd.DataFrame(index=date_index, columns=syms).fillna(0.0)
     else:
@@ -1396,23 +1655,45 @@ def build_daily_nav_series(start_iso: str, bench_series: pd.DataFrame, account: 
         qty_piv = qty_piv.reindex(date_index).fillna(0.0).cumsum()
 
     if baseline_qty:
-        baseline_start_map = _symbol_start_map_from_positions_df(pos_now, dates[0])
-        for sym, qty in baseline_qty.items():
-            if sym in pre_anchor_syms:
-                continue
+        trade_net_qty: Dict[str, float] = {}
+        trade_start_map: Dict[str, str] = {}
+        if not tr_effective.empty and "signed_qty" in tr_effective.columns:
+            try:
+                trade_net_qty = tr_effective.groupby("symbol")["signed_qty"].sum().astype(float).to_dict()
+                trade_start_map = tr_effective.groupby("symbol")["trade_date"].min().astype(str).to_dict()
+            except Exception:
+                trade_net_qty = {}
+                trade_start_map = {}
+        entry_start_map: Dict[str, str] = {}
+        if pos_now is not None and not pos_now.empty:
+            for _, row in pos_now.iterrows():
+                sym = str(row.get("symbol") or "").strip().upper()
+                if not sym or sym == "NAN":
+                    continue
+                entry_iso = parse_iso_date(row.get("entry_date"))
+                if not entry_iso:
+                    continue
+                prev = entry_start_map.get(sym)
+                if not prev or entry_iso < prev:
+                    entry_start_map[sym] = entry_iso
+        for sym, current_qty in baseline_qty.items():
             if sym not in qty_piv.columns:
                 qty_piv[sym] = 0.0
             qty_piv[sym] = qty_piv[sym].astype(float)
-            start_for_symbol = parse_iso_date(baseline_start_map.get(sym) or dates[0]) or dates[0]
+            opening_qty = float(current_qty) - float(trade_net_qty.get(sym, 0.0))
+            start_for_symbol = parse_iso_date(entry_start_map.get(sym))
+            if not start_for_symbol:
+                start_for_symbol = parse_iso_date(trade_start_map.get(sym))
+            start_for_symbol = start_for_symbol or dates[0]
             mask = qty_piv.index >= pd.to_datetime(start_for_symbol)
             if mask.any():
-                qty_piv.loc[mask, sym] = qty_piv.loc[mask, sym].astype(float) + float(qty)
+                qty_piv.loc[mask, sym] = qty_piv.loc[mask, sym].astype(float) + opening_qty
 
     mv = np.zeros(len(date_index), dtype=float)
     for s in syms:
         if s in px_piv.columns:
             qty_vec = qty_piv.get(s, 0.0).to_numpy(dtype=float)
-            mv += np.abs(qty_vec) * px_piv[s].to_numpy(dtype=float) * float(mult_map.get(s, 1.0))
+            mv += qty_vec * px_piv[s].to_numpy(dtype=float) * float(mult_map.get(s, 1.0))
 
     cash_day = pd.Series(0.0, index=date_index)
     ext_flow = pd.Series(0.0, index=date_index)
@@ -1420,21 +1701,23 @@ def build_daily_nav_series(start_iso: str, bench_series: pd.DataFrame, account: 
         cl = pd.DataFrame(cash_rows_for_cash)
         cl["date"] = cl["date"].astype(str)
         cl["amount"] = pd.to_numeric(cl["amount"], errors="coerce").fillna(0.0)
+        cl["note"] = cl.get("note", "").astype(str)
         cash_adj = cl.groupby("date")["amount"].sum()
         cash_vals = cash_adj.reindex(cash_day.index.strftime("%Y-%m-%d")).fillna(0.0).to_numpy(dtype=float)
         cash_day += cash_vals
-        ext_flow += cash_vals
+        ext_df = cl[cl["note"].apply(_cash_flow_is_external)].copy()
+        if not ext_df.empty:
+            ext_adj = ext_df.groupby("date")["amount"].sum()
+            ext_flow += ext_adj.reindex(cash_day.index.strftime("%Y-%m-%d")).fillna(0.0).to_numpy(dtype=float)
 
-    if trades:
-        tr = pd.DataFrame(trades)
-        if "cash_flow" in tr.columns:
-            tr["cash_flow"] = pd.to_numeric(tr["cash_flow"], errors="coerce").fillna(0.0)
-            if anchor_asof:
-                tr = tr[tr["trade_date"].astype(str) > anchor_asof]
-            flow_day = tr.groupby("trade_date")["cash_flow"].sum()
-            cash_day += flow_day.reindex(cash_day.index.strftime("%Y-%m-%d")).fillna(0.0).to_numpy(dtype=float)
+    if trade_cash_rows:
+        tr_cash = pd.DataFrame(trade_cash_rows)
+        tr_cash["date"] = tr_cash["date"].astype(str)
+        tr_cash["amount"] = pd.to_numeric(tr_cash["amount"], errors="coerce").fillna(0.0)
+        flow_day = tr_cash.groupby("date")["amount"].sum()
+        cash_day += flow_day.reindex(cash_day.index.strftime("%Y-%m-%d")).fillna(0.0).to_numpy(dtype=float)
 
-    cash_cum = cash_day.cumsum().to_numpy(dtype=float) + float(start_cash)
+    cash_cum = cash_day.cumsum().to_numpy(dtype=float) + float(start_cash_effective)
     nav = cash_cum + mv
 
     nav_begin = nav[0] if abs(nav[0]) > 1e-12 else 1.0
@@ -1462,7 +1745,8 @@ def get_nav_series(limit: int = 120, account: Optional[str] = None) -> List[Dict
     snapshot_points: List[Dict[str, Any]] = []
     if settings.static_mode:
         snapshot_points = _get_nav_series_from_snapshots(limit=limit, account=account)
-        if snapshot_points and not _has_trade_or_entry_data(account):
+        # In static mode, imported balance history/nav snapshots are authoritative.
+        if snapshot_points:
             _set_nav_cache(limit, account, snapshot_points)
             return snapshot_points
     bench_series = get_bench_series(start_date=start_iso)
@@ -1476,6 +1760,13 @@ def get_nav_series(limit: int = 120, account: Optional[str] = None) -> List[Dict
     bench_map = {}
     if bench_series is not None and len(bench_series):
         bench_map = {str(r["d"]): float(r["close"]) for _, r in bench_series.iterrows()}
+    first_bench = None
+    if bench_map:
+        try:
+            first_bench = float(bench_map[min(bench_map.keys())])
+        except Exception:
+            first_bench = None
+    last_bench = first_bench if first_bench and first_bench > 0 else None
     points = []
     for _, row in nav_df.iterrows():
         d = str(row["d"])
@@ -1485,11 +1776,21 @@ def get_nav_series(limit: int = 120, account: Optional[str] = None) -> List[Dict
                 twr_val = float(row["twr"])
         except Exception:
             twr_val = None
+        bench_val = 1.0
+        if bench_map:
+            try:
+                raw = float(bench_map.get(d)) if d in bench_map else None
+            except Exception:
+                raw = None
+            if raw is not None and raw > 0:
+                last_bench = raw
+            if last_bench is not None and last_bench > 0:
+                bench_val = float(last_bench)
         points.append(
             {
                 "date": d,
                 "nav": float(row["nav"]),
-                "bench": float(bench_map.get(d, row["nav"])) if bench_map else float(row["nav"]),
+                "bench": float(bench_val),
                 "twr": twr_val,
             }
         )
@@ -1508,20 +1809,85 @@ def _get_nav_series_from_snapshots(limit: int = 120, account: Optional[str] = No
     except Exception:
         bench_map = {}
 
+    def _aggregate_all_rows(raw_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if not raw_rows:
+            return []
+        by_account: Dict[str, Dict[str, float]] = {}
+        first_date_by_account: Dict[str, str] = {}
+        count_by_account: Dict[str, int] = {}
+        all_dates: set[str] = set()
+        for row in raw_rows:
+            acct = _account_label(row.get("account"))
+            if not acct or acct == "ALL":
+                continue
+            d = parse_iso_date(row.get("date"))
+            if not d:
+                continue
+            try:
+                nav_val = float(row.get("nav") or 0.0)
+            except Exception:
+                continue
+            by_account.setdefault(acct, {})[d] = nav_val
+            prev_first = first_date_by_account.get(acct)
+            if prev_first is None or d < prev_first:
+                first_date_by_account[acct] = d
+            count_by_account[acct] = int(count_by_account.get(acct, 0)) + 1
+            all_dates.add(d)
+
+        if not by_account or not all_dates or not first_date_by_account:
+            return []
+
+        # If accounts have mixed history lengths, start at the latest account start date
+        # to avoid artificial jumps from late account introductions. Ignore one-off
+        # snapshot accounts when choosing the shared start so tiny placeholder accounts
+        # do not collapse the full portfolio history window.
+        eligible_starts = [
+            first_date_by_account[acct]
+            for acct, cnt in count_by_account.items()
+            if int(cnt) >= 2 and acct in first_date_by_account
+        ]
+        common_start = max(eligible_starts or list(first_date_by_account.values()))
+        dates_sorted = [d for d in sorted(all_dates) if d >= common_start]
+        if not dates_sorted:
+            return []
+
+        started: set[str] = set()
+        last_nav: Dict[str, float] = {}
+        for acct, series in by_account.items():
+            prior = [d for d in series.keys() if d <= common_start]
+            if not prior:
+                continue
+            d0 = max(prior)
+            last_nav[acct] = float(series[d0])
+            started.add(acct)
+        out: List[Dict[str, Any]] = []
+        for d in dates_sorted:
+            total = 0.0
+            contributors = 0
+            for acct, series in by_account.items():
+                if d in series:
+                    last_nav[acct] = float(series[d])
+                    started.add(acct)
+                if acct in started and acct in last_nav:
+                    total += float(last_nav[acct])
+                    contributors += 1
+            if contributors > 0:
+                out.append({"date": d, "nav": float(total), "bench": None})
+        return out
+
     def _run(conn):
         cur = conn.cursor()
         rows: List[Dict[str, Any]] = []
         if label == "ALL":
             cur.execute(
                 """
-                SELECT date, SUM(nav) as nav, MAX(bench) as bench
+                SELECT account, date, nav, bench
                 FROM nav_snapshots
                 WHERE account != 'ALL'
-                GROUP BY date
-                ORDER BY date ASC
+                ORDER BY date ASC, account ASC
                 """
             )
-            rows = _fetch_rows(cur)
+            rows = _aggregate_all_rows(_fetch_rows(cur))
             if not rows:
                 cur.execute(
                     "SELECT date, nav, bench FROM nav_snapshots WHERE account='ALL' ORDER BY date ASC"
@@ -1538,25 +1904,13 @@ def _get_nav_series_from_snapshots(limit: int = 120, account: Optional[str] = No
     rows = with_conn(_run)
     if not rows:
         return []
-    bench_start = _get_bench_start()
-    if len(rows) == 1:
-        try:
-            first_date = str(rows[0].get("date") or "")
-            if bench_start and first_date and bench_start < first_date:
-                rows = [{"date": bench_start, "nav": rows[0].get("nav"), "bench": rows[0].get("bench")}] + rows
-        except Exception:
-            pass
-    account_value = _get_account_value(account)
-    today = today_str()
-    if account_value is not None and (not rows or rows[-1].get("date") != today):
-        # For today's bench, use raw SPX price from bench_map
-        bench_today_raw = bench_map.get(today)
-        rows = rows + [{"date": today, "nav": float(account_value), "bench": bench_today_raw}]
 
     rows = rows[-int(limit):]
+
     points = []
     # Track last known bench raw price for forward-fill
     last_bench_raw: Optional[float] = None
+    base_nav: Optional[float] = None
     for row in rows:
         d = str(row.get("date") or "")
         nav_val = float(row.get("nav") or 0.0)
@@ -1569,23 +1923,30 @@ def _get_nav_series_from_snapshots(limit: int = 120, account: Optional[str] = No
         # Use forward-filled bench raw price
         effective_bench = last_bench_raw if last_bench_raw and last_bench_raw > 0 else None
 
+        if base_nav is None and abs(nav_val) > 1e-12:
+            base_nav = float(nav_val)
+        twr_index = 1.0 if base_nav is None else float(nav_val) / float(base_nav)
+
         points.append({
             "date": d,
             "nav": nav_val,
             # bench: raw price for chart normalization; None becomes nav in chart
             "bench": effective_bench,
-            "twr": None,
+            "twr": float(twr_index),
         })
 
-    # If no bench data at all, set bench = nav for all points so chart renders something
-    if all(p["bench"] is None for p in points):
-        for p in points:
-            p["bench"] = p["nav"]
-    else:
-        # Fill None benches with nav value (chart will treat as "no bench data" gracefully)
-        for p in points:
-            if p["bench"] is None:
-                p["bench"] = p["nav"]
+    fallback_bench = None
+    for p in points:
+        val = p.get("bench")
+        if val is not None and float(val) > 0:
+            fallback_bench = float(val)
+            break
+    if fallback_bench is None:
+        fallback_bench = 1.0
+    for p in points:
+        val = p.get("bench")
+        if val is None or float(val) <= 0:
+            p["bench"] = float(fallback_bench)
 
     return points
 
@@ -1822,6 +2183,7 @@ def apply_trade(payload: Dict[str, Any]) -> Tuple[bool, str, Optional[str]]:
     ts = now_ts_str()
     trade_id = payload.get("trade_id") or f"T-{int(time.time() * 1000)}"
     trade_type = (payload.get("trade_type") or asset_class).upper()
+    source = (payload.get("source") or "LOCAL").strip().upper() or "LOCAL"
     status = "FILLED"
 
     # cash check for BUY (allow override for multi-leg)
@@ -1922,7 +2284,7 @@ def apply_trade(payload: Dict[str, Any]) -> Tuple[bool, str, Optional[str]]:
                 float(price),
                 trade_type,
                 status,
-                "LOCAL",
+                source,
                 asset_class,
                 underlying,
                 expiry,
@@ -2077,19 +2439,27 @@ def set_account_cash(account: str, cash: float, asof: Optional[str] = None, acco
     date_iso = parse_iso_date(asof) or today_str()
     def _run(conn):
         cur = conn.cursor()
-        cur.execute("SELECT account_value FROM accounts WHERE account=?", (label,))
+        cur.execute("SELECT account_value, anchor_mode FROM accounts WHERE account=?", (label,))
         row = cur.fetchone()
         existing_value = None
+        existing_mode = "BOD"
         if row:
-            existing_value = row.get("account_value") if isinstance(row, dict) else row[0]
+            if isinstance(row, dict):
+                existing_value = row.get("account_value")
+                existing_mode = _normalize_anchor_mode(row.get("anchor_mode"))
+            else:
+                existing_value = row[0]
+                existing_mode = _normalize_anchor_mode(row[1] if len(row) > 1 else None)
         use_value = account_value if account_value is not None else existing_value
+        _ = existing_mode
+        use_mode = "EOD"
         cur.execute(
-            "INSERT OR REPLACE INTO accounts(account, cash, asof, account_value) VALUES(?,?,?,?)",
-            (label, float(cash), date_iso, use_value),
+            "INSERT OR REPLACE INTO accounts(account, cash, asof, account_value, anchor_mode) VALUES(?,?,?,?,?)",
+            (label, float(cash), date_iso, use_value, use_mode),
         )
-        cur.execute("DELETE FROM cash_flows WHERE account=?", (label,))
         conn.commit()
     with_conn(_run)
+    _clear_nav_cache()
 
 
 def _get_account_value(account: Optional[str]) -> Optional[float]:
@@ -2098,13 +2468,31 @@ def _get_account_value(account: Optional[str]) -> Optional[float]:
         cur = conn.cursor()
         if label == "ALL":
             cur.execute(
-                "SELECT COUNT(*) AS cnt, COALESCE(SUM(account_value),0) AS total "
-                "FROM accounts WHERE account != 'ALL' AND account_value IS NOT NULL"
+                """
+                SELECT
+                    COUNT(*) AS total_accounts,
+                    SUM(CASE WHEN account_value IS NOT NULL THEN 1 ELSE 0 END) AS valued_accounts,
+                    COALESCE(SUM(account_value),0) AS total_value
+                FROM accounts
+                WHERE account != 'ALL'
+                """
             )
             row = cur.fetchone()
-            cnt = row.get("cnt") if isinstance(row, dict) else row[0]
-            total = row.get("total") if isinstance(row, dict) else row[1]
-            return float(total) if cnt else None
+            if not row:
+                return None
+            if isinstance(row, dict):
+                total_accounts = int(row.get("total_accounts") or 0)
+                valued_accounts = int(row.get("valued_accounts") or 0)
+                total_value = float(row.get("total_value") or 0.0)
+            else:
+                total_accounts = int(row[0] or 0)
+                valued_accounts = int(row[1] or 0)
+                total_value = float(row[2] or 0.0)
+            if total_accounts <= 0:
+                return None
+            if valued_accounts < total_accounts:
+                return None
+            return float(total_value)
         cur.execute("SELECT account_value FROM accounts WHERE account=?", (label,))
         row = cur.fetchone()
         if not row:
@@ -2122,6 +2510,7 @@ def clear_positions_for_accounts(accounts: List[str]) -> None:
         cur.executemany("DELETE FROM positions WHERE account=?", [(a,) for a in accounts])
         conn.commit()
     with_conn(_run)
+    _clear_nav_cache()
 
 
 def clear_trades_for_account(account: Optional[str] = None) -> None:
@@ -2131,6 +2520,7 @@ def clear_trades_for_account(account: Optional[str] = None) -> None:
         cur.execute(f"DELETE FROM trades WHERE {where}", params)
         conn.commit()
     with_conn(_run)
+    _clear_nav_cache()
 
 
 def upsert_position(data: Dict[str, Any]) -> None:
@@ -2226,10 +2616,24 @@ def upsert_position(data: Dict[str, Any]) -> None:
             owner=owner if owner_provided else None,
             entry_date=entry_date if entry_date_provided else None,
         )
+        if sector_provided:
+            sector_value = (sector or "").strip() or "Unassigned"
+            cur = conn.cursor()
+            cur.execute(
+                """
+                UPDATE trades
+                SET sector=?
+                WHERE account=?
+                  AND UPPER(symbol)=UPPER(?)
+                  AND (sector IS NULL OR TRIM(sector)='' OR UPPER(TRIM(sector))='UNASSIGNED')
+                """,
+                (sector_value, account, symbol),
+            )
         conn.commit()
 
     with_conn(_run)
     cache.delete_pattern("positions")
+    _clear_nav_cache()
 
 
 def record_trade(trade: Dict[str, Any]) -> None:
@@ -2275,6 +2679,7 @@ def record_trade(trade: Dict[str, Any]) -> None:
         )
         conn.commit()
     with_conn(_run)
+    _clear_nav_cache()
 
 
 def delete_position(instrument_id: str, account: Optional[str] = None) -> None:
@@ -2287,6 +2692,7 @@ def delete_position(instrument_id: str, account: Optional[str] = None) -> None:
             cur.execute("DELETE FROM positions WHERE account=? AND instrument_id=?", (label, instrument_id))
         conn.commit()
     with_conn(_run)
+    _clear_nav_cache()
 
 
 def close_expired_options(account: Optional[str] = None) -> int:
@@ -2358,54 +2764,63 @@ def get_snapshot(account: Optional[str] = None) -> Dict[str, Any]:
 
     positions_live = build_positions_live(live_date, _get_bench_start(), account=account)
     cash_total = compute_cash_balance_total(account)
-    gross_mv = float(np.sum(np.abs(positions_live["market_value"].astype(float).to_numpy()))) if not positions_live.empty else 0.0
-    account_value = _get_account_value(account)
+    net_mv = float(np.sum(positions_live["market_value"].astype(float).to_numpy())) if not positions_live.empty else 0.0
+    use_account_value = bool(settings.static_mode or (positions_live.empty and not _has_non_import_trades(account)))
+    account_value = _get_account_value(account) if use_account_value else None
     if account_value is not None:
         nav_live = float(account_value)
     else:
-        nav_live = float(cash_total + gross_mv) if not positions_live.empty else float(cash_total)
+        nav_live = float(cash_total + net_mv) if not positions_live.empty else float(cash_total)
+    if not settings.static_mode and _has_trade_or_entry_data(account):
+        try:
+            latest_nav = get_nav_series(limit=1, account=account)
+            if latest_nav:
+                nav_live = float(latest_nav[-1].get("nav") or nav_live)
+        except Exception:
+            pass
     cash_avail = compute_cash_available(cash_total, positions_live)
 
     day_pnl = 0.0
-    if positions_live is not None and not positions_live.empty:
-        try:
-            day_pnl = float(positions_live["day_pnl"].astype(float).sum())
-        except Exception:
-            day_pnl = 0.0
+    total_pnl = 0.0
+    if settings.static_mode:
+        snap_points = _get_nav_series_from_snapshots(limit=4000, account=account)
+        if snap_points:
+            nav_values = []
+            for p in snap_points:
+                try:
+                    nav_values.append(float(p.get("nav") or 0.0))
+                except Exception:
+                    continue
+            if nav_values:
+                nav_live = float(nav_values[-1])
+                prev_nav = float(nav_values[-2]) if len(nav_values) > 1 else float(nav_values[-1])
+                base_nav = next((float(v) for v in nav_values if abs(float(v)) > 1e-12), float(nav_values[0]))
+                day_pnl = float(nav_live - prev_nav)
+                total_pnl = float(nav_live - base_nav)
+    else:
+        if positions_live is not None and not positions_live.empty:
+            try:
+                day_pnl = float(positions_live["day_pnl"].astype(float).sum())
+            except Exception:
+                day_pnl = 0.0
 
-    anchor_cash, anchor_asof = _get_cash_anchor_info(account)
-    base_cash = anchor_cash if anchor_cash is not None else _get_start_cash(account)
+        # Total PnL should reflect realized + unrealized, not cash inflows/outflows.
+        unreal_pnl = 0.0
+        if positions_live is not None and not positions_live.empty:
+            try:
+                unreal_pnl = float(positions_live["total_pnl"].astype(float).sum())
+            except Exception:
+                unreal_pnl = 0.0
 
-    def _cash_adj(conn):
-        where, params = _account_where(conn, account)
-        cur = conn.cursor()
-        cash_params = list(params)
-        cash_filter = ""
-        if anchor_asof:
-            cash_filter = " AND date > ?"
-            cash_params.append(anchor_asof)
-        cur.execute(f"SELECT COALESCE(SUM(amount),0) as total FROM cash_flows WHERE {where}{cash_filter}", cash_params)
-        row = cur.fetchone()
-        return float(row.get("total") if isinstance(row, dict) else row[0] or 0.0)
+        def _realized(conn):
+            where, params = _account_where(conn, account)
+            cur = conn.cursor()
+            cur.execute(f"SELECT COALESCE(SUM(realized_pl),0) as total FROM trades WHERE {where}", params)
+            row = cur.fetchone()
+            return float(row.get("total") if isinstance(row, dict) else row[0] or 0.0)
 
-    cash_adj = with_conn(_cash_adj)
-    # Total PnL should reflect realized + unrealized, not cash inflows/outflows.
-    unreal_pnl = 0.0
-    if positions_live is not None and not positions_live.empty:
-        try:
-            unreal_pnl = float(positions_live["total_pnl"].astype(float).sum())
-        except Exception:
-            unreal_pnl = 0.0
-
-    def _realized(conn):
-        where, params = _account_where(conn, account)
-        cur = conn.cursor()
-        cur.execute(f"SELECT COALESCE(SUM(realized_pl),0) as total FROM trades WHERE {where}", params)
-        row = cur.fetchone()
-        return float(row.get("total") if isinstance(row, dict) else row[0] or 0.0)
-
-    realized_pnl = with_conn(_realized)
-    total_pnl = float(unreal_pnl + realized_pnl)
+        realized_pnl = with_conn(_realized)
+        total_pnl = float(unreal_pnl + realized_pnl)
 
     gross = float(np.sum(np.abs(positions_live["market_value"].astype(float).to_numpy()))) if not positions_live.empty else 0.0
     net = float(np.sum(positions_live["market_value"].astype(float).to_numpy())) if not positions_live.empty else 0.0
@@ -2434,20 +2849,83 @@ def get_snapshot(account: Optional[str] = None) -> Dict[str, Any]:
     }
 
 
+def _get_sector_baseline_value(account: Optional[str], sector: str) -> float:
+    acct = _account_label(account)
+    if not acct or acct == "ALL":
+        return 0.0
+    sec = (sector or "").strip()
+    if not sec:
+        return 0.0
+    key = f"sector_baseline::{acct}::{sec}"
+    raw = _get_setting(key, None)
+    if raw is None or str(raw).strip() == "":
+        return 0.0
+    try:
+        val = float(raw)
+        if np.isfinite(val) and val > 0:
+            return float(val)
+    except Exception:
+        return 0.0
+    return 0.0
+
+
+def _get_sector_target_weight(account: Optional[str], sector: str) -> float:
+    acct = _account_label(account)
+    if not acct or acct == "ALL":
+        return 0.0
+    sec = (sector or "").strip()
+    if not sec:
+        return 0.0
+    key = f"sector_target_weight::{acct}::{sec}"
+    raw = _get_setting(key, None)
+    if raw is None or str(raw).strip() == "":
+        return 0.0
+    try:
+        val = float(raw)
+        if np.isfinite(val) and abs(val) > 0:
+            return float(val)
+    except Exception:
+        return 0.0
+    return 0.0
+
+
 def get_sector_series(sector: str, limit: int = 120, source: str = "auto", account: Optional[str] = None) -> List[Dict[str, Any]]:
     sector_name = (sector or "").strip()
     if not sector_name:
         raise ValueError("Sector is required")
 
     source = (source or "auto").lower()
+    account_label = _account_label(account)
+    if source == "sleeve" and account_label == "ALL":
+        raise ValueError("Sleeve sectors are account-scoped. Select a specific account.")
     use_etf = source == "etf"
     if source == "auto":
-        # If there are any positions in this sector, prefer sleeve
-        pos = _load_positions_df(account)
-        if pos is None or pos.empty:
+        if account_label == "ALL":
             use_etf = True
         else:
-            use_etf = sector_name not in pos["sector"].fillna("").tolist()
+        # Prefer sleeve when we have either current holdings or historical trades tagged to this sector.
+            pos = _load_positions_df(account)
+            has_sector_positions = bool(pos is not None and not pos.empty and sector_name in pos["sector"].fillna("").tolist())
+
+            def _has_sector_trades(conn):
+                where, params = _account_where(conn, account)
+                cur = conn.cursor()
+                cur.execute(
+                    f"""
+                    SELECT 1
+                    FROM trades
+                    WHERE {where}
+                      AND sector=?
+                      AND (trade_type IS NULL OR UPPER(trade_type) != 'IMPORT')
+                      AND (source IS NULL OR UPPER(source) != 'CSV_IMPORT')
+                    LIMIT 1
+                    """,
+                    params + [sector_name],
+                )
+                return cur.fetchone() is not None
+
+            has_sector_trades = bool(with_conn(_has_sector_trades))
+            use_etf = not has_sector_positions and not has_sector_trades
 
     if use_etf:
         etf = SECTOR_ETF.get(sector_name)
@@ -2476,54 +2954,292 @@ def get_sector_series(sector: str, limit: int = 120, source: str = "auto", accou
         out = df[["date", "sector"]].tail(int(limit))
         return [{"date": str(r["date"]), "sector": float(r["sector"])} for _, r in out.iterrows()]
 
-    # Sleeve mode: build returns from positions in sector
-    pos = _load_positions_df(account)
-    pos = pos[pos["sector"] == sector_name] if not pos.empty else pos
-    if pos is None or pos.empty:
-        return []
-    symbols = sorted(set(pos["symbol"].astype(str).str.upper().tolist()))
-    if not symbols:
-        return []
+    # Sleeve mode: build sector time-weighted returns from historical trades + opening positions.
+    # This keeps sector performance aligned with portfolio TWR when trades are sector-tagged.
     start_iso = _get_bench_start()
-    for s in symbols:
-        if not is_option_symbol(s):
-            ensure_symbol_history(s, start_iso, is_bench=False)
+    sector_baseline = _get_sector_baseline_value(account, sector_name)
+    sector_target_weight = _get_sector_target_weight(account, sector_name)
+    pos_all = _load_positions_df(account)
+    pos_all = pos_all if pos_all is not None else pd.DataFrame()
+    pos = pos_all[pos_all["sector"] == sector_name] if not pos_all.empty else pd.DataFrame()
 
-    def _load_prices(conn):
+    # Sector inference map for older trades without explicit sector.
+    symbol_sector_map: Dict[str, str] = {}
+    if not pos_all.empty:
+        for _, row in pos_all.iterrows():
+            sym = str(row.get("symbol") or "").strip().upper()
+            sec = str(row.get("sector") or "").strip()
+            if sym and sec and sym not in symbol_sector_map:
+                symbol_sector_map[sym] = sec
+
+    def _load_trades(conn):
+        where, params = _account_where(conn, account)
         cur = conn.cursor()
-        qmarks = ",".join(["?"] * len(symbols))
         cur.execute(
-            f"SELECT symbol, date, close FROM price_cache WHERE date>=? AND symbol IN ({qmarks}) ORDER BY date ASC",
-            [start_iso] + symbols,
+            f"""
+            SELECT trade_date, symbol, qty, side, cash_flow, multiplier, trade_type, source, sector, realized_pl
+            FROM trades
+            WHERE {where}
+            ORDER BY trade_date ASC, ts ASC
+            """,
+            params,
         )
         return _fetch_rows(cur)
 
-    price_rows = with_conn(_load_prices)
-    px = pd.DataFrame(price_rows)
-    if px.empty:
+    tr = pd.DataFrame(with_conn(_load_trades))
+    if tr.empty and pos.empty:
         return []
+
+    if not tr.empty:
+        tr["trade_date"] = tr["trade_date"].astype(str)
+        tr["symbol"] = tr["symbol"].astype(str).str.upper()
+        tr["qty"] = pd.to_numeric(tr["qty"], errors="coerce").fillna(0.0)
+        tr["side"] = tr["side"].astype(str).str.upper()
+        tr["cash_flow"] = pd.to_numeric(tr["cash_flow"], errors="coerce").fillna(0.0)
+        tr["realized_pl"] = pd.to_numeric(tr.get("realized_pl"), errors="coerce").fillna(0.0)
+        tr["trade_type"] = tr.get("trade_type", "").astype(str).str.upper()
+        tr["source"] = tr.get("source", "").astype(str).str.upper()
+        tr["sector"] = tr.get("sector", "").astype(str)
+        tr["is_import"] = (tr["trade_type"] == "IMPORT") | (tr["source"] == "CSV_IMPORT")
+        tr = tr[~tr["is_import"]].copy()
+        tr["sector"] = tr.apply(
+            lambda row: str(row.get("sector") or "").strip() or symbol_sector_map.get(str(row.get("symbol") or "").strip().upper(), ""),
+            axis=1,
+        )
+        tr = tr[tr["sector"] == sector_name].copy()
+
+    required_start = str(start_iso)
+    if not tr.empty:
+        trade_dates = sorted([str(d) for d in tr["trade_date"].astype(str).tolist() if str(d)])
+        if trade_dates:
+            required_start = min(required_start, trade_dates[0])
+    if not pos.empty and "entry_date" in pos.columns:
+        entry_dates = [parse_iso_date(v) for v in pos["entry_date"].astype(str).tolist()]
+        entry_dates = sorted([d for d in entry_dates if d])
+        if entry_dates:
+            required_start = min(required_start, entry_dates[0])
+
+    tr_mtm = tr[tr["source"] != "CSV_REALIZED"].copy() if not tr.empty else pd.DataFrame()
+
+    symbols = set()
+    if not pos.empty:
+        symbols |= set(pos["symbol"].astype(str).str.upper().tolist())
+    if not tr_mtm.empty:
+        symbols |= set(tr_mtm["symbol"].astype(str).str.upper().tolist())
+    symbols = sorted([s for s in symbols if s and s != "NAN"])
+    if not symbols and tr.empty:
+        return []
+
+    bench_series = get_bench_series(start_date=required_start)
+    if bench_series is not None and len(bench_series) >= 2:
+        dates = bench_series["d"].astype(str).tolist()
+    else:
+        dates = _fallback_business_dates(required_start, today_str())
+    if dates:
+        first_date = str(dates[0])
+        if required_start < first_date:
+            head = _fallback_business_dates(required_start, first_date)
+            prepend = [d for d in head if d < first_date]
+            dates = prepend + dates
+    if dates:
+        last_date = str(dates[-1])
+        today_iso = today_str()
+        if today_iso > last_date:
+            tail = _fallback_business_dates(last_date, today_iso)
+            for d in tail:
+                if d > last_date and d not in dates:
+                    dates.append(d)
+    if not dates:
+        return []
+
+    for sym in symbols:
+        if not is_option_symbol(sym):
+            ensure_symbol_history(sym, required_start, is_bench=False)
+
+    if symbols:
+        def _load_prices(conn):
+            cur = conn.cursor()
+            qmarks = ",".join(["?"] * len(symbols))
+            cur.execute(
+                f"SELECT symbol, date, close FROM price_cache WHERE date>=? AND symbol IN ({qmarks}) ORDER BY date ASC",
+                [dates[0]] + symbols,
+            )
+            return _fetch_rows(cur)
+
+        px = pd.DataFrame(with_conn(_load_prices))
+    else:
+        px = pd.DataFrame(columns=["symbol", "date", "close"])
+    if px.empty:
+        px = pd.DataFrame(columns=["symbol", "date", "close"])
+    px["symbol"] = px["symbol"].astype(str).str.upper()
     px["date"] = px["date"].astype(str)
-    px["close"] = pd.to_numeric(px["close"], errors="coerce").fillna(0.0)
-    px = px.dropna()
-    if px.empty:
-        return []
+    px["close"] = pd.to_numeric(px["close"], errors="coerce")
+    px = px.dropna(subset=["close"])
+    px = px[px["close"] > 0].copy()
 
-    px_piv = px.pivot_table(index="date", columns="symbol", values="close", aggfunc="last").fillna(method="ffill")
-    px_piv = px_piv.fillna(0.0)
-    qty_map = {row["symbol"].upper(): float(row["qty"]) for _, row in pos.iterrows()}
-    mult_map = {row["symbol"].upper(): float(row["multiplier"]) for _, row in pos.iterrows()}
+    date_index = pd.to_datetime(dates)
+    if len(px):
+        px_piv = px.pivot_table(index="date", columns="symbol", values="close", aggfunc="last")
+        px_piv.index = pd.to_datetime(px_piv.index)
+        px_piv = px_piv.reindex(date_index).sort_index().ffill().fillna(0.0)
+    else:
+        px_piv = pd.DataFrame(index=date_index, columns=symbols).fillna(0.0)
 
-    mv = pd.Series(0.0, index=px_piv.index)
-    for sym in px_piv.columns:
-        mv += float(qty_map.get(sym, 0.0)) * px_piv[sym].astype(float) * float(mult_map.get(sym, 1.0))
+    # Fallback to current marked prices only when no usable history exists at all.
+    fallback_px: Dict[str, float] = {}
+    if not pos.empty:
+        for _, row in pos.iterrows():
+            sym = str(row.get("symbol") or "").strip().upper()
+            pxv = pd.to_numeric(row.get("price"), errors="coerce")
+            if sym and np.isfinite(pxv) and float(pxv) > 0:
+                fallback_px[sym] = float(pxv)
+    for sym in symbols:
+        if sym not in px_piv.columns:
+            px_piv[sym] = 0.0
+        col = pd.to_numeric(px_piv[sym], errors="coerce")
+        col = col.where(col > 0, np.nan)
+        # Use first available historical close for leading gaps; avoids injecting today's price into history.
+        col = col.ffill().bfill()
+        if col.notna().any():
+            px_piv[sym] = col.astype(float)
+            continue
+        fb = float(fallback_px.get(sym) or 0.0)
+        if fb > 0:
+            px_piv[sym] = pd.Series(fb, index=px_piv.index, dtype=float)
+        else:
+            px_piv[sym] = pd.Series(0.0, index=px_piv.index, dtype=float)
 
-    mv = mv.replace([np.inf, -np.inf], np.nan).dropna()
-    if mv.empty:
-        return []
-    base = float(mv.iloc[0]) if float(mv.iloc[0]) != 0 else 1.0
-    ret = (mv / base - 1.0) * 100.0
-    out = ret.tail(int(limit))
-    return [{"date": str(idx), "sector": float(val)} for idx, val in out.items()]
+    mult_map: Dict[str, float] = {}
+    for sym in symbols:
+        mult_map[sym] = float(contract_multiplier(sym) or 1.0)
+    if not pos.empty:
+        for _, row in pos.iterrows():
+            sym = str(row.get("symbol") or "").strip().upper()
+            mult = pd.to_numeric(row.get("multiplier"), errors="coerce")
+            if sym and np.isfinite(mult) and float(mult) > 0:
+                mult_map[sym] = float(mult)
+    if not tr_mtm.empty and "multiplier" in tr_mtm.columns:
+        for _, row in tr_mtm.iterrows():
+            sym = str(row.get("symbol") or "").strip().upper()
+            mult = pd.to_numeric(row.get("multiplier"), errors="coerce")
+            if sym and np.isfinite(mult) and float(mult) > 0:
+                mult_map[sym] = float(mult)
+
+    if tr_mtm.empty:
+        qty_piv = pd.DataFrame(index=date_index, columns=symbols).fillna(0.0)
+    else:
+        tr_mtm["signed_qty"] = np.where(tr_mtm["side"] == "BUY", tr_mtm["qty"], -tr_mtm["qty"])
+        agg = tr_mtm.groupby(["trade_date", "symbol"], as_index=False)["signed_qty"].sum()
+        qty_piv = agg.pivot_table(index="trade_date", columns="symbol", values="signed_qty", aggfunc="sum").fillna(0.0)
+        qty_piv.index = pd.to_datetime(qty_piv.index)
+        qty_piv = qty_piv.reindex(date_index).fillna(0.0).cumsum()
+
+    if not pos.empty:
+        baseline_qty = pos.groupby("symbol")["qty"].sum().astype(float).to_dict()
+        trade_net_qty = tr_mtm.groupby("symbol")["signed_qty"].sum().astype(float).to_dict() if not tr_mtm.empty else {}
+        trade_start_map = tr_mtm.groupby("symbol")["trade_date"].min().astype(str).to_dict() if not tr_mtm.empty else {}
+        entry_start_map: Dict[str, str] = {}
+        for _, row in pos.iterrows():
+            sym = str(row.get("symbol") or "").strip().upper()
+            entry = parse_iso_date(row.get("entry_date"))
+            if not sym or not entry:
+                continue
+            prev = entry_start_map.get(sym)
+            if not prev or entry < prev:
+                entry_start_map[sym] = entry
+        for sym, current_qty in baseline_qty.items():
+            if sym not in qty_piv.columns:
+                qty_piv[sym] = 0.0
+            qty_piv[sym] = qty_piv[sym].astype(float)
+            opening_qty = float(current_qty) - float(trade_net_qty.get(sym, 0.0))
+            start_for_symbol = parse_iso_date(entry_start_map.get(sym)) or parse_iso_date(trade_start_map.get(sym)) or dates[0]
+            mask = qty_piv.index >= pd.to_datetime(start_for_symbol)
+            if mask.any():
+                qty_piv.loc[mask, sym] = qty_piv.loc[mask, sym].astype(float) + opening_qty
+
+    mv = np.zeros(len(date_index), dtype=float)
+    for sym in symbols:
+        qty_vec = qty_piv.get(sym, 0.0).to_numpy(dtype=float)
+        px_vec = px_piv[sym].to_numpy(dtype=float) if sym in px_piv.columns else np.zeros(len(date_index), dtype=float)
+        mv += qty_vec * px_vec * float(mult_map.get(sym, 1.0))
+
+    contribution = pd.Series(0.0, index=date_index)
+    realized_adjustment_day = pd.Series(0.0, index=date_index)
+    if not tr.empty:
+        # CSV_REALIZED rows are realized-lot adjustments; keep them out of sleeve capital flow.
+        tr["contribution"] = np.where(tr["source"] == "CSV_REALIZED", 0.0, -tr["cash_flow"].astype(float))
+        tr["realized_adjustment"] = np.where(
+            (tr["source"] == "CSV_REALIZED") | (np.abs(tr["cash_flow"].astype(float)) <= 1e-12),
+            tr["realized_pl"].astype(float),
+            0.0,
+        )
+        flow_day = tr.groupby("trade_date")["contribution"].sum()
+        contribution += flow_day.reindex(contribution.index.strftime("%Y-%m-%d")).fillna(0.0).to_numpy(dtype=float)
+        realized_group = tr.groupby("trade_date")["realized_adjustment"].sum()
+        realized_adjustment_day += realized_group.reindex(realized_adjustment_day.index.strftime("%Y-%m-%d")).fillna(0.0).to_numpy(dtype=float)
+
+    sector_weight_denom = np.zeros(len(mv), dtype=float)
+    if abs(float(sector_target_weight or 0.0)) > 1e-12 and account_label != "ALL":
+        def _load_account_nav(conn):
+            where, params = _account_where(conn, account)
+            cur = conn.cursor()
+            cur.execute(
+                f"""
+                SELECT date, nav
+                FROM nav_snapshots
+                WHERE {where}
+                  AND date>=?
+                ORDER BY date ASC
+                """,
+                params + [dates[0]],
+            )
+            return _fetch_rows(cur)
+
+        nav_rows = with_conn(_load_account_nav)
+        if nav_rows:
+            nav_map: Dict[str, float] = {}
+            for row in nav_rows:
+                d = str(row.get("date") if isinstance(row, dict) else row[0] or "")
+                try:
+                    nav_val = float(row.get("nav") if isinstance(row, dict) else row[1] or 0.0)
+                except Exception:
+                    nav_val = 0.0
+                if d and np.isfinite(nav_val) and nav_val > 0:
+                    nav_map[d] = nav_val
+            alloc_weight = abs(float(sector_target_weight)) / 100.0
+            last_nav = 0.0
+            for idx, d in enumerate(dates):
+                nav_val = float(nav_map.get(str(d), 0.0))
+                if nav_val > 0:
+                    last_nav = nav_val
+                if last_nav > 0:
+                    sector_weight_denom[idx] = last_nav * alloc_weight
+
+    twr = np.ones(len(mv), dtype=float)
+    for i in range(1, len(mv)):
+        denom = float(mv[i - 1])
+        flow = float(contribution.iloc[i]) if len(contribution) else 0.0
+        realized_adjustment = float(realized_adjustment_day.iloc[i]) if len(realized_adjustment_day) else 0.0
+        effective_denom = denom
+        if abs(effective_denom) <= 1e-12 and sector_baseline > 1e-12:
+            effective_denom = float(sector_baseline)
+        if abs(effective_denom) <= 1e-12 and i - 1 < len(sector_weight_denom):
+            weighted_alloc = float(sector_weight_denom[i - 1])
+            if weighted_alloc > 1e-12:
+                effective_denom = weighted_alloc
+        if abs(effective_denom) > 1e-12:
+            r = (float(mv[i]) - float(mv[i - 1]) - flow + realized_adjustment) / effective_denom
+            if np.isfinite(r):
+                twr[i] = twr[i - 1] * (1.0 + r)
+            else:
+                twr[i] = twr[i - 1]
+        else:
+            twr[i] = twr[i - 1]
+
+    ret = (twr - 1.0) * 100.0
+    out = pd.DataFrame({"date": dates, "sector": ret})
+    out = out.tail(int(limit))
+    return [{"date": str(r["date"]), "sector": float(r["sector"])} for _, r in out.iterrows()]
 
 
 # ----------------------------
@@ -2541,6 +3257,13 @@ def rebuild_nav_history(limit: int = 1500, account: Optional[str] = None) -> Dic
         bench_map: Dict[str, float] = {}
         if bench_series is not None and len(bench_series):
             bench_map = {str(r["d"]): float(r["close"]) for _, r in bench_series.iterrows()}
+        first_bench = None
+        if bench_map:
+            try:
+                first_bench = float(bench_map[min(bench_map.keys())])
+            except Exception:
+                first_bench = None
+        last_bench = first_bench if first_bench and first_bench > 0 else None
         points = []
         for _, row in nav_df.iterrows():
             d = str(row["d"])
@@ -2550,22 +3273,36 @@ def rebuild_nav_history(limit: int = 1500, account: Optional[str] = None) -> Dic
                     twr_val = float(row["twr"])
             except Exception:
                 twr_val = None
+            bench_val = 1.0
+            if bench_map:
+                try:
+                    raw = float(bench_map.get(d)) if d in bench_map else None
+                except Exception:
+                    raw = None
+                if raw is not None and raw > 0:
+                    last_bench = raw
+                if last_bench is not None and last_bench > 0:
+                    bench_val = float(last_bench)
             points.append(
                 {
                     "date": d,
                     "nav": float(row["nav"]),
-                    "bench": float(bench_map.get(d, row["nav"])) if bench_map else float(row["nav"]),
+                    "bench": float(bench_val),
                     "twr": twr_val,
                 }
             )
     def _run(conn):
-        where, params = _account_where(conn, account)
         cur = conn.cursor()
-        cur.execute(f"DELETE FROM nav_snapshots WHERE {where}", params)
+        label = _account_label(account)
+        if label == "ALL":
+            # Full rebuild for aggregate scope should clear stale per-account + ALL rows.
+            cur.execute("DELETE FROM nav_snapshots")
+        else:
+            cur.execute("DELETE FROM nav_snapshots WHERE account=?", (label,))
         for row in points:
             cur.execute(
                 "INSERT OR REPLACE INTO nav_snapshots(account, date, nav, bench) VALUES(?,?,?,?)",
-                (_account_label(account), row["date"], float(row["nav"]), float(row.get("bench") or row["nav"])),
+                (label, row["date"], float(row["nav"]), float(row.get("bench") or row["nav"])),
             )
         conn.commit()
     with_conn(_run)
@@ -2590,8 +3327,11 @@ def store_nav_snapshot(account: Optional[str], date_str: str, nav: float, bench:
 def clear_nav_history(account: Optional[str] = None) -> Dict[str, Any]:
     def _run(conn):
         cur = conn.cursor()
-        where, params = _account_where(conn, account)
-        cur.execute(f"DELETE FROM nav_snapshots WHERE {where}", params)
+        label = _account_label(account)
+        if label == "ALL":
+            cur.execute("DELETE FROM nav_snapshots")
+        else:
+            cur.execute("DELETE FROM nav_snapshots WHERE account=?", (label,))
         conn.commit()
     with_conn(_run)
     _clear_nav_cache()

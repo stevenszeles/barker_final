@@ -1,6 +1,6 @@
 from datetime import datetime
 import uuid
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from ..config import settings
 from . import legacy_engine as engine
@@ -17,18 +17,24 @@ def _stamp():
     }
 
 
-def get_blotter(limit: int = 200) -> Dict[str, Any]:
+def get_blotter(limit: int = 200, account: Optional[str] = None) -> Dict[str, Any]:
     def _run(conn):
         cur = conn.cursor()
+        where = "1=1"
+        params: list[Any] = []
+        if account and str(account).strip().upper() != "ALL":
+            where = "account=?"
+            params.append(str(account).strip())
         cur.execute(
-            """
-            SELECT trade_id, ts, trade_date, instrument_id, symbol, side, qty, price, trade_type, status, source,
-                   asset_class, underlying, expiry, strike, option_type, multiplier, strategy_id, strategy_name
+            f"""
+            SELECT trade_id, ts, trade_date, account, instrument_id, symbol, side, qty, price, trade_type, status, source,
+                   asset_class, underlying, expiry, strike, option_type, multiplier, strategy_id, strategy_name, sector, realized_pl
             FROM trades
+            WHERE {where}
             ORDER BY ts DESC
             LIMIT ?
             """,
-            (limit,),
+            [*params, int(limit)],
         )
         rows = [dict(r) for r in cur.fetchall()]
         return rows

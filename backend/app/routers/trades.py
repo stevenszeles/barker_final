@@ -84,9 +84,9 @@ class ReplacePayload(BaseModel):
 
 
 @router.get("/blotter", response_model=TradeBlotter)
-def blotter(limit: int = 200):
+def blotter(limit: int = 200, account: Optional[str] = None):
     try:
-        return get_blotter(limit=limit)
+        return get_blotter(limit=limit, account=account)
     except Exception as exc:
         _raise_trade_error(exc)
 

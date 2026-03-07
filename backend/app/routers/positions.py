@@ -20,6 +20,7 @@ class PositionPayload(BaseModel):
     option_type: Optional[str] = None
     multiplier: Optional[float] = None
     owner: Optional[str] = None
+    label: Optional[str] = None
     entry_date: Optional[str] = None
     sector: Optional[str] = None
     strategy: Optional[str] = None
@@ -48,7 +49,10 @@ def list_positions(account: Optional[str] = None):
 @router.post("")
 def upsert(payload: PositionPayload):
     try:
-        portfolio.upsert_position(payload.model_dump(exclude_unset=True))
+        data = payload.model_dump(exclude_unset=True)
+        if (not data.get("owner")) and data.get("label"):
+            data["owner"] = data.get("label")
+        portfolio.upsert_position(data)
         return {"ok": True}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -94,6 +98,8 @@ def bulk_upsert(payload: BulkPayload):
         use_override = bool(account_override) and account_override.upper() != "ALL"
         for row in payload.positions:
             data = row.model_dump(exclude_unset=True)
+            if (not data.get("owner")) and data.get("label"):
+                data["owner"] = data.get("label")
             if use_override:
                 data["account"] = account_override
             row_account = str(data.get("account") or "").strip()
