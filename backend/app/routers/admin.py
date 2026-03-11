@@ -145,11 +145,15 @@ def get_shared_dashboard_state():
             (SHARED_DASHBOARD_STATE_KEY, SHARED_DASHBOARD_STATE_UPDATED_AT_KEY),
         )
         rows = cur.fetchall()
-        return {
-            row[0]: row[1]
-            for row in rows
-            if row and len(row) >= 2 and row[0]
-        }
+        values = {}
+        for row in rows:
+            if row is None:
+                continue
+            key = row[0]
+            if not key:
+                continue
+            values[key] = row[1]
+        return values
 
     stored = with_conn(_run)
     raw_state = stored.get(SHARED_DASHBOARD_STATE_KEY)
