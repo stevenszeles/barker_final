@@ -1420,26 +1420,32 @@ export default function App() {
       }
 
       const totalDollarReturn = openDollarReturn + closedDollarReturn;
-      const initialAllocationDollarBase = openInitialAllocation + realizedCostBase;
-      const comparisonDollarBase = initialAllocationDollarBase > 0
-        ? initialAllocationDollarBase
-        : targetDollarBase > 0
-          ? targetDollarBase
+      const reconstructedInitialAllocationBase = openInitialAllocation + realizedCostBase;
+      const sectorReturnBase = targetDollarBase > 0
+        ? targetDollarBase
+        : reconstructedInitialAllocationBase > 0
+          ? reconstructedInitialAllocationBase
           : actualDollarBase > 0
             ? actualDollarBase
-            : benchmarkDollarBase > 0
-              ? benchmarkDollarBase
-              : value;
-      const portfolioRelativeReturn = initialAllocationDollarBase > 0
-        ? (totalDollarReturn / initialAllocationDollarBase) * 100
-        : comparisonDollarBase > 0
-          ? (totalDollarReturn / comparisonDollarBase) * 100
+            : value;
+      const portfolioRelativeReturn = reconstructedInitialAllocationBase > 0
+        ? (totalDollarReturn / reconstructedInitialAllocationBase) * 100
+        : sectorReturnBase > 0
+          ? (totalDollarReturn / sectorReturnBase) * 100
           : null;
-      const targetRelativeReturn = targetDollarBase > 0 ? (totalDollarReturn / targetDollarBase) * 100 : portfolioRelativeReturn;
-      const alphaReturn = portfolioRelativeReturn !== null && totalReturn !== null ? portfolioRelativeReturn - totalReturn : null;
+      const targetRelativeReturn = sectorReturnBase > 0 ? (totalDollarReturn / sectorReturnBase) * 100 : null;
+      const benchmarkRelativeReturn = benchmarkDollarBase > 0 ? (totalDollarReturn / benchmarkDollarBase) * 100 : null;
+      const alphaReturn = benchmarkRelativeReturn !== null && totalReturn !== null ? benchmarkRelativeReturn - totalReturn : null;
       const sleeveAlphaReturn = targetRelativeReturn !== null && totalReturn !== null ? targetRelativeReturn - totalReturn : null;
       const benchmarkReturnDollar = totalReturn !== null && benchmarkDollarBase > 0 ? benchmarkDollarBase * (totalReturn / 100) : null;
       const portfolioContribution = sectorStartAccountValue > 0 ? (totalDollarReturn / sectorStartAccountValue) * 100 : null;
+      const sectorReturnBaseLabel = targetDollarBase > 0
+        ? 'Target allocation'
+        : reconstructedInitialAllocationBase > 0
+          ? 'Initial sleeve allocation'
+          : actualDollarBase > 0
+            ? 'Live actual allocation'
+            : 'Current sector value';
       return {
         name,
         etf: benchmarkSymbol,
@@ -1463,16 +1469,19 @@ export default function App() {
         sleeveGap: actualWeight - targetWeight,
         unrealizedGain: value - cost,
         unrealizedReturn: cost > 0 ? ((value - cost) / cost) * 100 : null,
-        sectorReturn: portfolioRelativeReturn,
+        sectorReturn: targetRelativeReturn,
         benchmarkReturn: totalReturn,
         totalReturn,
         benchmarkDollarBase,
         targetDollarBase,
-        initialAllocationDollarBase,
-        comparisonDollarBase,
+        initialAllocationDollarBase: reconstructedInitialAllocationBase,
+        sectorReturnBase,
+        sectorReturnBaseLabel,
+        comparisonDollarBase: sectorReturnBase,
         benchmarkReturnDollar,
         portfolioRelativeReturn,
         targetRelativeReturn,
+        benchmarkRelativeReturn,
         alphaReturn,
         sleeveAlphaReturn,
         openDollarReturn,
@@ -1545,7 +1554,7 @@ export default function App() {
     const target = sectorAttribution.reduce((sum, s) => sum + s.targetWeight, 0);
     const actual = sectorAttribution.reduce((sum, s) => sum + s.actualWeight, 0);
     const classified = sectorAttribution.reduce((sum, s) => sum + s.value, 0);
-    const totalComparisonBase = sectorAttribution.reduce((sum, s) => sum + (s.comparisonDollarBase || 0), 0);
+    const totalComparisonBase = sectorAttribution.reduce((sum, s) => sum + (s.sectorReturnBase || 0), 0);
     const totalAlphaDollar = sectorAttribution.reduce((sum, s) => {
       if ((s.actualAllocationAlpha ?? null) === null || !s.comparisonDollarBase) return sum;
       return sum + ((s.actualAllocationAlpha / 100) * s.comparisonDollarBase);
@@ -1639,7 +1648,7 @@ export default function App() {
       const totalDollarReturn = openDollarReturn + closedDollarReturn;
       return {
         date,
-        portfolioPct: sectorDetail.initialAllocationDollarBase > 0 ? (totalDollarReturn / sectorDetail.initialAllocationDollarBase) * 100 : null,
+        portfolioPct: sectorDetail.sectorReturnBase > 0 ? (totalDollarReturn / sectorDetail.sectorReturnBase) * 100 : null,
         benchmarkPct: benchmarkBase && benchmarkValue !== null ? ((benchmarkValue - benchmarkBase) / benchmarkBase) * 100 : null,
         totalDollarReturn,
         openDollarReturn,
@@ -2380,7 +2389,7 @@ export default function App() {
                   <div style={{ background:'#111', border:'1px solid rgba(255,255,255,0.06)', borderRadius:'2px', padding:'12px' }}>
                     <div style={{ color:'#555', fontSize:'10px', marginBottom:'6px' }}>SECTOR RETURN</div>
                     <div style={{ color: sectorDetail.sectorReturn >= 0 ? '#00e676' : '#ff4444', fontSize:'18px', fontWeight:700 }}>{fmtPct(sectorDetail.sectorReturn)}</div>
-                    <div style={{ color:'#777', fontSize:'11px', marginTop:'4px' }}>Using reconstructed initial sleeve dollars for {sectorTimeframe} · Base {fmt$(sectorDetail.initialAllocationDollarBase)} · Benchmark {sectorDetail.benchmarkSymbol} {fmtPct(sectorDetail.benchmarkReturn)}</div>
+                    <div style={{ color:'#777', fontSize:'11px', marginTop:'4px' }}>{sectorDetail.sectorReturnBaseLabel} base for {sectorTimeframe} · Base {fmt$(sectorDetail.sectorReturnBase)} · Reconstructed sleeve {fmtPct(sectorDetail.portfolioRelativeReturn)} · Benchmark {sectorDetail.benchmarkSymbol} {fmtPct(sectorDetail.benchmarkReturn)}</div>
                   </div>
                 </div>
               ) : (
