@@ -1897,6 +1897,24 @@ export default function App() {
     });
   }, [editableSectorScope]);
 
+  const updateSectorTargetWeight = useCallback((sectorName, nextWeight) => {
+    if (!editableSectorScope) return;
+    setSectorTargetsByAccount(prev => {
+      const currentScope = prev[editableSectorScope] || buildInitialSectorTargets();
+      const current = currentScope[sectorName] || { benchmarkWeight: 0, targetWeight: 0 };
+      return {
+        ...prev,
+        [editableSectorScope]: {
+          ...currentScope,
+          [sectorName]: {
+            benchmarkWeight: Number.isFinite(current.benchmarkWeight) ? current.benchmarkWeight : 0,
+            targetWeight: nextWeight,
+          },
+        },
+      };
+    });
+  }, [editableSectorScope]);
+
   const togglePerformanceAggregate = useCallback(() => {
     setPerformanceChartSelection((prev) => ({ ...prev, aggregate: !prev.aggregate }));
   }, []);
@@ -2499,6 +2517,32 @@ export default function App() {
                     <div style={{ color:'#555', fontSize:'10px', marginBottom:'6px' }}>TARGET SPLIT</div>
                     <div style={{ color:'#7c4dff', fontSize:'18px', fontWeight:700 }}>{fmtPct(sectorDetail.targetWeight)}</div>
                     <div style={{ color:'#777', fontSize:'11px', marginTop:'4px' }}>ETF {fmtPct(sectorDetail.targetEtfWeight)} · Alpha {fmtPct(sectorDetail.targetAlphaWeight)}</div>
+                    {editableSectorScope && (
+                      <div style={{ display:'flex', gap:'8px', marginTop:'10px', flexWrap:'wrap' }}>
+                        <label style={{ display:'flex', flexDirection:'column', gap:'4px', color:'#666', fontSize:'9px', textTransform:'uppercase', letterSpacing:'0.08em' }}>
+                          Benchmark
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.1"
+                            value={resolvedSectorTargets[sectorDetail.name]?.benchmarkWeight ?? 0}
+                            onChange={(e) => updateSectorBenchmarkWeight(sectorDetail.name, parseFloat(e.target.value || '0') || 0)}
+                            style={{ ...S.input, minWidth:'82px', padding:'4px 6px', fontSize:'10px' }}
+                          />
+                        </label>
+                        <label style={{ display:'flex', flexDirection:'column', gap:'4px', color:'#666', fontSize:'9px', textTransform:'uppercase', letterSpacing:'0.08em' }}>
+                          Target
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.1"
+                            value={resolvedSectorTargets[sectorDetail.name]?.targetWeight ?? 0}
+                            onChange={(e) => updateSectorTargetWeight(sectorDetail.name, parseFloat(e.target.value || '0') || 0)}
+                            style={{ ...S.input, minWidth:'82px', padding:'4px 6px', fontSize:'10px' }}
+                          />
+                        </label>
+                      </div>
+                    )}
                   </div>
                   <div style={{ background:'#111', border:'1px solid rgba(255,255,255,0.06)', borderRadius:'2px', padding:'12px' }}>
                     <div style={{ color:'#555', fontSize:'10px', marginBottom:'6px' }}>ACTUAL SPLIT</div>
@@ -2532,7 +2576,7 @@ export default function App() {
             <div style={S.tableWrapper}>
               <table style={S.table}>
                 <thead>
-                  <tr>{['Sector','Benchmark','Sector Ret %','Bench %','Active Wt','Benchmark Wt','Vs Bench','Target Wt','ETF / Alpha','Target 70/30','Wtd Bench','Wtd Active','Target α','Decision α','Benchmark Input','Target Bias','Positions'].map(h => <th key={h} style={S.th}>{h}</th>)}</tr>
+                  <tr>{['Sector','Benchmark','Sector Ret %','Bench %','Active Wt','Benchmark Wt','Vs Bench','Target Wt','ETF / Alpha','Target 70/30','Wtd Bench','Wtd Active','Target α','Decision α','Benchmark Input','Target Input','Target Bias','Positions'].map(h => <th key={h} style={S.th}>{h}</th>)}</tr>
                 </thead>
                 <tbody>
                   {sectorAttribution.map(s => (
@@ -2566,6 +2610,18 @@ export default function App() {
                         />
                       </td>
                       <td style={S.td}>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.1"
+                          value={resolvedSectorTargets[s.name]?.targetWeight ?? 0}
+                          disabled={!editableSectorScope}
+                          onClick={e => e.stopPropagation()}
+                          onChange={e => updateSectorTargetWeight(s.name, parseFloat(e.target.value || '0') || 0)}
+                          style={{ ...S.input, minWidth:'76px', padding:'4px 6px', fontSize:'10px', opacity: editableSectorScope ? 1 : 0.55 }}
+                        />
+                      </td>
+                      <td style={S.td}>
                         <div style={{ display:'flex', gap:'4px', flexWrap:'wrap', opacity: editableSectorScope ? 1 : 0.5 }}>
                           <button type="button" onClick={e => { e.stopPropagation(); setSectorAllocationBias(s.name, 'underweight'); }}
                             disabled={!editableSectorScope}
@@ -2587,7 +2643,7 @@ export default function App() {
                       <td style={S.td}>{s.positions.length}</td>
                     </tr>
                   ))}
-                  {sectorAttribution.length === 0 && <tr><td colSpan={17} style={{ ...S.td, textAlign:'center', color:'#333', padding:'32px' }}>Upload positions file to view sector breakdown</td></tr>}
+                  {sectorAttribution.length === 0 && <tr><td colSpan={18} style={{ ...S.td, textAlign:'center', color:'#333', padding:'32px' }}>Upload positions file to view sector breakdown</td></tr>}
                 </tbody>
               </table>
             </div>
