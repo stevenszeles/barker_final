@@ -89,12 +89,12 @@ def stooq_daily_history(
 
     rows = ["Date,Open,High,Low,Close,Volume"]
     for row in history:
-        date = row.get("date")
+        point_date = row.get("date")
         close = row.get("close")
-        if not date or close is None:
+        if not point_date or close is None:
             continue
         value = f"{float(close):.6f}".rstrip("0").rstrip(".")
-        rows.append(f"{date},{value},{value},{value},{value},0")
+        rows.append(f"{point_date},{value},{value},{value},{value},0")
 
     if len(rows) == 1:
         raise HTTPException(status_code=404, detail=f"No history found for {s}")
