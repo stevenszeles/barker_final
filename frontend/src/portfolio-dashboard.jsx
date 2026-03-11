@@ -579,7 +579,7 @@ function toStooqSymbol(symbol) {
   return normalized ? `${normalized}.us` : null;
 }
 
-function parseStooqHistory(text, days = 730) {
+function parseStooqHistory(text, days = 3650) {
   const cutoff = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
   return text
     .trim()
@@ -595,14 +595,23 @@ function parseStooqHistory(text, days = 730) {
     .filter(([date]) => date >= cutoff);
 }
 
-async function loadBenchmarkHistorySeries(symbol, { days = 730 } = {}) {
+async function loadBenchmarkHistorySeries(symbol, { days = 3650, retries = 1 } = {}) {
   const stooqSymbol = toStooqSymbol(symbol);
   if (!stooqSymbol) throw new Error(`No benchmark data for ${symbol}`);
   const url = `/api/stooq/q/d/l/?s=${encodeURIComponent(stooqSymbol)}&i=d`;
-  const res = await fetch(url);
-  const text = await res.text();
-  if (!res.ok || !text.startsWith("Date,")) throw new Error(`No benchmark data for ${symbol}`);
-  return parseStooqHistory(text, days);
+  let lastError = null;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      const res = await fetch(url);
+      const text = await res.text();
+      if (!res.ok || !text.startsWith("Date,")) throw new Error(`No benchmark data for ${symbol}`);
+      return parseStooqHistory(text, days);
+    } catch (error) {
+      lastError = error;
+      if (attempt < retries) await new Promise((resolve) => setTimeout(resolve, 180));
+    }
+  }
+  throw lastError || new Error(`No benchmark data for ${symbol}`);
 }
 
 function fmt$(n) { if (n===undefined||n===null||isNaN(n)) return '--'; return new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',minimumFractionDigits:0,maximumFractionDigits:0}).format(n); }
@@ -983,7 +992,7 @@ export default function App() {
 
       for (const request of requests) {
         try {
-          const series = await loadBenchmarkHistorySeries(request.symbol, { days: 730 });
+          const series = await loadBenchmarkHistorySeries(request.symbol, { days: 3650, retries: 2 });
           if (request.key === 'SPX') {
             nextSPXData = series;
             setSpxData(series);
@@ -1308,7 +1317,7 @@ export default function App() {
 
       for (const { key, symbol } of missingSymbols) {
         try {
-          loaded[key] = await loadBenchmarkHistorySeries(symbol, { days: 730 });
+          loaded[key] = await loadBenchmarkHistorySeries(symbol, { days: 3650, retries: 2 });
         } catch (error) {
           console.warn(`Security history fetch failed for ${symbol}`, error);
         }
@@ -1648,6 +1657,39 @@ export default function App() {
     () => sectorAttribution.find(s => s.name === selectedSector) || sectorAttribution[0] || null,
     [sectorAttribution, selectedSector],
   );
+
+  useEffect(() => {
+    if (!selectedSector || MANUAL_ONLY_SECTORS.some((sector) => sector.name === selectedSector)) return undefined;
+    if (sectorBenchmarkData[selectedSector]?.length) return undefined;
+    const symbol = SECTOR_TO_ETF[selectedSector];
+    if (!symbol) return undefined;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const series = await loadBenchmarkHistorySeries(symbol, { days: 3650, retries: 2 });
+        if (cancelled || !series.length) return;
+        setSectorBenchmarkData((prev) => {
+          const next = { ...prev, [selectedSector]: series };
+          const cached = loadJSONStorage(MARKET_CACHE_STORAGE_KEY, null) || {};
+          saveJSONStorage(MARKET_CACHE_STORAGE_KEY, {
+            ...cached,
+            provider: cached.provider || 'stooq',
+            updatedAt: new Date().toISOString(),
+            spxData: cached.spxData || spxData,
+            sectorBenchmarkData: next,
+          });
+          return next;
+        });
+      } catch (error) {
+        console.warn(`On-demand benchmark fetch failed for ${selectedSector}`, error);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sectorBenchmarkData, selectedSector, spxData]);
 
   const sectorComparisonChart = useMemo(() => {
     if (!sectorDetail) return [];
