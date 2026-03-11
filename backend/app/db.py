@@ -104,6 +104,12 @@ def _adapt_sql(sql: str) -> str:
     return _replace_placeholders(rewritten)
 
 
+def _auto_increment_pk_sql() -> str:
+    if _is_postgres():
+        return "BIGSERIAL PRIMARY KEY"
+    return "INTEGER PRIMARY KEY AUTOINCREMENT"
+
+
 class _RowProxy:
     def __init__(self, data: dict, columns: list[str]):
         self._data = data
@@ -273,9 +279,9 @@ def ensure_schema() -> None:
         """
     )
     cur.execute(
-        """
+        f"""
         CREATE TABLE IF NOT EXISTS cash_flows (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id {_auto_increment_pk_sql()},
             account TEXT NOT NULL DEFAULT 'ALL',
             date TEXT NOT NULL,
             amount REAL NOT NULL,
