@@ -6,7 +6,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import settings
 from .routers import portfolio, risk, trades, status
-from .routers import auth, broker, market, positions, admin
+from .routers import auth, broker, market, positions, admin, stooq_proxy
 from .workers import start_workers
 from .db import ensure_schema
 from .bootstrap_seed import seed_demo_portfolio_if_empty
@@ -74,6 +74,7 @@ app.include_router(status.router, prefix=settings.api_prefix)
 app.include_router(auth.router, prefix=settings.api_prefix)
 app.include_router(broker.router, prefix=settings.api_prefix)
 app.include_router(market.router, prefix=settings.api_prefix)
+app.include_router(stooq_proxy.router, prefix=settings.api_prefix)
 app.include_router(positions.router, prefix=settings.api_prefix)
 app.include_router(admin.router, prefix=settings.api_prefix)
 
