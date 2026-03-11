@@ -856,6 +856,60 @@ function signalPanelStyle(color = '#9aa4b2') {
   };
 }
 
+function buildDailyReturnMap(series) {
+  if (!series?.length || series.length < 2) return new Map();
+  const returns = new Map();
+  for (let i = 1; i < series.length; i += 1) {
+    const prev = series[i - 1]?.[1];
+    const curr = series[i]?.[1];
+    const date = series[i]?.[0];
+    if (!date || !Number.isFinite(prev) || !Number.isFinite(curr) || prev === 0) continue;
+    returns.set(date, (curr - prev) / prev);
+  }
+  return returns;
+}
+
+function computeCorrelation(aMap, bMap) {
+  if (!aMap?.size || !bMap?.size) return { value: null, observations: 0 };
+  const xs = [];
+  const ys = [];
+  const [smaller, larger] = aMap.size <= bMap.size ? [aMap, bMap] : [bMap, aMap];
+  smaller.forEach((value, date) => {
+    if (!larger.has(date)) return;
+    const paired = larger.get(date);
+    if (!Number.isFinite(value) || !Number.isFinite(paired)) return;
+    xs.push(aMap.get(date));
+    ys.push(bMap.get(date));
+  });
+  const n = xs.length;
+  if (n < 3) return { value: null, observations: n };
+  const meanX = xs.reduce((sum, value) => sum + value, 0) / n;
+  const meanY = ys.reduce((sum, value) => sum + value, 0) / n;
+  let cov = 0;
+  let varX = 0;
+  let varY = 0;
+  for (let i = 0; i < n; i += 1) {
+    const dx = xs[i] - meanX;
+    const dy = ys[i] - meanY;
+    cov += dx * dy;
+    varX += dx * dx;
+    varY += dy * dy;
+  }
+  if (varX <= 0 || varY <= 0) return { value: null, observations: n };
+  return {
+    value: cov / Math.sqrt(varX * varY),
+    observations: n,
+  };
+}
+
+function correlationColor(value) {
+  if (!Number.isFinite(value)) return 'rgba(85, 92, 102, 0.18)';
+  const clamped = Math.max(-1, Math.min(1, value));
+  if (Math.abs(clamped) < 0.0001) return 'rgba(120, 128, 138, 0.18)';
+  if (clamped > 0) return `rgba(0, 230, 118, ${0.14 + Math.abs(clamped) * 0.42})`;
+  return `rgba(255, 68, 68, ${0.14 + Math.abs(clamped) * 0.42})`;
+}
+
 function formatDeskTime(timeZone, options = {}) {
   return new Intl.DateTimeFormat('en-US', {
     timeZone,
@@ -903,6 +957,7 @@ export default function App() {
   const [selectedAccount, setSelectedAccount] = useState(persisted.selectedAccount || 'ALL');
   const [showBenchmark, setShowBenchmark] = useState(persisted.showBenchmark ?? true);
   const [selectedSector, setSelectedSector] = useState(persisted.selectedSector || SP500_SECTORS[0].name);
+  const [riskMatrixMode, setRiskMatrixMode] = useState(persisted.riskMatrixMode || 'sectors');
   const [sectorTargetsByAccount, setSectorTargetsByAccount] = useState(() =>
     normalizeSectorTargetsByAccount(persisted.sectorTargetsByAccount || persisted.sectorTargets),
   );
@@ -969,11 +1024,12 @@ export default function App() {
       selectedAccount,
       showBenchmark,
       selectedSector,
+      riskMatrixMode,
       sectorTargetsByAccount,
       sectorOverrides,
       performanceChartSelection,
     });
-  }, [timeframe, sectorTimeframe, accounts, balanceHistory, realizedTrades, selectedAccount, showBenchmark, selectedSector, sectorTargetsByAccount, sectorOverrides, performanceChartSelection]);
+  }, [timeframe, sectorTimeframe, accounts, balanceHistory, realizedTrades, selectedAccount, showBenchmark, selectedSector, riskMatrixMode, sectorTargetsByAccount, sectorOverrides, performanceChartSelection]);
 
   useEffect(() => {
     saveJSONStorage(SECURITY_HISTORY_STORAGE_KEY, securityHistoryData);
@@ -997,6 +1053,7 @@ export default function App() {
     setSecurityHistoryData({});
     setSecurityHistoryLoading(false);
     setSelectedSector(SP500_SECTORS[0].name);
+    setRiskMatrixMode('sectors');
     setShowBenchmark(true);
     setTimeframe('1Y');
     setSectorTimeframe('1Y');
@@ -1656,6 +1713,73 @@ export default function App() {
       };
     }).filter((row) => row.portfolioPct !== null || row.benchmarkPct !== null);
   }, [filteredSectorHistory, getPositionHistorySeries, sectorAccountHistory, sectorDetail, selectedRealizedTradesWithDates, selectedSector]);
+
+  const sectorCorrelationItems = useMemo(() => {
+    return sectorAttribution
+      .filter((sector) => sector.positions.length > 0 || Math.abs(sector.actualWeight) > 0.01)
+      .map((sector) => {
+        const history = filterByTimeframe(
+          sectorBenchmarkData[sector.name]
+          || (MANUAL_ONLY_SECTORS.some((manualSector) => manualSector.name === sector.name) ? spxData : []),
+          timeframe,
+        );
+        return {
+          key: `sector:${sector.name}`,
+          label: sector.name,
+          sublabel: sector.benchmarkSymbol,
+          color: sector.color,
+          valueLabel: fmtPct(sector.actualWeight),
+          returns: buildDailyReturnMap(history),
+        };
+      })
+      .filter((item) => item.returns.size >= 3)
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [sectorAttribution, sectorBenchmarkData, spxData, timeframe]);
+
+  const positionCorrelationItems = useMemo(() => {
+    return [...selectedPositions]
+      .filter((position) => position.historySymbol || position.isSectorETF)
+      .sort((a, b) => Math.abs(b.mktVal || 0) - Math.abs(a.mktVal || 0))
+      .slice(0, 12)
+      .map((position) => {
+        const history = filterByTimeframe(getPositionHistorySeries(position), timeframe);
+        return {
+          key: `position:${position.account}:${position.symbol}`,
+          label: position.symbol,
+          sublabel: position.account?.split('...')[1] ? `...${position.account.split('...')[1]}` : position.account,
+          color: position.mainSector ? (SECTOR_COLORS[position.mainSector] || '#8f99a3') : '#8f99a3',
+          valueLabel: fmt$(position.mktVal),
+          returns: buildDailyReturnMap(history),
+        };
+      })
+      .filter((item) => item.returns.size >= 3);
+  }, [getPositionHistorySeries, selectedPositions, timeframe]);
+
+  const riskCorrelationItems = useMemo(
+    () => (riskMatrixMode === 'positions' ? positionCorrelationItems : sectorCorrelationItems),
+    [positionCorrelationItems, riskMatrixMode, sectorCorrelationItems],
+  );
+
+  const riskCorrelationMatrix = useMemo(
+    () => riskCorrelationItems.map((rowItem, rowIndex) => (
+      riskCorrelationItems.map((columnItem, columnIndex) => {
+        if (rowIndex === columnIndex) return { value: 1, observations: rowItem.returns.size };
+        return computeCorrelation(rowItem.returns, columnItem.returns);
+      })
+    )),
+    [riskCorrelationItems],
+  );
+
+  const riskCorrelationMeta = useMemo(() => {
+    const seriesCounts = riskCorrelationItems.map((item) => item.returns.size);
+    const minObs = seriesCounts.length ? Math.min(...seriesCounts) : 0;
+    const maxObs = seriesCounts.length ? Math.max(...seriesCounts) : 0;
+    return {
+      itemCount: riskCorrelationItems.length,
+      minObs,
+      maxObs,
+    };
+  }, [riskCorrelationItems]);
 
   // Realized P&L by sector
   const realizedBySector = useMemo(() => {
@@ -2586,6 +2710,100 @@ export default function App() {
                     <div style={{ fontSize:'10px', color:'#444' }}>{desc}</div>
                   </div>
                 ))}
+              </div>
+
+              <div style={{ ...S.card, marginBottom:'16px' }}>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:'12px', marginBottom:'12px', flexWrap:'wrap' }}>
+                  <div>
+                    <div style={S.cardTitle}>CORRELATION MATRIX</div>
+                    <div style={{ color:'#666', fontSize:'11px', marginTop:'4px', lineHeight:'1.5' }}>
+                      {riskMatrixMode === 'positions'
+                        ? `Top ${riskCorrelationItems.length} positions by absolute market value with historical series over ${timeframe}. Options and instruments without history are excluded.`
+                        : `Sector proxy correlations over ${timeframe}. S&P sectors use sector ETFs and manual sectors fall back to SPX.`}
+                    </div>
+                  </div>
+                  <div style={{ display:'flex', gap:'6px', flexWrap:'wrap', alignItems:'center' }}>
+                    <button
+                      type="button"
+                      onClick={() => setRiskMatrixMode('sectors')}
+                      style={{ ...S.btn, ...(riskMatrixMode === 'sectors' ? S.btnActive : {}) }}
+                    >
+                      Sectors
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRiskMatrixMode('positions')}
+                      style={{ ...S.btn, ...(riskMatrixMode === 'positions' ? S.btnActive : {}) }}
+                    >
+                      Positions
+                    </button>
+                  </div>
+                </div>
+
+                {riskCorrelationItems.length ? (
+                  <>
+                    <div style={{ display:'flex', gap:'12px', flexWrap:'wrap', marginBottom:'12px', color:'#666', fontSize:'10px' }}>
+                      <span>{riskCorrelationMeta.itemCount} series</span>
+                      <span>{riskCorrelationMeta.minObs}–{riskCorrelationMeta.maxObs} return observations</span>
+                      <span style={{ color:'#00e676' }}>Positive = green</span>
+                      <span style={{ color:'#ff4444' }}>Negative = red</span>
+                    </div>
+                    <div style={{ overflow:'auto', border:'1px solid rgba(255,255,255,0.06)' }}>
+                      <table style={{ ...S.table, minWidth: `${Math.max(720, riskCorrelationItems.length * 92 + 180)}px` }}>
+                        <thead>
+                          <tr>
+                            <th style={{ ...S.th, position:'sticky', left:0, zIndex:3, background:'#0b0d10', minWidth:'180px' }}>Series</th>
+                            {riskCorrelationItems.map((item) => (
+                              <th key={item.key} style={{ ...S.th, minWidth:'92px', textAlign:'center' }}>
+                                <div style={{ color:item.color || '#d8dce2', fontWeight:700 }}>{item.label}</div>
+                                <div style={{ color:'#666', fontSize:'9px', marginTop:'2px' }}>{item.sublabel || item.valueLabel}</div>
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {riskCorrelationItems.map((rowItem, rowIndex) => (
+                            <tr key={rowItem.key}>
+                              <td style={{ ...S.td, position:'sticky', left:0, zIndex:2, background:'#090c0f', minWidth:'180px' }}>
+                                <div style={{ color:rowItem.color || '#d8dce2', fontWeight:700 }}>{rowItem.label}</div>
+                                <div style={{ color:'#666', fontSize:'10px', marginTop:'2px' }}>{rowItem.sublabel || rowItem.valueLabel}</div>
+                              </td>
+                              {riskCorrelationMatrix[rowIndex].map((cell, columnIndex) => {
+                                const isDiagonal = rowIndex === columnIndex;
+                                const value = cell?.value;
+                                return (
+                                  <td
+                                    key={`${rowItem.key}-${riskCorrelationItems[columnIndex].key}`}
+                                    title={Number.isFinite(value)
+                                      ? `${rowItem.label} vs ${riskCorrelationItems[columnIndex].label}: ${value.toFixed(3)} (${cell.observations} obs)`
+                                      : `${rowItem.label} vs ${riskCorrelationItems[columnIndex].label}: insufficient overlap`}
+                                    style={{
+                                      ...S.td,
+                                      minWidth:'92px',
+                                      textAlign:'center',
+                                      fontWeight:isDiagonal ? 700 : 600,
+                                      color:isDiagonal ? '#f4f6f8' : Number.isFinite(value) ? '#d8dce2' : '#666',
+                                      background:isDiagonal ? 'rgba(244,178,79,0.18)' : correlationColor(value),
+                                      borderColor:isDiagonal ? 'rgba(244,178,79,0.3)' : 'rgba(255,255,255,0.05)',
+                                    }}
+                                  >
+                                    {Number.isFinite(value) ? value.toFixed(2) : '—'}
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ color:'#555', fontSize:'11px', padding:'24px 0', textAlign:'center' }}>
+                    {riskMatrixMode === 'positions'
+                      ? 'No position histories are available yet for the selected account and timeframe.'
+                      : 'No sector histories are available yet for the selected account and timeframe.'}
+                  </div>
+                )}
               </div>
 
               {/* Drawdown chart */}
