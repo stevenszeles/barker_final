@@ -2,6 +2,7 @@ from datetime import datetime, date, timedelta
 from typing import Optional, Dict, Any, List
 import csv
 import io
+import json
 import logging
 import hashlib
 import re
@@ -22,6 +23,8 @@ logger = logging.getLogger(__name__)
 _NAV_REBUILD_LOCK = threading.Lock()
 _NAV_REBUILD_INFLIGHT: set[tuple[str, int]] = set()
 _NAV_REBUILD_SEMAPHORE = threading.Semaphore(1)
+SHARED_DASHBOARD_STATE_KEY = "shared_dashboard_state"
+SHARED_DASHBOARD_STATE_UPDATED_AT_KEY = "shared_dashboard_state_updated_at"
 
 
 class ResetPayload(BaseModel):
@@ -75,6 +78,15 @@ class SectorPerformanceInputPayload(BaseModel):
     target_weight: Optional[float] = None
 
 
+class SharedDashboardStatePayload(BaseModel):
+    state: Dict[str, Any]
+
+
+class SharedDashboardStateResponse(BaseModel):
+    state: Optional[Dict[str, Any]] = None
+    updated_at: Optional[str] = None
+
+
 def _balance_history_mode() -> str:
     raw = str(os.getenv("WS_BALANCE_HISTORY_MODE", "")).strip().lower()
     if raw in {"fast", "full"}:
@@ -122,6 +134,62 @@ def get_benchmark():
 @router.get("/accounts")
 def list_accounts():
     return {"accounts": portfolio_service.get_accounts()}
+
+
+@router.get("/shared-dashboard-state", response_model=SharedDashboardStateResponse)
+def get_shared_dashboard_state():
+    def _run(conn):
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT key, value FROM settings WHERE key IN (?, ?)",
+            (SHARED_DASHBOARD_STATE_KEY, SHARED_DASHBOARD_STATE_UPDATED_AT_KEY),
+        )
+        rows = cur.fetchall()
+        return {
+            row[0]: row[1]
+            for row in rows
+            if row and len(row) >= 2 and row[0]
+        }
+
+    stored = with_conn(_run)
+    raw_state = stored.get(SHARED_DASHBOARD_STATE_KEY)
+    updated_at = stored.get(SHARED_DASHBOARD_STATE_UPDATED_AT_KEY)
+    if not raw_state:
+        return SharedDashboardStateResponse(state=None, updated_at=updated_at)
+
+    try:
+        decoded = json.loads(raw_state)
+    except Exception as exc:
+        logger.warning("Shared dashboard state decode failed: %s", exc)
+        return SharedDashboardStateResponse(state=None, updated_at=updated_at)
+
+    if not isinstance(decoded, dict):
+        logger.warning("Shared dashboard state ignored because payload was not an object")
+        return SharedDashboardStateResponse(state=None, updated_at=updated_at)
+
+    return SharedDashboardStateResponse(state=decoded, updated_at=updated_at)
+
+
+@router.post("/shared-dashboard-state", response_model=SharedDashboardStateResponse)
+def save_shared_dashboard_state(payload: SharedDashboardStatePayload):
+    state = payload.state or {}
+    serialized = json.dumps(state, separators=(",", ":"), sort_keys=True)
+    updated_at = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+    def _run(conn):
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?)",
+            (SHARED_DASHBOARD_STATE_KEY, serialized),
+        )
+        cur.execute(
+            "INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?)",
+            (SHARED_DASHBOARD_STATE_UPDATED_AT_KEY, updated_at),
+        )
+        conn.commit()
+
+    with_conn(_run)
+    return SharedDashboardStateResponse(state=state, updated_at=updated_at)
 
 
 @router.post("/reset")

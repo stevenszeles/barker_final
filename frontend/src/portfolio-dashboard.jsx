@@ -108,10 +108,16 @@ const SECTOR_COLORS = Object.fromEntries([
 ]);
 
 const ACCOUNT_COLORS = ["#00d4ff","#7c4dff","#ff6b35","#00e676","#ffd600","#e91e63","#ff9800","#4caf50","#2196f3","#ff5722","#9c27b0","#00bcd4"];
-const APP_BUILD_VERSION = "2026.03.10.2";
+const APP_BUILD_VERSION = "2026.03.11.1";
 const APP_STATE_STORAGE_KEY = `portfolio-dashboard.app-state.${APP_BUILD_VERSION}`;
+const LEGACY_APP_STATE_STORAGE_KEYS = [
+  "portfolio-dashboard.app-state.2026.03.10.2",
+];
 const MARKET_CACHE_STORAGE_KEY = "portfolio-dashboard.market-cache.v1";
 const SECURITY_HISTORY_STORAGE_KEY = "portfolio-dashboard.security-history.v1";
+const SHARED_DASHBOARD_STATE_ENDPOINT = "/api/admin/shared-dashboard-state";
+const SHARED_DASHBOARD_POLL_MS = 60000;
+const SHARED_DASHBOARD_SAVE_DEBOUNCE_MS = 900;
 
 function loadJSONStorage(key, fallback) {
   if (typeof window === "undefined") return fallback;
@@ -139,6 +145,16 @@ function clearJSONStorage(key) {
   } catch {
     // Ignore storage failures in the browser.
   }
+}
+
+function loadPersistedAppState() {
+  const current = loadJSONStorage(APP_STATE_STORAGE_KEY, null);
+  if (current) return current;
+  for (const key of LEGACY_APP_STATE_STORAGE_KEYS) {
+    const legacy = loadJSONStorage(key, null);
+    if (legacy) return legacy;
+  }
+  return null;
 }
 
 function buildInitialSectorTargets() {
@@ -233,6 +249,54 @@ function normalizePerformanceChartSelection(rawSelection, accountNames = [], fal
     spx: rawSelection?.spx ?? fallbackShowSPX,
     accounts: Object.fromEntries(accountNames.map((name) => [name, !!rawAccounts[name]])),
   };
+}
+
+function asPlainObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function normalizeSharedDashboardState(rawState) {
+  const accounts = asPlainObject(rawState?.accounts);
+  const balanceHistory = asPlainObject(rawState?.balanceHistory);
+  const realizedTrades = Array.isArray(rawState?.realizedTrades) ? rawState.realizedTrades : [];
+  const accountNames = [...new Set([...Object.keys(accounts), ...Object.keys(balanceHistory)])].filter((name) => name && name !== 'ALL');
+  return {
+    accounts,
+    balanceHistory,
+    realizedTrades,
+    sectorTargetsByAccount: normalizeSectorTargetsByAccount(rawState?.sectorTargetsByAccount || rawState?.sectorTargets, accountNames),
+    sectorOverrides: asPlainObject(rawState?.sectorOverrides),
+  };
+}
+
+function buildSharedDashboardStatePayload(rawState) {
+  const normalized = normalizeSharedDashboardState(rawState);
+  return {
+    accounts: normalized.accounts,
+    balanceHistory: normalized.balanceHistory,
+    realizedTrades: normalized.realizedTrades,
+    sectorTargetsByAccount: normalized.sectorTargetsByAccount,
+    sectorOverrides: normalized.sectorOverrides,
+  };
+}
+
+function getSharedDashboardStateSignature(rawState) {
+  try {
+    return JSON.stringify(buildSharedDashboardStatePayload(rawState));
+  } catch {
+    return "";
+  }
+}
+
+function hasSharedDashboardStateContent(rawState) {
+  const normalized = normalizeSharedDashboardState(rawState);
+  return Boolean(
+    Object.keys(normalized.accounts).length
+    || Object.keys(normalized.balanceHistory).length
+    || normalized.realizedTrades.length
+    || Object.keys(normalized.sectorTargetsByAccount || {}).length
+    || Object.keys(normalized.sectorOverrides || {}).length
+  );
 }
 
 function resolveMainSector(symbol, cleanSym, assetType = "") {
@@ -948,15 +1012,24 @@ const CustomTooltip = ({ active, payload, label, mode='pct' }) => {
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App() {
-  const persistedRef = useRef(loadJSONStorage(APP_STATE_STORAGE_KEY, null));
+  const persistedRef = useRef(loadPersistedAppState());
   const persisted = persistedRef.current || {};
+  const sharedSeedRef = useRef(buildSharedDashboardStatePayload({
+    accounts: persisted.accounts,
+    balanceHistory: persisted.balanceHistory,
+    realizedTrades: persisted.realizedTrades,
+    sectorTargetsByAccount: persisted.sectorTargetsByAccount || persisted.sectorTargets,
+    sectorOverrides: persisted.sectorOverrides,
+  }));
+  const lastSharedStateSignatureRef = useRef(getSharedDashboardStateSignature(sharedSeedRef.current));
+  const sharedStateUpdatedAtRef = useRef(null);
 
   const [tab, setTab] = useState('overview');
   const [timeframe, setTimeframe] = useState(persisted.timeframe || '1Y');
   const [sectorTimeframe, setSectorTimeframe] = useState(persisted.sectorTimeframe || '1Y');
-  const [accounts, setAccounts] = useState(persisted.accounts || {});
-  const [balanceHistory, setBalanceHistory] = useState(persisted.balanceHistory || {});
-  const [realizedTrades, setRealizedTrades] = useState(persisted.realizedTrades || []);
+  const [accounts, setAccounts] = useState(sharedSeedRef.current.accounts);
+  const [balanceHistory, setBalanceHistory] = useState(sharedSeedRef.current.balanceHistory);
+  const [realizedTrades, setRealizedTrades] = useState(sharedSeedRef.current.realizedTrades);
   const [spxData, setSpxData] = useState([]);
   const [sectorBenchmarkData, setSectorBenchmarkData] = useState({});
   const [securityHistoryData, setSecurityHistoryData] = useState(() => loadJSONStorage(SECURITY_HISTORY_STORAGE_KEY, {}));
@@ -967,13 +1040,14 @@ export default function App() {
   const [showBenchmark, setShowBenchmark] = useState(persisted.showBenchmark ?? true);
   const [selectedSector, setSelectedSector] = useState(persisted.selectedSector || SP500_SECTORS[0].name);
   const [riskMatrixMode, setRiskMatrixMode] = useState(persisted.riskMatrixMode || 'sectors');
-  const [sectorTargetsByAccount, setSectorTargetsByAccount] = useState(() =>
-    normalizeSectorTargetsByAccount(persisted.sectorTargetsByAccount || persisted.sectorTargets),
-  );
-  const [sectorOverrides, setSectorOverrides] = useState(() => persisted.sectorOverrides || {});
+  const [sectorTargetsByAccount, setSectorTargetsByAccount] = useState(sharedSeedRef.current.sectorTargetsByAccount);
+  const [sectorOverrides, setSectorOverrides] = useState(sharedSeedRef.current.sectorOverrides);
   const [performanceChartSelection, setPerformanceChartSelection] = useState(() =>
     normalizePerformanceChartSelection(persisted.performanceChartSelection, [], persisted.showBenchmark ?? true),
   );
+  const [sharedStateReady, setSharedStateReady] = useState(false);
+  const [sharedStateUpdatedAt, setSharedStateUpdatedAt] = useState(null);
+  const [sharedSyncStatus, setSharedSyncStatus] = useState('Booting shared workspace');
 
   // Load SPX and sector ETF benchmarks using the proxied Stooq daily history feed.
   const loadBenchmarks = useCallback(async ({ forceRefresh = false } = {}) => {
@@ -1023,6 +1097,120 @@ export default function App() {
 
   useEffect(() => { loadBenchmarks(); }, [loadBenchmarks]);
 
+  const applySharedDashboardState = useCallback((rawState, updatedAt = null) => {
+    const normalized = buildSharedDashboardStatePayload(rawState);
+    lastSharedStateSignatureRef.current = getSharedDashboardStateSignature(normalized);
+    sharedStateUpdatedAtRef.current = updatedAt || null;
+    setAccounts(normalized.accounts);
+    setBalanceHistory(normalized.balanceHistory);
+    setRealizedTrades(normalized.realizedTrades);
+    setSectorTargetsByAccount(normalized.sectorTargetsByAccount);
+    setSectorOverrides(normalized.sectorOverrides);
+    setSharedStateUpdatedAt(updatedAt || null);
+    setSharedStateReady(true);
+    setSharedSyncStatus(updatedAt ? 'Shared workspace synced' : 'Shared workspace ready');
+    return normalized;
+  }, []);
+
+  const fetchSharedDashboardState = useCallback(async ({ silent = false, preferLocalSeed = false } = {}) => {
+    if (!silent) setSharedSyncStatus(preferLocalSeed ? 'Loading shared workspace' : 'Refreshing shared workspace');
+    try {
+      const response = await fetch(SHARED_DASHBOARD_STATE_ENDPOINT, { cache:'no-store' });
+      if (!response.ok) throw new Error(`Shared state fetch failed (${response.status})`);
+      const payload = await response.json();
+      const updatedAt = payload?.updated_at || null;
+      const remoteState = buildSharedDashboardStatePayload(payload?.state || {});
+      const remoteHasContent = hasSharedDashboardStateContent(remoteState);
+      const remoteSignature = getSharedDashboardStateSignature(remoteState);
+
+      if ((remoteHasContent || !preferLocalSeed)
+        && remoteSignature === lastSharedStateSignatureRef.current
+        && updatedAt === sharedStateUpdatedAtRef.current) {
+        setSharedStateReady(true);
+        sharedStateUpdatedAtRef.current = updatedAt;
+        setSharedStateUpdatedAt(updatedAt);
+        if (!silent) setSharedSyncStatus('Shared workspace live');
+        return payload;
+      }
+
+      if (remoteHasContent || !preferLocalSeed) {
+        applySharedDashboardState(remoteState, updatedAt);
+      } else {
+        const localSeed = sharedSeedRef.current;
+        sharedStateUpdatedAtRef.current = updatedAt;
+        setSharedStateUpdatedAt(updatedAt);
+        setSharedStateReady(true);
+        if (hasSharedDashboardStateContent(localSeed)) {
+          lastSharedStateSignatureRef.current = "";
+          setSharedSyncStatus('Publishing local workspace cache');
+        } else {
+          lastSharedStateSignatureRef.current = getSharedDashboardStateSignature(remoteState);
+          setSharedSyncStatus('Shared workspace ready');
+        }
+      }
+      return payload;
+    } catch (error) {
+      console.warn('Shared workspace fetch failed', error);
+      if (!sharedStateReady && hasSharedDashboardStateContent(sharedSeedRef.current)) {
+        lastSharedStateSignatureRef.current = "";
+      }
+      setSharedStateReady(true);
+      setSharedSyncStatus('Shared sync unavailable - using local cache');
+      return null;
+    }
+  }, [applySharedDashboardState, sharedStateReady]);
+
+  useEffect(() => {
+    fetchSharedDashboardState({ preferLocalSeed: true });
+  }, [fetchSharedDashboardState]);
+
+  useEffect(() => {
+    if (!sharedStateReady) return undefined;
+    const intervalId = window.setInterval(() => {
+      fetchSharedDashboardState({ silent: true, preferLocalSeed: false });
+    }, SHARED_DASHBOARD_POLL_MS);
+    return () => window.clearInterval(intervalId);
+  }, [fetchSharedDashboardState, sharedStateReady]);
+
+  useEffect(() => {
+    if (!sharedStateReady) return undefined;
+
+    const payload = buildSharedDashboardStatePayload({
+      accounts,
+      balanceHistory,
+      realizedTrades,
+      sectorTargetsByAccount,
+      sectorOverrides,
+    });
+    const signature = getSharedDashboardStateSignature(payload);
+
+    if (signature === lastSharedStateSignatureRef.current) return undefined;
+
+    const timeoutId = window.setTimeout(async () => {
+      if (signature === lastSharedStateSignatureRef.current) return;
+
+      try {
+        setSharedSyncStatus('Saving shared workspace');
+        const response = await fetch(SHARED_DASHBOARD_STATE_ENDPOINT, {
+          method:'POST',
+          headers:{ 'Content-Type':'application/json' },
+          body: JSON.stringify({ state: payload }),
+        });
+        if (!response.ok) throw new Error(`Shared state save failed (${response.status})`);
+        const result = await response.json();
+        lastSharedStateSignatureRef.current = signature;
+        sharedStateUpdatedAtRef.current = result?.updated_at || null;
+        setSharedStateUpdatedAt(result?.updated_at || null);
+        setSharedSyncStatus('Shared workspace live');
+      } catch (error) {
+        console.warn('Shared workspace save failed', error);
+        setSharedSyncStatus('Shared sync failed - local cache only');
+      }
+    }, SHARED_DASHBOARD_SAVE_DEBOUNCE_MS);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [sharedStateReady, accounts, balanceHistory, realizedTrades, sectorTargetsByAccount, sectorOverrides]);
+
   useEffect(() => {
     saveJSONStorage(APP_STATE_STORAGE_KEY, {
       timeframe,
@@ -1050,6 +1238,15 @@ export default function App() {
       : window.confirm("Delete all uploaded accounts, balance history, realized trades, saved weights, and cached benchmark data?");
     if (!confirmed) return;
 
+    const clearedSharedState = buildSharedDashboardStatePayload({
+      accounts: {},
+      balanceHistory: {},
+      realizedTrades: [],
+      sectorTargetsByAccount: {},
+      sectorOverrides: {},
+    });
+    const clearedSignature = getSharedDashboardStateSignature(clearedSharedState);
+
     setAccounts({});
     setBalanceHistory({});
     setRealizedTrades([]);
@@ -1068,8 +1265,27 @@ export default function App() {
     setSectorTimeframe('1Y');
     setPerformanceChartSelection(normalizePerformanceChartSelection(null, [], true));
     clearJSONStorage(APP_STATE_STORAGE_KEY);
+    LEGACY_APP_STATE_STORAGE_KEYS.forEach(clearJSONStorage);
     clearJSONStorage(MARKET_CACHE_STORAGE_KEY);
     clearJSONStorage(SECURITY_HISTORY_STORAGE_KEY);
+    setSharedSyncStatus('Clearing shared workspace');
+    fetch(SHARED_DASHBOARD_STATE_ENDPOINT, {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json' },
+      body: JSON.stringify({ state: clearedSharedState }),
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`Shared state clear failed (${response.status})`);
+        const result = await response.json();
+        lastSharedStateSignatureRef.current = clearedSignature;
+        sharedStateUpdatedAtRef.current = result?.updated_at || null;
+        setSharedStateUpdatedAt(result?.updated_at || null);
+        setSharedSyncStatus('Shared workspace live');
+      })
+      .catch((error) => {
+        console.warn('Shared workspace clear failed', error);
+        setSharedSyncStatus('Shared sync failed - local cache only');
+      });
   }, []);
 
   // File upload handlers
@@ -2006,10 +2222,25 @@ export default function App() {
     { label:'Hong Kong', zone:'Asia/Hong_Kong' },
     { label:'UTC', zone:'UTC' },
   ];
+  const sharedSyncTone = !sharedStateReady
+    ? '#ffd166'
+    : /failed|unavailable/i.test(sharedSyncStatus)
+      ? '#ff6b6b'
+      : /saving|loading|publishing|refreshing|clearing/i.test(sharedSyncStatus)
+        ? '#ffd166'
+        : '#00e676';
+  const sharedSyncValue = !sharedStateReady
+    ? 'Booting'
+    : /failed|unavailable/i.test(sharedSyncStatus)
+      ? 'Error'
+      : /saving|loading|publishing|refreshing|clearing/i.test(sharedSyncStatus)
+        ? 'Syncing'
+        : 'Shared';
   const terminalStatusTiles = [
     { label:'Scope', value: selectedAccount === 'ALL' ? 'All Accounts' : selectedAccount.split('...')[1] ? `Acct ${selectedAccount.split('...')[1]}` : selectedAccount, tone:'#4ea1ff' },
     { label:'Accounts', value: String(accountList.length), tone:'#f4b24f' },
     { label:'Positions', value: String(selectedPositions.length), tone:'#00e676' },
+    { label:'Workspace', value: sharedSyncValue, tone: sharedSyncTone },
     { label:'Benchmarks', value: spxLoading ? 'Syncing' : spxData.length > 0 ? 'Live' : 'Offline', tone: spxLoading ? '#ffd166' : spxData.length > 0 ? '#00e676' : '#ff6b6b' },
     { label:'Realized Rows', value: String(selectedRealizedTrades.length), tone:'#ff9f43' },
     { label:'Build', value: APP_BUILD_VERSION, tone:'#c3a6ff' },
@@ -2978,8 +3209,11 @@ export default function App() {
         <div style={S.section}>
           <div style={{ display:'flex', justifyContent:'space-between', gap:'12px', alignItems:'flex-start', marginBottom:'20px', flexWrap:'wrap' }}>
             <div style={{ color:'#555', fontSize:'11px', lineHeight:'1.6', maxWidth:'780px' }}>
-              Upload Schwab export files to update the dashboard. All processing happens client-side and saved state is persisted in local storage so your accounts survive page reloads.
-              Files can be re-uploaded at any time to refresh data.
+              Upload Schwab export files to update the shared portfolio workspace. Uploaded balances, positions, realized P&amp;L, and sector configuration are saved to the backend so every viewer sees the same portfolio after one daily refresh.
+              Files can be re-uploaded at any time to refresh the shared state.
+              <div style={{ color: sharedSyncTone, marginTop:'6px', fontWeight:600 }}>
+                Workspace sync: {sharedSyncStatus}{sharedStateUpdatedAt ? ` · ${new Date(sharedStateUpdatedAt).toLocaleString()}` : ''}
+              </div>
             </div>
             <button
               type="button"
