@@ -76,6 +76,13 @@ def stooq_daily_history(
 
     start_iso = (date.today() - timedelta(days=3650)).isoformat()
     history = _load_cached_history(_history_candidates(normalized_symbol, is_benchmark), start_iso)
+    latest_cached_date = history[-1].get("date") if history else None
+    if not latest_cached_date or latest_cached_date < date.today().isoformat():
+        try:
+            legacy_engine.fetch_prices_incremental(normalized_symbol, start_iso, is_bench=is_benchmark)
+        except Exception:
+            pass
+        history = _load_cached_history(_history_candidates(normalized_symbol, is_benchmark), start_iso)
     if len(history) < 2:
         try:
             legacy_engine.ensure_symbol_history(normalized_symbol, start_iso, is_bench=is_benchmark)
