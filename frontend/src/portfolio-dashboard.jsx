@@ -626,6 +626,44 @@ function filterTradesByDateRange(trades, startDate, endDate) {
   });
 }
 
+function formatDateLocalISO(value = new Date()) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function getTimeframeBounds(tf, anchorDateISO = formatDateLocalISO()) {
+  const endDate = anchorDateISO || formatDateLocalISO();
+  if (!endDate || tf === 'ALL') return { startDate: null, endDate };
+
+  const anchor = new Date(`${endDate}T12:00:00`);
+  if (Number.isNaN(anchor.getTime())) return { startDate: null, endDate };
+
+  let startDate = null;
+  if (tf === 'YTD') {
+    startDate = `${anchor.getFullYear()}-01-01`;
+  } else {
+    const daysByTimeframe = {
+      '1M': 30,
+      '3M': 90,
+      '6M': 180,
+      '1Y': 365,
+      '2Y': 730,
+    };
+    const days = daysByTimeframe[tf];
+    if (days) {
+      const start = new Date(anchor);
+      start.setDate(start.getDate() - days);
+      startDate = formatDateLocalISO(start);
+    }
+  }
+
+  return { startDate, endDate };
+}
+
 function getSecurityHistoryCacheKey(symbol) {
   if (!symbol) return null;
   const normalized = String(symbol)
@@ -1027,6 +1065,7 @@ export default function App() {
   const [tab, setTab] = useState('overview');
   const [timeframe, setTimeframe] = useState(persisted.timeframe || '1Y');
   const [sectorTimeframe, setSectorTimeframe] = useState(persisted.sectorTimeframe || '1Y');
+  const [realizedTimeframe, setRealizedTimeframe] = useState(persisted.realizedTimeframe || 'YTD');
   const [accounts, setAccounts] = useState(sharedSeedRef.current.accounts);
   const [balanceHistory, setBalanceHistory] = useState(sharedSeedRef.current.balanceHistory);
   const [realizedTrades, setRealizedTrades] = useState(sharedSeedRef.current.realizedTrades);
@@ -1215,6 +1254,7 @@ export default function App() {
     saveJSONStorage(APP_STATE_STORAGE_KEY, {
       timeframe,
       sectorTimeframe,
+      realizedTimeframe,
       accounts,
       balanceHistory,
       realizedTrades,
@@ -1226,7 +1266,7 @@ export default function App() {
       sectorOverrides,
       performanceChartSelection,
     });
-  }, [timeframe, sectorTimeframe, accounts, balanceHistory, realizedTrades, selectedAccount, showBenchmark, selectedSector, riskMatrixMode, sectorTargetsByAccount, sectorOverrides, performanceChartSelection]);
+  }, [timeframe, sectorTimeframe, realizedTimeframe, accounts, balanceHistory, realizedTrades, selectedAccount, showBenchmark, selectedSector, riskMatrixMode, sectorTargetsByAccount, sectorOverrides, performanceChartSelection]);
 
   useEffect(() => {
     saveJSONStorage(SECURITY_HISTORY_STORAGE_KEY, securityHistoryData);
@@ -1263,6 +1303,7 @@ export default function App() {
     setShowBenchmark(true);
     setTimeframe('1Y');
     setSectorTimeframe('1Y');
+    setRealizedTimeframe('YTD');
     setPerformanceChartSelection(normalizePerformanceChartSelection(null, [], true));
     clearJSONStorage(APP_STATE_STORAGE_KEY);
     LEGACY_APP_STATE_STORAGE_KEYS.forEach(clearJSONStorage);
@@ -1441,6 +1482,14 @@ export default function App() {
   const selectedRealizedTradesWithDates = useMemo(
     () => selectedRealizedTrades.map((trade) => ({ ...trade, closedDateISO: normalizeDateInput(trade.closedDate) })),
     [selectedRealizedTrades],
+  );
+  const realizedDateBounds = useMemo(
+    () => getTimeframeBounds(realizedTimeframe),
+    [realizedTimeframe],
+  );
+  const filteredRealizedTrades = useMemo(
+    () => filterTradesByDateRange(selectedRealizedTradesWithDates, realizedDateBounds.startDate, realizedDateBounds.endDate),
+    [selectedRealizedTradesWithDates, realizedDateBounds],
   );
 
   // Derived: active balance series
@@ -2042,14 +2091,14 @@ export default function App() {
   // Realized P&L by sector
   const realizedBySector = useMemo(() => {
     const sectors = {};
-    for (const t of selectedRealizedTrades) {
+    for (const t of filteredRealizedTrades) {
       if (!t.mainSector || !ALL_SECTOR_SET.has(t.mainSector)) continue;
       if (!sectors[t.mainSector]) sectors[t.mainSector] = { gain: 0, count: 0 };
       sectors[t.mainSector].gain += t.gain;
       sectors[t.mainSector].count++;
     }
     return Object.entries(sectors).map(([name,s]) => ({ name, gain: s.gain, count: s.count })).sort((a,b) => b.gain - a.gain);
-  }, [selectedRealizedTrades]);
+  }, [filteredRealizedTrades]);
   const realizedSectorAxisWidth = useMemo(
     () => getCategoryAxisWidth(realizedBySector.map((sector) => sector.name), 120, 210),
     [realizedBySector],
@@ -2927,12 +2976,40 @@ export default function App() {
       {/* ══════ REALIZED P&L TAB ══════ */}
       {tab === 'realized' && (
         <div style={S.section}>
+          <div style={{ ...S.card, marginBottom:'16px' }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:'12px', flexWrap:'wrap' }}>
+              <div>
+                <div style={S.cardTitle}>REALIZED P&amp;L WINDOW</div>
+                <div style={{ color:'#666', fontSize:'11px', lineHeight:'1.5' }}>
+                  Closed trades are filtered by closed date for the selected account scope.
+                  {filteredRealizedTrades.length
+                    ? ` Window ${realizedDateBounds.startDate || 'inception'} to ${realizedDateBounds.endDate || 'today'} · ${filteredRealizedTrades.length} trades`
+                    : selectedRealizedTrades.length
+                      ? ` No closed trades in ${realizedTimeframe}`
+                      : ' Upload realized gain/loss data to populate this view.'}
+                </div>
+              </div>
+              <div style={{ display:'flex', gap:'6px', flexWrap:'wrap' }}>
+                {TIMEFRAMES.map(tf => (
+                  <button
+                    key={tf}
+                    type="button"
+                    onClick={() => setRealizedTimeframe(tf)}
+                    style={{ ...S.btn, ...(realizedTimeframe===tf ? S.btnActive : {}), padding:'3px 8px', fontSize:'10px' }}
+                  >
+                    {tf}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
           {/* Summary stats */}
-          {selectedRealizedTrades.length > 0 && (() => {
-            const totalGain = selectedRealizedTrades.reduce((a,t) => a+t.gain, 0);
-            const winners = selectedRealizedTrades.filter(t => t.gain > 0);
-            const losers = selectedRealizedTrades.filter(t => t.gain < 0);
-            const winRate = (winners.length / selectedRealizedTrades.length) * 100;
+          {filteredRealizedTrades.length > 0 && (() => {
+            const totalGain = filteredRealizedTrades.reduce((a,t) => a+t.gain, 0);
+            const winners = filteredRealizedTrades.filter(t => t.gain > 0);
+            const losers = filteredRealizedTrades.filter(t => t.gain < 0);
+            const winRate = (winners.length / filteredRealizedTrades.length) * 100;
             const avgWin = winners.length ? winners.reduce((a,t)=>a+t.gain,0)/winners.length : 0;
             const avgLoss = losers.length ? losers.reduce((a,t)=>a+t.gain,0)/losers.length : 0;
             const pf = Math.abs(avgLoss) > 0 ? Math.abs(avgWin / avgLoss) : 0;
@@ -2972,14 +3049,14 @@ export default function App() {
 
           {/* Trades table */}
           <div style={S.card}>
-            <div style={S.cardTitle}>REALIZED TRADES — {selectedRealizedTrades.length} ROWS</div>
+            <div style={S.cardTitle}>REALIZED TRADES — {filteredRealizedTrades.length} ROWS · {realizedTimeframe}</div>
             <div style={S.tableWrapper}>
               <table style={S.table}>
                 <thead>
                   <tr>{['Symbol','Account','Type','Sector Assignment','Closed Date','Qty','Proceeds','Cost','Gain $','Gain %','Term'].map(h => <th key={h} style={S.th}>{h}</th>)}</tr>
                 </thead>
                 <tbody>
-                  {selectedRealizedTrades.slice(0, 100).map((t, i) => (
+                  {filteredRealizedTrades.slice(0, 100).map((t, i) => (
                     <tr key={i}>
                       <td style={{ ...S.td, fontWeight:700, color: t.isOption ? '#ffd600' : '#00d4ff' }}>{t.symbol.length > 30 ? t.symbol.slice(0,28)+'…' : t.symbol}</td>
                       <td style={{ ...S.td, fontSize:'10px', color:'#666' }}>{t.account.split('...')[1]}</td>
@@ -3009,10 +3086,18 @@ export default function App() {
                       <td style={S.td}><span style={S.badge(t.term === 'Long Term' ? '#00e676' : '#ffd600')}>{t.term === 'Long Term' ? 'LT' : 'ST'}</span></td>
                     </tr>
                   ))}
-                  {selectedRealizedTrades.length === 0 && <tr><td colSpan={11} style={{ ...S.td, textAlign:'center', color:'#333', padding:'32px' }}>Upload realized gain/loss file to view trades</td></tr>}
+                  {filteredRealizedTrades.length === 0 && (
+                    <tr>
+                      <td colSpan={11} style={{ ...S.td, textAlign:'center', color:'#333', padding:'32px' }}>
+                        {selectedRealizedTrades.length
+                          ? `No realized trades found for ${realizedTimeframe}.`
+                          : 'Upload realized gain/loss file to view trades.'}
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
-              {selectedRealizedTrades.length > 100 && <div style={{ padding:'8px 12px', color:'#444', fontSize:'10px' }}>Showing 100 of {selectedRealizedTrades.length} trades</div>}
+              {filteredRealizedTrades.length > 100 && <div style={{ padding:'8px 12px', color:'#444', fontSize:'10px' }}>Showing 100 of {filteredRealizedTrades.length} trades</div>}
             </div>
           </div>
         </div>
