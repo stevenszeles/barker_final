@@ -1,6 +1,6 @@
 import logging
 from typing import Optional
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 import httpx
 from ..schemas import Snapshot, NavPoint
 from ..services.portfolio import get_snapshot, get_nav_series, get_sector_series
@@ -22,16 +22,18 @@ def _raise_portfolio_error(exc: Exception) -> None:
 
 
 @router.get("/snapshot", response_model=Snapshot)
-def snapshot(account: Optional[str] = None):
+def snapshot(response: Response, account: Optional[str] = None):
     try:
+        response.headers["Cache-Control"] = "no-store"
         return get_snapshot(account=account)
     except Exception as exc:
         _raise_portfolio_error(exc)
 
 
 @router.get("/nav", response_model=list[NavPoint])
-def nav(limit: int = 120, account: Optional[str] = None):
+def nav(response: Response, limit: int = 120, account: Optional[str] = None):
     try:
+        response.headers["Cache-Control"] = "no-store"
         return get_nav_series(limit=limit, account=account)
     except Exception as exc:
         _raise_portfolio_error(exc)

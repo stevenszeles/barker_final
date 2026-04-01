@@ -119,6 +119,19 @@ def _queue_nav_rebuild(account: Optional[str], limit: int) -> None:
     thread.start()
 
 
+def _rebuild_nav_with_fallback(account: Optional[str], limit: int) -> Dict[str, Any]:
+    if settings.static_mode:
+        return {"status": "not_required", "result": None}
+    label = legacy_engine._account_label(account)
+    try:
+        result = portfolio_service.rebuild_nav_history(limit=int(limit), account=label)
+        return {"status": "complete", "result": result}
+    except Exception as exc:
+        logger.warning("Synchronous nav rebuild failed account=%s limit=%s err=%s", label, limit, exc)
+        _queue_nav_rebuild(account=label, limit=int(limit))
+        return {"status": "queued", "result": None}
+
+
 @router.get("/benchmark")
 def get_benchmark():
     def _run(conn):
@@ -2946,8 +2959,7 @@ async def import_balances(file: UploadFile = File(...), account: Optional[str] =
                 legacy_engine._clear_nav_cache()
             except Exception:
                 pass
-            if fast_mode:
-                _queue_nav_rebuild(account=target_account, limit=1200)
+            rebuild_state = _rebuild_nav_with_fallback(account=target_account, limit=1200) if fast_mode else {"status": "not_required", "result": None}
             return {
                 "ok": True,
                 "account": target_account,
@@ -2962,7 +2974,8 @@ async def import_balances(file: UploadFile = File(...), account: Optional[str] =
                 "history_adjustment_mode": history_adjustment_mode,
                 "future_points_ignored": future_points_ignored,
                 "nav_snapshots_written": nav_snapshots_written,
-                "nav_rebuild": "queued" if fast_mode else "not_required",
+                "nav_rebuild": rebuild_state["status"],
+                "nav_rebuild_count": rebuild_state["result"].get("count") if rebuild_state["result"] else None,
             }
 
         use_external_history_flows = bool(legacy_engine._has_non_import_trades(target_account))
@@ -3093,8 +3106,7 @@ async def import_balances(file: UploadFile = File(...), account: Optional[str] =
             legacy_engine._clear_nav_cache()
         except Exception:
             pass
-        if not settings.static_mode:
-            _queue_nav_rebuild(account=target_account, limit=4000)
+        rebuild_state = _rebuild_nav_with_fallback(account=target_account, limit=4000)
         return {
             "ok": True,
             "account": target_account,
@@ -3109,7 +3121,8 @@ async def import_balances(file: UploadFile = File(...), account: Optional[str] =
             "history_adjustment_mode": "external" if use_external_history_flows else "internal",
             "future_points_ignored": future_points_ignored,
             "nav_snapshots_written": nav_snapshots_written,
-            "nav_rebuild": "queued",
+            "nav_rebuild": rebuild_state["status"],
+            "nav_rebuild_count": rebuild_state["result"].get("count") if rebuild_state["result"] else None,
         }
 
     asof = None

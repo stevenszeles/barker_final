@@ -393,8 +393,14 @@ export const useAppStore = create<StoreState>((set) => ({
   fetchNav: async (limit: number) => {
     try {
       const account = useAppStore.getState().account;
-      const accountParam = account && account !== "ALL" ? `&account=${encodeURIComponent(account)}` : "";
-      const navRes = await api.get<NavPoint[]>(`/portfolio/nav?limit=${limit}${accountParam}`);
+      const navRes = await api.get<NavPoint[]>("/portfolio/nav", {
+        params: {
+          limit,
+          ...(account && account !== "ALL" ? { account } : {}),
+          _ts: Date.now(),
+        },
+        headers: { "Cache-Control": "no-cache" },
+      });
       set({ nav: navRes.data });
     } catch (err: any) {
       set({ error: err?.message ?? "Nav fetch failed" });

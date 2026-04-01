@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useAppStore } from "./store";
 import type { NavPoint, Position } from "./store";
 import { api } from "./services/api";
@@ -315,6 +315,7 @@ export default function App() {
   const [toast, setToast] = useState("");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [expandedPositionGroups, setExpandedPositionGroups] = useState<Record<string, boolean>>({});
+  const navResyncTimerRef = useRef<number | null>(null);
   const [focus, setFocus] = useState<{ left?: string; center?: string }>({});
   const [activeTable, setActiveTable] = useState<"positions" | null>(null);
   const [selectedPosIndex, setSelectedPosIndex] = useState(0);
@@ -608,6 +609,15 @@ export default function App() {
     const timer = setTimeout(() => setToast(""), 4000);
     return () => clearTimeout(timer);
   }, [toast]);
+
+  useEffect(() => {
+    return () => {
+      if (navResyncTimerRef.current) {
+        window.clearTimeout(navResyncTimerRef.current);
+        navResyncTimerRef.current = null;
+      }
+    };
+  }, []);
   useEffect(() => {
     const close = () => setContextMenu(null);
     window.addEventListener("click", close);
@@ -1031,6 +1041,30 @@ export default function App() {
     setSelectedAccounts([]);
   };
 
+  const scheduleNavResync = (durationMs = 180000, intervalMs = 10000) => {
+    if (navResyncTimerRef.current) {
+      window.clearTimeout(navResyncTimerRef.current);
+      navResyncTimerRef.current = null;
+    }
+    const deadline = Date.now() + durationMs;
+    const tick = () => {
+      fetchNav(navLimit);
+      if (Date.now() + intervalMs > deadline) {
+        navResyncTimerRef.current = null;
+        return;
+      }
+      navResyncTimerRef.current = window.setTimeout(tick, intervalMs);
+    };
+    tick();
+  };
+
+  const refreshPortfolioViews = async (includeAccounts = false) => {
+    if (includeAccounts) {
+      await fetchAccounts();
+    }
+    await Promise.allSettled([refreshAll(), fetchNav(navLimit)]);
+  };
+
   const accountSummary = useMemo(() => {
     if (!snapshot) return null;
     const marginRequired = snapshot.margin_required ?? 0;
@@ -1150,9 +1184,14 @@ export default function App() {
         }
         const series = await Promise.all(
           targets.map(async (name) => {
-            const resp = await api.get<NavPoint[]>(
-              `/portfolio/nav?limit=${navLimit}&account=${encodeURIComponent(name)}`
-            );
+            const resp = await api.get<NavPoint[]>("/portfolio/nav", {
+              params: {
+                limit: navLimit,
+                account: name,
+                _ts: Date.now(),
+              },
+              headers: { "Cache-Control": "no-cache" },
+            });
             return { name, data: resp.data ?? [] };
           })
         );
@@ -1167,7 +1206,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [accountId, accountChartOptions, navLimit, selectedAccounts]);
+  }, [accountId, accountChartOptions, navLimit, selectedAccounts, nav]);
 
   const riskMetricMap = useMemo(() => {
     const map = new Map<string, { metric: string; value: number; limit?: number | null; breached?: boolean }>();
@@ -2278,11 +2317,12 @@ export default function App() {
         const historyPoints = Number(resp.data?.history_points ?? 0);
         const updated = resp.data?.accounts_updated ?? 0;
         const adjustmentMode = String(resp.data?.history_adjustment_mode || "").toLowerCase();
-        fetchAccounts();
-        refreshAll();
+        const rebuildStatus = String(resp.data?.nav_rebuild || "").toLowerCase();
+        await refreshPortfolioViews(true);
         if (historyPoints > 0) {
           const target = String(resp.data?.account || accountId || "account");
           const modeLabel = adjustmentMode ? ` (${adjustmentMode} cash-flow mode)` : "";
+          if (rebuildStatus === "queued") scheduleNavResync();
           notify(`Imported ${historyPoints} historical balance points for ${target}${modeLabel}.`);
         } else {
           notify(`Imported balances for ${updated} accounts.`);
@@ -2604,6 +2644,7 @@ export default function App() {
     setToast(`Importing ${list.length} balance file${list.length === 1 ? "" : "s"}...`);
     let imported = 0;
     let historyPoints = 0;
+    let pendingRebuild = false;
     const failures: string[] = [];
     for (const file of list) {
       try {
@@ -2615,15 +2656,17 @@ export default function App() {
         });
         imported += 1;
         historyPoints += Number(resp.data?.history_points ?? 0);
+        if (String(resp.data?.nav_rebuild || "").toLowerCase() === "queued") {
+          pendingRebuild = true;
+        }
       } catch (err: any) {
         const detailRaw = err?.response?.data?.detail ?? err?.message ?? "Balance CSV import failed";
         const detail = typeof detailRaw === "string" ? detailRaw : JSON.stringify(detailRaw);
         failures.push(`${file.name}: ${detail}`);
       }
     }
-    fetchAccounts();
-    refreshAll();
-    fetchNav(navLimit);
+    await refreshPortfolioViews(true);
+    if (pendingRebuild) scheduleNavResync();
     if (failures.length) {
       const msg = `Imported ${imported}/${list.length} balance files. First error: ${failures[0]}`;
       setCsvError(msg);
