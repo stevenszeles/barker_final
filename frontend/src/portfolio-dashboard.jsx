@@ -3053,6 +3053,25 @@ export default function App() {
                                 <option value={UNCLASSIFIED_SECTOR}>{UNCLASSIFIED_SECTOR}</option>
                               </select>
                             </div>
+                          ) : !entry.child ? (
+                            <div style={{ display:'flex', flexDirection:'column', gap:'6px', minWidth:'180px' }}>
+                              <div><span style={{ color: SECTOR_COLORS[sectorValue] || PALETTE.textDim }}>●</span> {sectorValue}</div>
+                              <select
+                                value={getPositionOverrideValue(row, sectorOverrides)}
+                                onChange={(e) => updatePositionSectorOverride(
+                                  row.account,
+                                  getPositionOverrideCandidates(row),
+                                  e.target.value,
+                                )}
+                                style={{ ...S.input, padding:'4px 6px', fontSize:'10px', minWidth:'160px' }}
+                              >
+                                <option value={SECTOR_OVERRIDE_AUTO}>Auto ({row.mainSector || UNCLASSIFIED_SECTOR})</option>
+                                {ALL_SECTORS.map((sector) => (
+                                  <option key={sector.name} value={sector.name}>{sector.name}</option>
+                                ))}
+                                <option value={UNCLASSIFIED_SECTOR}>{UNCLASSIFIED_SECTOR}</option>
+                              </select>
+                            </div>
                           ) : (
                             <div style={{ color: entry.child ? PALETTE.textDim : PALETTE.textMuted }}>
                               <span style={{ color: SECTOR_COLORS[sectorValue] || PALETTE.textDim }}>●</span> {sectorValue}
