@@ -108,12 +108,12 @@ const SECTOR_COLORS = Object.fromEntries([
 ]);
 
 const ACCOUNT_COLORS = ["#00d4ff","#7c4dff","#ff6b35","#00e676","#ffd600","#e91e63","#ff9800","#4caf50","#2196f3","#ff5722","#9c27b0","#00bcd4"];
-const APP_BUILD_VERSION = "2026.03.11.1";
+const APP_BUILD_VERSION = "2026.04.01.1";
 const APP_STATE_STORAGE_KEY = `portfolio-dashboard.app-state.${APP_BUILD_VERSION}`;
 const LEGACY_APP_STATE_STORAGE_KEYS = [
   "portfolio-dashboard.app-state.2026.03.10.2",
 ];
-const MARKET_CACHE_STORAGE_KEY = "portfolio-dashboard.market-cache.v1";
+const MARKET_CACHE_STORAGE_KEY = "portfolio-dashboard.market-cache.v2";
 const SECURITY_HISTORY_STORAGE_KEY = "portfolio-dashboard.security-history.v1";
 const SHARED_DASHBOARD_STATE_ENDPOINT = "/api/admin/shared-dashboard-state";
 const SHARED_DASHBOARD_POLL_MS = 60000;
@@ -503,23 +503,31 @@ function computePeriodReturn(data) {
   return ((last - first) / first) * 100;
 }
 
-function filterByTimeframe(data, tf) {
-  if (!data?.length) return data;
-  const last = new Date(data[data.length-1][0]);
-  let cutoff;
-  if (tf === '1M') cutoff = new Date(last.getTime() - 30*86400000);
-  else if (tf === '3M') cutoff = new Date(last.getTime() - 90*86400000);
-  else if (tf === '6M') cutoff = new Date(last.getTime() - 180*86400000);
-  else if (tf === 'YTD') cutoff = new Date(`${last.getFullYear()}-01-01`);
-  else if (tf === '1Y') cutoff = new Date(last.getTime() - 365*86400000);
-  else if (tf === '2Y') cutoff = new Date(last.getTime() - 730*86400000);
-  else return data;
-  const iso = cutoff.toISOString().slice(0,10);
-  return data.filter(([d]) => d >= iso);
+function getLatestSeriesDate(seriesList) {
+  return (seriesList || []).reduce((latest, series) => {
+    const next = series?.[series.length - 1]?.[0];
+    if (!next) return latest;
+    return !latest || next > latest ? next : latest;
+  }, null);
 }
 
-function buildAggregateHistory(histories) {
-  const seriesList = Object.values(histories || {}).filter(series => series?.length);
+function filterByTimeframe(data, tf, anchorDateISO = null) {
+  if (!data?.length) return data;
+  const endDate = anchorDateISO || data[data.length - 1]?.[0];
+  const bounded = endDate ? data.filter(([date]) => date <= endDate) : [...data];
+  if (!bounded.length) return [];
+  const { startDate } = getTimeframeBounds(tf, endDate);
+  if (!startDate) return bounded;
+  const startIndex = bounded.findIndex(([date]) => date >= startDate);
+  if (startIndex === -1) return bounded;
+  return bounded.slice(Math.max(0, startIndex - 1));
+}
+
+function buildAggregateHistory(histories, accountNames = null) {
+  const seriesList = (accountNames?.length
+    ? accountNames.map((accountName) => histories?.[accountName])
+    : Object.values(histories || {})
+  ).filter(series => series?.length);
   if (!seriesList.length) return [];
 
   const dates = [...new Set(seriesList.flatMap(series => series.map(([date]) => date)))].sort();
@@ -537,6 +545,53 @@ function buildAggregateHistory(histories) {
     });
     return [date, total];
   });
+}
+
+function buildPortfolioBenchmarkChartData(portfolioSeries, benchmarkSeries) {
+  if (!portfolioSeries?.length) return [];
+
+  const portfolioBase = portfolioSeries[0]?.[1];
+  const benchmarkBase = benchmarkSeries?.[0]?.[1];
+  if (!Number.isFinite(portfolioBase) || portfolioBase === 0) return [];
+
+  const dates = [...new Set([
+    ...portfolioSeries.map(([date]) => date),
+    ...(benchmarkSeries || []).map(([date]) => date),
+  ])].sort();
+
+  let portfolioIndex = 0;
+  let benchmarkIndex = 0;
+  let lastPortfolio = null;
+  let lastBenchmark = null;
+  const firstPortfolioDate = portfolioSeries[0]?.[0] || null;
+  const firstBenchmarkDate = benchmarkSeries?.[0]?.[0] || null;
+
+  return dates
+    .map((date) => {
+      while (portfolioIndex < portfolioSeries.length && portfolioSeries[portfolioIndex][0] <= date) {
+        lastPortfolio = portfolioSeries[portfolioIndex][1];
+        portfolioIndex += 1;
+      }
+      while (benchmarkIndex < (benchmarkSeries?.length || 0) && benchmarkSeries[benchmarkIndex][0] <= date) {
+        lastBenchmark = benchmarkSeries[benchmarkIndex][1];
+        benchmarkIndex += 1;
+      }
+
+      const hasPortfolio = firstPortfolioDate && date >= firstPortfolioDate && Number.isFinite(lastPortfolio);
+      const hasBenchmark = firstBenchmarkDate && date >= firstBenchmarkDate && Number.isFinite(lastBenchmark) && Number.isFinite(benchmarkBase) && benchmarkBase !== 0;
+      if (!hasPortfolio && !hasBenchmark) return null;
+
+      const portPct = hasPortfolio ? ((lastPortfolio - portfolioBase) / portfolioBase) * 100 : null;
+      const spxPct = hasBenchmark ? ((lastBenchmark - benchmarkBase) / benchmarkBase) * 100 : null;
+
+      return {
+        date,
+        nav: hasPortfolio ? lastPortfolio : null,
+        portPct: Number.isFinite(portPct) ? parseFloat(portPct.toFixed(3)) : null,
+        spxPct: Number.isFinite(spxPct) ? parseFloat(spxPct.toFixed(3)) : null,
+      };
+    })
+    .filter(Boolean);
 }
 
 function buildNormalizedComparisonRows(seriesDefinitions) {
@@ -697,14 +752,23 @@ function parseStooqHistory(text, days = 3650) {
     .filter(([date]) => date >= cutoff);
 }
 
-async function loadBenchmarkHistorySeries(symbol, { days = 3650, retries = 1 } = {}) {
+async function loadBenchmarkHistorySeries(symbol, { days = 3650, retries = 1, forceRefresh = false } = {}) {
   const stooqSymbol = toStooqSymbol(symbol);
   if (!stooqSymbol) throw new Error(`No benchmark data for ${symbol}`);
-  const url = `/api/stooq/q/d/l/?s=${encodeURIComponent(stooqSymbol)}&i=d`;
+  const shouldRefresh = forceRefresh || symbol === '^GSPC';
+  const params = new URLSearchParams({
+    s: stooqSymbol,
+    i: 'd',
+  });
+  if (shouldRefresh) {
+    params.set('refresh', '1');
+    params.set('_ts', String(Date.now()));
+  }
+  const url = `/api/stooq/q/d/l/?${params.toString()}`;
   let lastError = null;
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     try {
-      const res = await fetch(url);
+      const res = await fetch(url, { cache: shouldRefresh ? 'no-store' : 'default' });
       const text = await res.text();
       if (!res.ok || !text.startsWith("Date,")) throw new Error(`No benchmark data for ${symbol}`);
       return parseStooqHistory(text, days);
@@ -1089,7 +1153,7 @@ export default function App() {
   const [sharedSyncStatus, setSharedSyncStatus] = useState('Booting shared workspace');
 
   // Load SPX and sector ETF benchmarks using the proxied Stooq daily history feed.
-  const loadBenchmarks = useCallback(async ({ forceRefresh = false } = {}) => {
+  const loadBenchmarks = useCallback(async ({ forceRefresh = false, spxOnly = false } = {}) => {
     setSpxLoading(true);
     try {
       const cached = loadJSONStorage(MARKET_CACHE_STORAGE_KEY, null);
@@ -1098,14 +1162,14 @@ export default function App() {
 
       const requests = [
         { key: 'SPX', symbol: '^GSPC' },
-        ...SP500_SECTORS.map(({ name, etf }) => ({ key: name, symbol: etf })),
+        ...(spxOnly ? [] : SP500_SECTORS.map(({ name, etf }) => ({ key: name, symbol: etf }))),
       ];
       let nextSPXData = cached?.spxData || [];
-      const nextSectorData = {};
+      const nextSectorData = spxOnly ? (cached?.sectorBenchmarkData || {}) : {};
 
       for (const request of requests) {
         try {
-          const series = await loadBenchmarkHistorySeries(request.symbol, { days: 3650, retries: 2 });
+          const series = await loadBenchmarkHistorySeries(request.symbol, { days: 3650, retries: 2, forceRefresh });
           if (request.key === 'SPX') {
             nextSPXData = series;
             setSpxData(series);
@@ -1121,7 +1185,7 @@ export default function App() {
         await new Promise(resolve => setTimeout(resolve, 75));
       }
 
-      setSectorBenchmarkData(nextSectorData);
+      if (!spxOnly) setSectorBenchmarkData(nextSectorData);
       saveJSONStorage(MARKET_CACHE_STORAGE_KEY, {
         provider: 'stooq',
         updatedAt: new Date().toISOString(),
@@ -1135,6 +1199,24 @@ export default function App() {
   }, []);
 
   useEffect(() => { loadBenchmarks(); }, [loadBenchmarks]);
+
+  useEffect(() => {
+    const refreshSPX = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      loadBenchmarks({ forceRefresh: true, spxOnly: true });
+    };
+
+    const intervalId = window.setInterval(refreshSPX, 60000);
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') refreshSPX();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      window.clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [loadBenchmarks]);
 
   const applySharedDashboardState = useCallback((rawState, updatedAt = null) => {
     const normalized = buildSharedDashboardStatePayload(rawState);
@@ -1210,6 +1292,11 @@ export default function App() {
     }, SHARED_DASHBOARD_POLL_MS);
     return () => window.clearInterval(intervalId);
   }, [fetchSharedDashboardState, sharedStateReady]);
+
+  useEffect(() => {
+    if (!sharedStateUpdatedAt) return;
+    loadBenchmarks({ forceRefresh: true, spxOnly: true });
+  }, [sharedStateUpdatedAt, loadBenchmarks]);
 
   useEffect(() => {
     if (!sharedStateReady) return undefined;
@@ -1337,10 +1424,11 @@ export default function App() {
         const parsed = parsePositionsCSV(e.target.result);
         setAccounts(parsed);
         setUploadStatus(s => ({ ...s, positions: `✓ ${Object.keys(parsed).length} accounts, ${Object.values(parsed).reduce((a,acc)=>a+acc.positions.length,0)} positions` }));
+        loadBenchmarks({ forceRefresh: true, spxOnly: true });
       } catch(err) { setUploadStatus(s => ({ ...s, positions: `✗ Parse error: ${err.message}` })); }
     };
     reader.readAsText(file);
-  }, []);
+  }, [loadBenchmarks]);
 
   const handleBalancesUpload = useCallback(async (fileInput) => {
     const files = Array.isArray(fileInput) ? fileInput : [fileInput].filter(Boolean);
@@ -1365,6 +1453,7 @@ export default function App() {
           ...s,
           balances: `✓ ${account}: ${data.length} rows (${data[0]?.[0]} – ${data[data.length - 1]?.[0]})`,
         }));
+        loadBenchmarks({ forceRefresh: true, spxOnly: true });
         return;
       }
 
@@ -1374,10 +1463,11 @@ export default function App() {
         ...s,
         balances: `✓ ${files.length} balance files loaded · ${accountCount} accounts · ${totalRows} rows`,
       }));
+      loadBenchmarks({ forceRefresh: true, spxOnly: true });
     } catch (err) {
       setUploadStatus((s) => ({ ...s, balances: `✗ Parse error: ${err.message}` }));
     }
-  }, []);
+  }, [loadBenchmarks]);
 
   const handleRealizedUpload = useCallback((file) => {
     const reader = new FileReader();
@@ -1392,10 +1482,11 @@ export default function App() {
             ? `✓ ${trades.length} trades across ${accountCount} accounts`
             : '✗ No realized lot rows found. Use the "Realized Gain/Loss - Lot Details" CSV export.',
         }));
+        loadBenchmarks({ forceRefresh: true, spxOnly: true });
       } catch(err) { setUploadStatus(s => ({ ...s, realized: `✗ Parse error: ${err.message}` })); }
     };
     reader.readAsText(file);
-  }, []);
+  }, [loadBenchmarks]);
 
   // Derived: account list
   const accountList = useMemo(() => {
@@ -1499,6 +1590,17 @@ export default function App() {
   }, [selectedAccount, balanceHistory]);
 
   const aggregateHistory = useMemo(() => buildAggregateHistory(balanceHistory), [balanceHistory]);
+  const selectedPerformanceAccounts = useMemo(
+    () => accountList.filter((accountName) => performanceChartSelection.accounts?.[accountName]),
+    [accountList, performanceChartSelection],
+  );
+  const selectedAggregateHistory = useMemo(
+    () => buildAggregateHistory(
+      balanceHistory,
+      selectedPerformanceAccounts.length ? selectedPerformanceAccounts : accountList,
+    ),
+    [accountList, balanceHistory, selectedPerformanceAccounts],
+  );
   const accountColorMap = useMemo(
     () => Object.fromEntries(accountList.map((name, index) => [name, ACCOUNT_COLORS[index % ACCOUNT_COLORS.length]])),
     [accountList],
@@ -1542,8 +1644,18 @@ export default function App() {
     }));
   }, [editableSectorScope, sectorTargetsByAccount, accountList, accountValueMap]);
 
-  const filteredHistory = useMemo(() => filterByTimeframe(activeHistory, timeframe), [activeHistory, timeframe]);
-  const filteredSPX = useMemo(() => filterByTimeframe(spxData, timeframe), [spxData, timeframe]);
+  const comparisonEndDate = useMemo(
+    () => getLatestSeriesDate([activeHistory, spxData]),
+    [activeHistory, spxData],
+  );
+  const filteredHistory = useMemo(
+    () => filterByTimeframe(activeHistory, timeframe, comparisonEndDate),
+    [activeHistory, timeframe, comparisonEndDate],
+  );
+  const filteredSPX = useMemo(
+    () => filterByTimeframe(spxData, timeframe, comparisonEndDate),
+    [spxData, timeframe, comparisonEndDate],
+  );
   const sectorAccountHistory = useMemo(() => filterByTimeframe(activeHistory, sectorTimeframe), [activeHistory, sectorTimeframe]);
   const currentAccountValue = useMemo(() => {
     const positionsTotal = selectedAccountsData.reduce((sum, accountData) => {
@@ -1601,16 +1713,27 @@ export default function App() {
     };
   }, [trackedSecuritySymbols, securityHistoryData]);
 
+  const performanceWindowEndDate = useMemo(() => {
+    const candidateSeries = [];
+    if (performanceChartSelection.aggregate && selectedAggregateHistory.length) candidateSeries.push(selectedAggregateHistory);
+    selectedPerformanceAccounts.forEach((accountName) => {
+      const history = balanceHistory[accountName];
+      if (history?.length) candidateSeries.push(history);
+    });
+    if (performanceChartSelection.spx && spxData.length) candidateSeries.push(spxData);
+    return getLatestSeriesDate(candidateSeries);
+  }, [balanceHistory, performanceChartSelection, selectedAggregateHistory, selectedPerformanceAccounts, spxData]);
+
   const performanceSeriesDefinitions = useMemo(() => {
     const definitions = [];
 
-    if (performanceChartSelection.aggregate && aggregateHistory.length) {
+    if (performanceChartSelection.aggregate && selectedAggregateHistory.length) {
       definitions.push({
         key: '__portfolio__',
         label: 'Aggregate Portfolio',
         color: '#00d4ff',
         strokeWidth: 2.25,
-        data: filterByTimeframe(aggregateHistory, timeframe),
+        data: filterByTimeframe(selectedAggregateHistory, timeframe, performanceWindowEndDate),
       });
     }
 
@@ -1623,7 +1746,7 @@ export default function App() {
         label: accountName,
         color: accountColorMap[accountName] || '#e0e0e0',
         strokeWidth: selectedAccount === accountName ? 2.5 : 1.8,
-        data: filterByTimeframe(history, timeframe),
+        data: filterByTimeframe(history, timeframe, performanceWindowEndDate),
       });
     });
 
@@ -1634,12 +1757,12 @@ export default function App() {
         color: '#7c4dff',
         strokeWidth: 1.6,
         strokeDasharray: '5 3',
-        data: filterByTimeframe(spxData, timeframe),
+        data: filterByTimeframe(spxData, timeframe, performanceWindowEndDate),
       });
     }
 
     return definitions.filter((series) => series.data.length);
-  }, [performanceChartSelection, aggregateHistory, accountList, balanceHistory, accountColorMap, selectedAccount, spxData, timeframe]);
+  }, [performanceChartSelection, selectedAggregateHistory, accountList, balanceHistory, accountColorMap, selectedAccount, spxData, timeframe, performanceWindowEndDate]);
 
   const performanceComparisonData = useMemo(
     () => buildNormalizedComparisonRows(performanceSeriesDefinitions),
@@ -1656,22 +1779,7 @@ export default function App() {
 
   // Merge portfolio + SPX for chart
   const chartData = useMemo(() => {
-    if (!filteredHistory.length) return [];
-    const portBase = filteredHistory[0][1];
-    const firstDate = filteredHistory[0][0];
-    const spxBase = getFirstValueOnOrAfter(filteredSPX, firstDate)?.[1] || null;
-    let spxIndex = 0;
-    let lastSPXClose = null;
-
-    return filteredHistory.map(([date, nav]) => {
-      while (spxIndex < filteredSPX.length && filteredSPX[spxIndex][0] <= date) {
-        lastSPXClose = filteredSPX[spxIndex][1];
-        spxIndex += 1;
-      }
-      const portPct = ((nav - portBase) / portBase) * 100;
-      const spxPct = spxBase && lastSPXClose !== null ? ((lastSPXClose - spxBase) / spxBase) * 100 : null;
-      return { date, nav, portPct: parseFloat(portPct.toFixed(3)), spxPct: spxPct !== null ? parseFloat(spxPct.toFixed(3)) : null };
-    });
+    return buildPortfolioBenchmarkChartData(filteredHistory, filteredSPX);
   }, [filteredHistory, filteredSPX]);
 
   const stats = useMemo(() => filteredHistory.length >= 2 ? computeReturns(filteredHistory) : null, [filteredHistory]);

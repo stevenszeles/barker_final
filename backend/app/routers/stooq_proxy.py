@@ -66,6 +66,7 @@ def _direct_history_fallback(raw_symbol: str, normalized_symbol: str, start_iso:
 def stooq_daily_history(
     s: str = Query(..., min_length=1, description="Stooq-compatible symbol, e.g. xlk.us or ^spx"),
     i: str = Query("d", description="Interval. Only daily history is supported."),
+    refresh: bool = Query(False, description="Force a benchmark cache refresh before returning history."),
 ):
     if i.lower() != "d":
         raise HTTPException(status_code=400, detail="Only daily interval is supported")
@@ -75,6 +76,14 @@ def stooq_daily_history(
         raise HTTPException(status_code=400, detail="Symbol is required")
 
     start_iso = (date.today() - timedelta(days=3650)).isoformat()
+    if is_benchmark or refresh:
+        try:
+            if is_benchmark:
+                legacy_engine.ensure_benchmark_cache_current(normalized_symbol, start_iso)
+            else:
+                legacy_engine.ensure_symbol_history(normalized_symbol, start_iso, is_bench=False)
+        except Exception:
+            pass
     history = _load_cached_history(_history_candidates(normalized_symbol, is_benchmark), start_iso)
     latest_cached_date = history[-1].get("date") if history else None
     if not latest_cached_date or latest_cached_date < date.today().isoformat():
@@ -106,4 +115,10 @@ def stooq_daily_history(
     if len(rows) == 1:
         raise HTTPException(status_code=404, detail=f"No history found for {s}")
 
-    return "\n".join(rows) + "\n"
+    return PlainTextResponse(
+        "\n".join(rows) + "\n",
+        headers={
+            "Cache-Control": "no-store, max-age=0",
+            "Pragma": "no-cache",
+        },
+    )
