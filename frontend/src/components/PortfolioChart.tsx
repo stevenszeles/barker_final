@@ -7,22 +7,23 @@ type SectorSeries = { name: string; data: SeriesPoint[] };
 
 const chartOptions = {
   layout: {
-    background: { color: "#141414" },
-    textColor: "#a0a0a0",
+    background: { color: "#0a1017" },
+    textColor: "#98a7b6",
+    fontFamily: '"IBM Plex Sans", "IBM Plex Sans Condensed", system-ui, sans-serif',
   },
   grid: {
-    vertLines: { color: "#2a2a2a" },
-    horzLines: { color: "#2a2a2a" },
+    vertLines: { color: "rgba(54, 69, 86, 0.45)" },
+    horzLines: { color: "rgba(54, 69, 86, 0.52)" },
   },
   rightPriceScale: {
-    borderColor: "#2a2a2a",
+    borderColor: "#263241",
   },
   timeScale: {
-    borderColor: "#2a2a2a",
+    borderColor: "#263241",
   },
   crosshair: {
-    vertLine: { color: "#333" },
-    horzLine: { color: "#333" },
+    vertLine: { color: "rgba(245, 166, 35, 0.32)" },
+    horzLine: { color: "rgba(88, 211, 230, 0.2)" },
   },
 };
 
@@ -79,7 +80,8 @@ export default function PortfolioChart({
   const sectorMultiRefs = useRef<ISeriesApi<"Line">[]>([]);
   const extraSeriesRefs = useRef<ISeriesApi<"Line">[]>([]);
   const chartRef = useRef<ReturnType<typeof createChart> | null>(null);
-  const palette = ["#FFC107", "#FF7043", "#8BC34A", "#03A9F4", "#AB47BC", "#26A69A"];
+  const redrawOverlayRef = useRef<(() => void) | null>(null);
+  const palette = ["#58d3e6", "#4a8dff", "#9bc53d", "#ff7b72", "#c084fc", "#2dd4bf"];
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -90,21 +92,21 @@ export default function PortfolioChart({
     });
     chartRef.current = chart;
     navSeriesRef.current = chart.addAreaSeries({
-      lineColor: "#00C851",
-      topColor: "rgba(0, 200, 81, 0.14)",
-      bottomColor: "rgba(0, 200, 81, 0.01)",
+      lineColor: "#19d87b",
+      topColor: "rgba(25, 216, 123, 0.22)",
+      bottomColor: "rgba(25, 216, 123, 0.02)",
       lineWidth: 2,
       priceFormat: { type: "custom", formatter: percentFormatter },
     });
     benchSeriesRef.current = chart.addAreaSeries({
-      lineColor: "#F2F2F2",
-      topColor: "rgba(255, 255, 255, 0.12)",
-      bottomColor: "rgba(255, 255, 255, 0.01)",
+      lineColor: "#f5a623",
+      topColor: "rgba(245, 166, 35, 0.2)",
+      bottomColor: "rgba(245, 166, 35, 0.015)",
       lineWidth: 2,
       priceFormat: { type: "custom", formatter: percentFormatter },
     });
     sectorSeriesRef.current = chart.addLineSeries({
-      color: "#FFC107",
+      color: "#58d3e6",
       lineWidth: 1,
       priceFormat: { type: "custom", formatter: percentFormatter },
     });
@@ -124,6 +126,7 @@ export default function PortfolioChart({
         canvas.style.height = `${containerRef.current.clientHeight || 220}px`;
       }
       chart.timeScale().fitContent();
+      requestAnimationFrame(() => redrawOverlayRef.current?.());
     };
     const resizeObserver = new ResizeObserver(handleResize);
     resizeObserver.observe(containerRef.current);
@@ -326,7 +329,11 @@ export default function PortfolioChart({
       }
     };
 
+    redrawOverlayRef.current = drawSpread;
     requestAnimationFrame(drawSpread);
+    return () => {
+      redrawOverlayRef.current = null;
+    };
   }, [data, showNav, showSector, showBench, sectorSeries, extraSeries, hasRenderableData, hasBaseData]);
 
   return (

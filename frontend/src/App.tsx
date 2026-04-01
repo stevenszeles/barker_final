@@ -473,6 +473,17 @@ export default function App() {
     return `OK · ${portfolioStatus.asof}`;
   }, [status, staticMode]);
 
+  const statusTone = useMemo(() => {
+    if (toast) return "warn";
+    if (statusLine.includes("STALE")) return "stale";
+    return "live";
+  }, [statusLine, toast]);
+
+  const dataTone = useMemo(() => {
+    if (portfolioStatus.source === "demo") return "warn";
+    return portfolioStatus.ok ? "live" : "stale";
+  }, [portfolioStatus.ok, portfolioStatus.source]);
+
   const positionsEmptyBanner = useMemo(() => {
     if (positions.length) return "";
     if (nav.length) return "No positions loaded. NAV history reflects prior data. Add positions or rebuild NAV.";
@@ -3271,13 +3282,13 @@ export default function App() {
           ))}
         </div>
         <div className="top-meta">
-          <div className="topcell">
+          <div className={`topcell ${statusTone}`}>
             <span className="label">Status</span>
-            <div className="status">{toast || statusLine}</div>
+            <div className={`status status-${statusTone}`}>{toast || statusLine}</div>
           </div>
-          <div className="topcell">
+          <div className={`topcell ${dataTone}`}>
             <span className="label">Data</span>
-            <div className="status">{portfolioStatus.source === "demo" ? "Demo" : "Local"}</div>
+            <div className={`status status-${dataTone}`}>{portfolioStatus.source === "demo" ? "Demo" : "Local"}</div>
           </div>
         </div>
       </div>
