@@ -1406,6 +1406,42 @@ def _clear_nav_cache() -> None:
     NAV_CACHE.clear()
 
 
+def _extend_nav_points_with_benchmark(
+    points: List[Dict[str, Any]],
+    bench_map: Dict[str, float],
+    limit: int,
+) -> List[Dict[str, Any]]:
+    if not points:
+        return []
+    if not bench_map:
+        return points[-int(limit):]
+
+    latest_point = points[-1]
+    last_date = parse_iso_date(latest_point.get("date"))
+    if not last_date:
+        return points[-int(limit):]
+
+    last_nav = float(latest_point.get("nav") or 0.0)
+    last_twr_raw = latest_point.get("twr")
+    try:
+        last_twr = float(last_twr_raw) if last_twr_raw is not None else None
+    except Exception:
+        last_twr = None
+
+    for bench_date in sorted(d for d in bench_map.keys() if d > last_date):
+        bench_val = float(bench_map.get(bench_date) or 0.0)
+        if bench_val <= 0:
+            continue
+        points.append({
+            "date": bench_date,
+            "nav": last_nav,
+            "bench": bench_val,
+            "twr": last_twr,
+        })
+
+    return points[-int(limit):]
+
+
 def _fallback_business_dates(start_iso: str, end_iso: str) -> List[str]:
     try:
         start = pd.to_datetime(start_iso)
@@ -1872,6 +1908,7 @@ def get_nav_series(limit: int = 120, account: Optional[str] = None) -> List[Dict
                 "twr": twr_val,
             }
         )
+    points = _extend_nav_points_with_benchmark(points, bench_map, limit)
     _set_nav_cache(limit, account, points)
     return points
 
@@ -2065,7 +2102,7 @@ def _get_nav_series_from_snapshots(limit: int = 120, account: Optional[str] = No
             if val is None or float(val) <= 0:
                 p["bench"] = float(fallback_bench)
 
-    return points
+    return _extend_nav_points_with_benchmark(points, bench_map, limit)
 
 
 # ----------------------------
