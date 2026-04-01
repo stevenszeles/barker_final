@@ -2070,9 +2070,10 @@ async def import_positions(file: UploadFile = File(...), account: Optional[str] 
         # Avoid network-bound benchmark fetches during import; read cache only.
         bench_val = None
         try:
+            legacy_engine.ensure_benchmark_cache_current(start_date=min(legacy_engine._get_bench_start(), asof))
             bench_symbol = legacy_engine.normalize_benchmark_symbol(legacy_engine._get_benchmark())
             candidates = [bench_symbol]
-            for alias in ("^GSPC", "^SPX", "SPX", "$SPX", "SPY"):
+            for alias in ("^GSPC", "^SPX", "SPX", "$SPX"):
                 if alias not in candidates:
                     candidates.append(alias)
 

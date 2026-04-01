@@ -50,6 +50,7 @@ SECTOR_ETF = {
 }
 
 DEFAULT_BENCH = "^GSPC"
+BENCHMARK_ALIASES = ("^GSPC", "^SPX", "SPX", "$SPX")
 START_CASH_DEFAULT = 0.0
 
 SHORT_EXTRA_MARGIN_PCT = 0.50
@@ -694,6 +695,83 @@ def last_cached_close(symbol: str) -> Optional[float]:
         return None
 
 
+def _benchmark_candidates(bench_symbol: str) -> List[str]:
+    bench = normalize_benchmark_symbol(bench_symbol)
+    candidates = [bench]
+    for alias in BENCHMARK_ALIASES:
+        if alias not in candidates:
+            candidates.append(alias)
+    return candidates
+
+
+def _store_price_point(symbol: str, date_iso: str, close: float) -> None:
+    point_date = parse_iso_date(date_iso)
+    try:
+        close_val = float(close)
+    except Exception:
+        return
+    if not symbol or not point_date or close_val <= 0:
+        return
+
+    def _run(conn):
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT OR REPLACE INTO price_cache(symbol, date, close) VALUES(?,?,?)",
+            (symbol, point_date, close_val),
+        )
+        conn.commit()
+
+    with_conn(_run)
+
+
+def _refresh_benchmark_quote(bench_symbol: str) -> bool:
+    bench = normalize_benchmark_symbol(bench_symbol)
+    if not bench:
+        return False
+    try:
+        quotes = stooq.get_quotes([bench])
+    except Exception:
+        quotes = []
+    for quote in quotes:
+        try:
+            price = float((quote.get("lastTrade") or {}).get("price") or 0.0)
+        except Exception:
+            price = 0.0
+        if price > 0:
+            _store_price_point(bench, today_str(), price)
+            return True
+    return False
+
+
+def ensure_benchmark_cache_current(bench_symbol: Optional[str] = None, start_date: Optional[str] = None) -> str:
+    bench = normalize_benchmark_symbol(bench_symbol or _get_benchmark())
+    start_iso = parse_iso_date(start_date) or _get_bench_start()
+    try:
+        ensure_symbol_history(bench, start_iso, is_bench=True)
+    except Exception:
+        pass
+
+    last_date = parse_iso_date(_get_last_price_date(bench))
+    if not last_date or last_date < today_str():
+        try:
+            fetch_prices_incremental(bench, last_date or start_iso, is_bench=True)
+        except Exception:
+            pass
+        last_date = parse_iso_date(_get_last_price_date(bench))
+        if not last_date or last_date < start_iso:
+            try:
+                ensure_symbol_history(bench, start_iso, is_bench=True)
+            except Exception:
+                pass
+
+    # Keep today's SPX point live even when full live quotes are disabled on Render.
+    try:
+        _refresh_benchmark_quote(bench)
+    except Exception:
+        pass
+    return bench
+
+
 def _fetch_history_schwab(symbol: str, start_date: str) -> List[Dict[str, Any]]:
     if not schwab.can_use_marketdata():
         return []
@@ -850,17 +928,11 @@ def fetch_prices_incremental(symbol: str, lookback_iso: str, is_bench: bool = Fa
 def get_bench_series(bench_symbol: Optional[str] = None, start_date: Optional[str] = None) -> pd.DataFrame:
     bench = normalize_benchmark_symbol(bench_symbol or _get_benchmark())
     start_iso = parse_iso_date(start_date) or _get_bench_start()
-    ensure_symbol_history(bench, start_iso, is_bench=True)
+    ensure_benchmark_cache_current(bench, start_iso)
 
     def _run(conn):
         cur = conn.cursor()
-        candidates = [bench]
-        for alias in ("^GSPC", "^SPX", "SPX", "$SPX"):
-            if alias not in candidates:
-                candidates.append(alias)
-        # Proxy fallback when index history is unavailable from provider/cache.
-        if bench in {"^GSPC", "^SPX", "SPX", "$SPX"} and "SPY" not in candidates:
-            candidates.append("SPY")
+        candidates = _benchmark_candidates(bench)
         for candidate in candidates:
             cur.execute(
                 "SELECT date, close FROM price_cache WHERE symbol=? AND date>=? ORDER BY date ASC",
@@ -1753,22 +1825,6 @@ def get_nav_series(limit: int = 120, account: Optional[str] = None) -> List[Dict
     if snapshot_points:
         _set_nav_cache(limit, account, snapshot_points)
         return snapshot_points
-    # In render-style import deployments (live quotes disabled), avoid expensive
-    # history rebuilds in request path and return a lightweight current NAV point.
-    if not settings.static_mode and not settings.live_quotes:
-        today = today_str()
-        nav_val = _get_account_value(account)
-        if nav_val is None:
-            try:
-                positions_live = build_positions_live(today, _get_bench_start(), account=account)
-                cash_total = compute_cash_balance_total(account)
-                net_mv = float(np.sum(positions_live["market_value"].astype(float).to_numpy())) if not positions_live.empty else 0.0
-                nav_val = float(cash_total + net_mv) if not positions_live.empty else float(cash_total)
-            except Exception:
-                nav_val = 0.0
-        point = [{"date": today, "nav": float(nav_val or 0.0), "bench": 1.0, "twr": 1.0}]
-        _set_nav_cache(limit, account, point)
-        return point
     if settings.static_mode:
         return []
     bench_series = get_bench_series(start_date=start_iso)
@@ -1822,6 +1878,21 @@ def get_nav_series(limit: int = 120, account: Optional[str] = None) -> List[Dict
 
 def _get_nav_series_from_snapshots(limit: int = 120, account: Optional[str] = None) -> List[Dict[str, Any]]:
     label = _account_label(account)
+    ensure_benchmark_cache_current(start_date=_get_bench_start())
+
+    def _load_cached_bench_rows(cur) -> List[Dict[str, Any]]:
+        bench = normalize_benchmark_symbol(_get_benchmark())
+        start_iso = _get_bench_start()
+        candidates = _benchmark_candidates(bench)
+        for candidate in candidates:
+            cur.execute(
+                "SELECT date, close FROM price_cache WHERE symbol=? AND date>=? ORDER BY date ASC",
+                (candidate, start_iso),
+            )
+            rows = _fetch_rows(cur)
+            if rows:
+                return rows
+        return []
 
     def _aggregate_all_rows(raw_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if not raw_rows:
@@ -1913,17 +1984,33 @@ def _get_nav_series_from_snapshots(limit: int = 120, account: Optional[str] = No
                 (label,),
             )
             rows = _fetch_rows(cur)
-        return rows
+        bench_rows = _load_cached_bench_rows(cur) if rows else []
+        return rows, bench_rows
 
-    rows = with_conn(_run)
+    rows, bench_rows = with_conn(_run)
     if not rows:
         return []
 
     rows = rows[-int(limit):]
+    bench_map: Dict[str, float] = {}
+    for row in bench_rows:
+        d = parse_iso_date(row.get("date"))
+        if not d:
+            continue
+        try:
+            close_val = float(row.get("close") or 0.0)
+        except Exception:
+            continue
+        if close_val > 0:
+            bench_map[d] = close_val
+    bench_dates = sorted(bench_map.keys())
+    bench_idx = 0
 
     points = []
-    # Track last known bench value for forward-fill (from stored snapshots only).
-    last_bench_raw: Optional[float] = None
+    # Prefer benchmark history from price_cache. Stored snapshot bench values are
+    # only a fallback when no cached benchmark history is available at all.
+    last_live_bench_raw: Optional[float] = None
+    last_stored_bench_raw: Optional[float] = None
     base_nav: Optional[float] = None
     for row in rows:
         d = str(row.get("date") or "")
@@ -1933,11 +2020,23 @@ def _get_nav_series_from_snapshots(limit: int = 120, account: Optional[str] = No
             bench_raw_num = float(bench_raw) if bench_raw is not None else None
         except Exception:
             bench_raw_num = None
-        if bench_raw_num is not None and bench_raw_num > 0:
-            last_bench_raw = bench_raw_num
 
-        # Use forward-filled bench raw price
-        effective_bench = last_bench_raw if last_bench_raw and last_bench_raw > 0 else None
+        while bench_idx < len(bench_dates) and bench_dates[bench_idx] <= d:
+            raw = bench_map.get(bench_dates[bench_idx])
+            if raw is not None and raw > 0:
+                last_live_bench_raw = float(raw)
+            bench_idx += 1
+
+        if last_live_bench_raw is not None and last_live_bench_raw > 0:
+            effective_bench = float(last_live_bench_raw)
+        else:
+            if bench_raw_num is not None and bench_raw_num > 0:
+                last_stored_bench_raw = bench_raw_num
+            effective_bench = (
+                float(last_stored_bench_raw)
+                if last_stored_bench_raw is not None and last_stored_bench_raw > 0
+                else None
+            )
 
         if base_nav is None and abs(nav_val) > 1e-12:
             base_nav = float(nav_val)
@@ -1958,11 +2057,13 @@ def _get_nav_series_from_snapshots(limit: int = 120, account: Optional[str] = No
             fallback_bench = float(val)
             break
     if fallback_bench is None:
-        fallback_bench = 1.0
-    for p in points:
-        val = p.get("bench")
-        if val is None or float(val) <= 0:
-            p["bench"] = float(fallback_bench)
+        for p in points:
+            p["bench"] = float(p["nav"])
+    else:
+        for p in points:
+            val = p.get("bench")
+            if val is None or float(val) <= 0:
+                p["bench"] = float(fallback_bench)
 
     return points
 

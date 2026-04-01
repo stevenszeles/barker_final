@@ -757,6 +757,40 @@ body {
   text-align: center;
 }
 
+.row.positions.positions-group {
+  background: #121922;
+  font-weight: 600;
+}
+
+.row.positions.positions-child {
+  background: #101010;
+}
+
+.position-symbol-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.position-symbol-cell.indented {
+  padding-left: 18px;
+}
+
+.positions-toggle {
+  border: 1px solid var(--border);
+  background: #0e141c;
+  color: var(--text-primary);
+  width: 18px;
+  height: 18px;
+  line-height: 16px;
+  padding: 0;
+  cursor: pointer;
+}
+
+.positions-toggle:hover {
+  border-color: var(--border-light);
+}
+
 .chart-wrap {
   position: relative;
 }

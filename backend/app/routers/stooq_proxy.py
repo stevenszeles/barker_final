@@ -24,7 +24,7 @@ def _normalize_history_symbol(raw_symbol: str) -> tuple[str, bool]:
 def _history_candidates(symbol: str, is_benchmark: bool) -> list[str]:
     candidates = [symbol]
     if is_benchmark:
-        for alias in ("^SPX", "SPX", "$SPX", "SPY"):
+        for alias in ("^SPX", "SPX", "$SPX"):
             if alias not in candidates:
                 candidates.append(alias)
     return candidates

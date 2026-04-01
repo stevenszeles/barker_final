@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useAppStore } from "./store";
-import type { Position } from "./store";
+import type { NavPoint, Position } from "./store";
 import { api } from "./services/api";
 import PortfolioChart from "./components/PortfolioChart";
 import ErrorBoundary from "./components/ErrorBoundary";
@@ -54,6 +54,53 @@ type RiskProfilePayload = {
 
 type SectorLinePoint = { date: string; sector?: number | null };
 type SectorSourceSeries = { sleeve: SectorLinePoint[]; etf: SectorLinePoint[] };
+type ChartPrefs = {
+  timeframe?: string;
+  chartMode?: "PORTFOLIO" | "SECTOR";
+  chartShowBench?: boolean;
+  selectedAccounts?: string[];
+  selectedSectors?: string[];
+  sectorShowSleeve?: boolean;
+  sectorShowEtf?: boolean;
+  sectorShowPortfolio?: boolean;
+  accountTouched?: boolean;
+  sectorTouched?: boolean;
+};
+
+const CHART_PREFS_STORAGE_KEY = "ws_chart_prefs";
+
+function loadChartPrefs(): ChartPrefs {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(CHART_PREFS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return {};
+    return {
+      timeframe: typeof parsed.timeframe === "string" ? parsed.timeframe : undefined,
+      chartMode: parsed.chartMode === "SECTOR" ? "SECTOR" : parsed.chartMode === "PORTFOLIO" ? "PORTFOLIO" : undefined,
+      chartShowBench: typeof parsed.chartShowBench === "boolean" ? parsed.chartShowBench : undefined,
+      selectedAccounts: Array.isArray(parsed.selectedAccounts) ? parsed.selectedAccounts.filter((v) => typeof v === "string") : undefined,
+      selectedSectors: Array.isArray(parsed.selectedSectors) ? parsed.selectedSectors.filter((v) => typeof v === "string") : undefined,
+      sectorShowSleeve: typeof parsed.sectorShowSleeve === "boolean" ? parsed.sectorShowSleeve : undefined,
+      sectorShowEtf: typeof parsed.sectorShowEtf === "boolean" ? parsed.sectorShowEtf : undefined,
+      sectorShowPortfolio: typeof parsed.sectorShowPortfolio === "boolean" ? parsed.sectorShowPortfolio : undefined,
+      accountTouched: typeof parsed.accountTouched === "boolean" ? parsed.accountTouched : undefined,
+      sectorTouched: typeof parsed.sectorTouched === "boolean" ? parsed.sectorTouched : undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
+function saveChartPrefs(value: ChartPrefs) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(CHART_PREFS_STORAGE_KEY, JSON.stringify(value));
+  } catch {
+    // ignore storage errors
+  }
+}
 
 function safeNumber(value: number | null | undefined): number {
   if (value === null || value === undefined) return 0;
@@ -156,12 +203,89 @@ function sparklinePath(values: number[], width = 240, height = 64, pad = 6) {
   return points.join(" ");
 }
 
+function filterPointsByStart<T extends { date: string }>(points: T[], startDate: string) {
+  if (!startDate) return points;
+  const filtered = points.filter((point) => point.date >= startDate);
+  return filtered.length ? filtered : points;
+}
+
+function combineAccountNavSeries(
+  seriesList: Array<{ name: string; data: NavPoint[] }>,
+  benchmarkSource: NavPoint[]
+): NavPoint[] {
+  if (!seriesList.length) return [];
+  const benchmarkMap = new Map<string, number>();
+  benchmarkSource.forEach((point) => {
+    const bench = Number(point.bench);
+    if (point.date && Number.isFinite(bench) && bench > 0) {
+      benchmarkMap.set(point.date, bench);
+    }
+  });
+
+  const normalized = seriesList
+    .map((series) => {
+      const values = new Map<string, number>();
+      let firstDate = "";
+      series.data.forEach((point) => {
+        const nav = Number(point.nav);
+        if (!point.date || !Number.isFinite(nav)) return;
+        values.set(point.date, nav);
+        if (!firstDate || point.date < firstDate) firstDate = point.date;
+        const bench = Number(point.bench);
+        if (Number.isFinite(bench) && bench > 0 && !benchmarkMap.has(point.date)) {
+          benchmarkMap.set(point.date, bench);
+        }
+      });
+      return { values, firstDate };
+    })
+    .filter((series) => series.firstDate);
+
+  if (!normalized.length) return [];
+
+  const allDates = Array.from(
+    new Set(normalized.flatMap((series) => Array.from(series.values.keys())))
+  ).sort();
+  const carry = new Array<number | null>(normalized.length).fill(null);
+  let lastBench: number | null = null;
+
+  return allDates
+    .map((date) => {
+      let total = 0;
+      let active = 0;
+      normalized.forEach((series, idx) => {
+        if (date < series.firstDate) return;
+        const next = series.values.get(date);
+        if (Number.isFinite(next)) {
+          carry[idx] = Number(next);
+        }
+        const current = carry[idx];
+        if (Number.isFinite(current)) {
+          total += Number(current);
+          active += 1;
+        }
+      });
+      const bench = benchmarkMap.get(date);
+      if (Number.isFinite(bench) && Number(bench) > 0) {
+        lastBench = Number(bench);
+      }
+      if (!active) return null;
+      return {
+        date,
+        nav: total,
+        bench: lastBench ?? 1,
+        twr: null,
+      };
+    })
+    .filter((point): point is NavPoint => Boolean(point));
+}
+
 export default function App() {
+  const initialChartPrefs = loadChartPrefs();
   const [tab, setTab] = useState("Monitor");
   const [showLeft, setShowLeft] = useState(true);
   const [showChart, setShowChart] = useState(true);
   const [currentSymbol, setCurrentSymbol] = useState("AAPL");
-  const [timeframe, setTimeframe] = useState("MAX");
+  const [timeframe, setTimeframe] = useState(initialChartPrefs.timeframe || "MAX");
   const [previewText, setPreviewText] = useState("Preview not run.");
   const [tradeSide, setTradeSide] = useState("BUY");
   const [tradeSymbol, setTradeSymbol] = useState("AAPL");
@@ -190,6 +314,7 @@ export default function App() {
   >([]);
   const [toast, setToast] = useState("");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [expandedPositionGroups, setExpandedPositionGroups] = useState<Record<string, boolean>>({});
   const [focus, setFocus] = useState<{ left?: string; center?: string }>({});
   const [activeTable, setActiveTable] = useState<"positions" | null>(null);
   const [selectedPosIndex, setSelectedPosIndex] = useState(0);
@@ -230,22 +355,22 @@ export default function App() {
   const [sectorView, setSectorView] = useState(sectorOptions[0]);
   const [sectorSeriesMap, setSectorSeriesMap] = useState<Record<string, SectorSourceSeries>>({});
   const [sectorError, setSectorError] = useState("");
-  const [sectorShowSleeve, setSectorShowSleeve] = useState(true);
-  const [sectorShowEtf, setSectorShowEtf] = useState(true);
-  const [sectorShowPortfolio, setSectorShowPortfolio] = useState(true);
+  const [sectorShowSleeve, setSectorShowSleeve] = useState(initialChartPrefs.sectorShowSleeve ?? true);
+  const [sectorShowEtf, setSectorShowEtf] = useState(initialChartPrefs.sectorShowEtf ?? true);
+  const [sectorShowPortfolio, setSectorShowPortfolio] = useState(initialChartPrefs.sectorShowPortfolio ?? true);
   const [accountSeries, setAccountSeries] = useState<Array<{ name: string; data: any[] }>>([]);
   const [navPasteText, setNavPasteText] = useState("");
   const [navPasteError, setNavPasteError] = useState("");
   const [benchPasteText, setBenchPasteText] = useState("");
   const [benchPasteError, setBenchPasteError] = useState("");
   const [accountView, setAccountView] = useState("");
-  const [selectedAccounts, setSelectedAccounts] = useState<string[]>([]);
-  const [accountTouched, setAccountTouched] = useState(false);
+  const [selectedAccounts, setSelectedAccounts] = useState<string[]>(initialChartPrefs.selectedAccounts ?? []);
+  const [accountTouched, setAccountTouched] = useState(initialChartPrefs.accountTouched ?? false);
   const [chartFull, setChartFull] = useState(false);
-  const [chartMode, setChartMode] = useState<"PORTFOLIO" | "SECTOR">("PORTFOLIO");
-  const [chartShowBench, setChartShowBench] = useState(true);
-  const [selectedSectors, setSelectedSectors] = useState<string[]>([]);
-  const [sectorTouched, setSectorTouched] = useState(false);
+  const [chartMode, setChartMode] = useState<"PORTFOLIO" | "SECTOR">(initialChartPrefs.chartMode || "PORTFOLIO");
+  const [chartShowBench, setChartShowBench] = useState(initialChartPrefs.chartShowBench ?? true);
+  const [selectedSectors, setSelectedSectors] = useState<string[]>(initialChartPrefs.selectedSectors ?? []);
+  const [sectorTouched, setSectorTouched] = useState(initialChartPrefs.sectorTouched ?? false);
   const [optionPreview, setOptionPreview] = useState<{ net: number; legs: number } | null>(null);
   const [activityClosedOnly, setActivityClosedOnly] = useState(true);
   const [tradeRealizedDrafts, setTradeRealizedDrafts] = useState<Record<string, string>>({});
@@ -451,6 +576,32 @@ export default function App() {
     return () => clearInterval(timer);
   }, [fetchNav, navLimit, accountId]);
 
+  useEffect(() => {
+    saveChartPrefs({
+      timeframe,
+      chartMode,
+      chartShowBench,
+      selectedAccounts,
+      selectedSectors,
+      sectorShowSleeve,
+      sectorShowEtf,
+      sectorShowPortfolio,
+      accountTouched,
+      sectorTouched,
+    });
+  }, [
+    timeframe,
+    chartMode,
+    chartShowBench,
+    selectedAccounts,
+    selectedSectors,
+    sectorShowSleeve,
+    sectorShowEtf,
+    sectorShowPortfolio,
+    accountTouched,
+    sectorTouched,
+  ]);
+
 
   useEffect(() => {
     if (!toast) return;
@@ -563,7 +714,172 @@ export default function App() {
       text: `Pricing sources: ${sources || "—"} · Missing: ${missingAssets || "UNKNOWN"}`,
     };
   }, [dataQuality]);
-  const positionsDisplay = useMemo(() => positions, [positions]);
+  const positionsDisplay = useMemo(() => {
+    const grouped = new Map<string, Position[]>();
+    const order: string[] = [];
+    positions.forEach((row) => {
+      const parsed = row.symbol ? parseOsiSymbol(String(row.symbol)) : null;
+      const underlying = String(row.underlying || parsed?.underlying || row.symbol || "")
+        .trim()
+        .toUpperCase();
+      if (!underlying) return;
+      const accountKey = accountId === "ALL" ? String(row.account || "ALL").trim().toUpperCase() : "";
+      const groupKey = `${accountKey}::${underlying}`;
+      if (!grouped.has(groupKey)) {
+        grouped.set(groupKey, []);
+        order.push(groupKey);
+      }
+      grouped.get(groupKey)?.push(row);
+    });
+
+    const flat: any[] = [];
+    order.forEach((groupKey) => {
+      const rows = [...(grouped.get(groupKey) || [])];
+      if (!rows.length) return;
+      rows.sort((a, b) => {
+        const assetRank = (value: Position) => {
+          const asset = String(value.asset_class || "").toLowerCase();
+          if (asset === "equity") return 0;
+          if (asset === "future") return 1;
+          if (asset === "option") return 2;
+          return 3;
+        };
+        const rankDiff = assetRank(a) - assetRank(b);
+        if (rankDiff !== 0) return rankDiff;
+        const expiryA = String(a.expiry || "");
+        const expiryB = String(b.expiry || "");
+        if (expiryA !== expiryB) return expiryA.localeCompare(expiryB);
+        const strikeA = Number(a.strike || 0);
+        const strikeB = Number(b.strike || 0);
+        if (strikeA !== strikeB) return strikeA - strikeB;
+        return String(a.symbol || "").localeCompare(String(b.symbol || ""));
+      });
+
+      const first = rows[0];
+      const underlying = String(first.underlying || parseOsiSymbol(String(first.symbol || ""))?.underlying || first.symbol || "")
+        .trim()
+        .toUpperCase();
+      const accountName = String(first.account || "").trim();
+      const stockCount = rows.filter((row) => String(row.asset_class || "").toLowerCase() === "equity").length;
+      const futureCount = rows.filter((row) => String(row.asset_class || "").toLowerCase() === "future").length;
+      const optionCount = rows.filter((row) => String(row.asset_class || "").toLowerCase() === "option").length;
+      const needsGroup = rows.length > 1;
+      const expanded = Boolean(expandedPositionGroups[groupKey]);
+      const selectSymbol = underlying || String(first.symbol || "").toUpperCase();
+      const owners = Array.from(new Set(rows.map((row) => String(row.owner || "").trim()).filter(Boolean)));
+      const sectors = Array.from(new Set(rows.map((row) => String(row.sector || "").trim()).filter(Boolean)));
+      const stockLikeRows = rows.filter((row) => {
+        const asset = String(row.asset_class || "").toLowerCase();
+        return asset === "equity" || asset === "future";
+      });
+      const primaryRow = stockLikeRows.length === 1 ? stockLikeRows[0] : null;
+      const typeParts: string[] = [];
+      if (stockCount) typeParts.push(stockCount === 1 ? "Stock" : `${stockCount} Stocks`);
+      if (futureCount) typeParts.push(futureCount === 1 ? "Future" : `${futureCount} Futures`);
+      if (optionCount) typeParts.push(optionCount === 1 ? "Option" : `${optionCount} Options`);
+      const groupType = [accountId === "ALL" && accountName ? accountName : "", typeParts.join(" · ")]
+        .filter(Boolean)
+        .join(" · ");
+
+      if (!needsGroup) {
+        const row = rows[0];
+        const asset = String(row.asset_class || "").toLowerCase();
+        const optionParsed = row.symbol ? parseOsiSymbol(String(row.symbol)) : null;
+        const isOptionSymbol = asset === "option" || Boolean(optionParsed);
+        const displaySymbol =
+          isOptionSymbol && row.symbol && !optionParsed
+            ? buildOsiSymbol(
+                row.underlying ?? row.symbol,
+                row.expiry ? normalizeExpiryInput(String(row.expiry)) : "",
+                row.option_type?.toString().startsWith("P") ? "P" : "C",
+                row.strike ?? 0
+              ) || row.symbol
+            : row.symbol;
+        const baseType = row.asset_class ? String(row.asset_class).toUpperCase() : "—";
+        const withSide = Number(row.qty || 0) < 0 ? `${baseType} SHORT` : baseType;
+        flat.push({
+          kind: "position",
+          key: row.instrument_id ?? `${groupKey}-${row.symbol}`,
+          groupKey,
+          row,
+          selectSymbol: isOptionSymbol && row.underlying ? row.underlying : row.symbol,
+          displaySymbol,
+          typeDisplay:
+            accountId === "ALL" && accountName ? `${withSide} · ${accountName}` : withSide,
+          child: false,
+        });
+        return;
+      }
+
+      flat.push({
+        kind: "group",
+        key: `group-${groupKey}`,
+        groupKey,
+        expanded,
+        symbol: underlying,
+        selectSymbol,
+        typeDisplay: groupType || `${rows.length} Legs`,
+        qtyDisplay: primaryRow && optionCount === 0 ? formatNumber(Number(primaryRow.qty || 0)) : "—",
+        avgDisplay: primaryRow && Number.isFinite(Number(primaryRow.avg_cost)) ? formatNumber(Number(primaryRow.avg_cost || 0)) : "—",
+        lastDisplay: primaryRow && Number.isFinite(Number(primaryRow.price)) ? formatNumber(Number(primaryRow.price || 0)) : "—",
+        dayPnl: rows.reduce((sum, row) => sum + safeNumber(row.day_pnl), 0),
+        totalPnl: rows.reduce((sum, row) => sum + safeNumber(row.total_pnl), 0),
+        marketValue: rows.reduce((sum, row) => sum + safeNumber(row.market_value), 0),
+        ownerDisplay: owners.length === 1 ? owners[0] : owners.length > 1 ? "Multiple" : "—",
+        sectorDisplay: sectors.length === 1 ? sectors[0] : sectors.length > 1 ? "Multiple" : "—",
+      });
+
+      if (!expanded) return;
+      rows.forEach((row) => {
+        const asset = String(row.asset_class || "").toLowerCase();
+        const optionParsed = row.symbol ? parseOsiSymbol(String(row.symbol)) : null;
+        const isOptionSymbol = asset === "option" || Boolean(optionParsed);
+        const displaySymbol =
+          isOptionSymbol && row.symbol && !optionParsed
+            ? buildOsiSymbol(
+                row.underlying ?? row.symbol,
+                row.expiry ? normalizeExpiryInput(String(row.expiry)) : "",
+                row.option_type?.toString().startsWith("P") ? "P" : "C",
+                row.strike ?? 0
+              ) || row.symbol
+            : row.symbol;
+        const baseType = row.asset_class ? String(row.asset_class).toUpperCase() : "—";
+        const withSide = Number(row.qty || 0) < 0 ? `${baseType} SHORT` : baseType;
+        flat.push({
+          kind: "position",
+          key: row.instrument_id ?? `${groupKey}-${row.symbol}`,
+          groupKey,
+          row,
+          selectSymbol: isOptionSymbol && row.underlying ? row.underlying : row.symbol,
+          displaySymbol,
+          typeDisplay:
+            accountId === "ALL" && accountName ? `${withSide} · ${accountName}` : withSide,
+          child: true,
+        });
+      });
+    });
+    return flat;
+  }, [positions, accountId, expandedPositionGroups]);
+
+  useEffect(() => {
+    setExpandedPositionGroups((prev) => {
+      const valid = new Set(
+        positions.map((row) => {
+          const parsed = row.symbol ? parseOsiSymbol(String(row.symbol)) : null;
+          const underlying = String(row.underlying || parsed?.underlying || row.symbol || "")
+            .trim()
+            .toUpperCase();
+          const accountKey = accountId === "ALL" ? String(row.account || "ALL").trim().toUpperCase() : "";
+          return `${accountKey}::${underlying}`;
+        })
+      );
+      const next: Record<string, boolean> = {};
+      Object.entries(prev).forEach(([key, value]) => {
+        if (valid.has(key)) next[key] = value;
+      });
+      return next;
+    });
+  }, [positions, accountId]);
 
   useEffect(() => {
     const loadBench = async () => {
@@ -595,27 +911,48 @@ export default function App() {
     return filtered.length ? filtered : nav;
   }, [nav, chartStart]);
 
-  const chartData = useMemo(() => navFiltered, [navFiltered]);
   const allAccountsPortfolioMode = chartMode === "PORTFOLIO" && accountId === "ALL";
+  const selectedAccountSeries = useMemo(
+    () => accountSeries.filter((series) => selectedAccounts.includes(series.name)),
+    [accountSeries, selectedAccounts]
+  );
   const allSelectedIncludesTotal = selectedAccounts.includes("ALL");
+  const selectedAccountAggregateData = useMemo(() => {
+    if (!allAccountsPortfolioMode || selectedAccounts.length === 0) {
+      return navFiltered;
+    }
+    const totalSeries = selectedAccountSeries.find((series) => series.name === "ALL");
+    if (allSelectedIncludesTotal && totalSeries) {
+      return filterPointsByStart(totalSeries.data, chartStart);
+    }
+    const componentSeries = selectedAccountSeries.filter((series) => series.name !== "ALL");
+    return filterPointsByStart(combineAccountNavSeries(componentSeries, navFiltered), chartStart);
+  }, [allAccountsPortfolioMode, selectedAccounts, selectedAccountSeries, navFiltered, chartStart, allSelectedIncludesTotal]);
+  const chartData = useMemo(
+    () => (allAccountsPortfolioMode ? selectedAccountAggregateData : navFiltered),
+    [allAccountsPortfolioMode, selectedAccountAggregateData, navFiltered]
+  );
   const chartNeedsAccountSelection = allAccountsPortfolioMode && selectedAccounts.length === 0;
   const chartNeedsSelection = chartMode === "SECTOR" && !sectorShowPortfolio && !chartShowBench && !sectorShowSleeve && !sectorShowEtf;
   const chartShowNav =
     chartMode === "SECTOR"
       ? sectorShowPortfolio
-      : (!allAccountsPortfolioMode || allSelectedIncludesTotal);
+      : (!allAccountsPortfolioMode || selectedAccounts.length > 0);
   const chartShowBenchEffective =
     chartMode === "SECTOR"
       ? chartShowBench
       : chartShowBench && (!allAccountsPortfolioMode || selectedAccounts.length > 0);
   const chartExtraSeries = allAccountsPortfolioMode
-    ? accountSeries.map((series) => ({
-        ...series,
-        data: chartStart ? series.data.filter((point) => point.date >= chartStart) : series.data,
-      })).filter((series) => series.name !== "ALL")
+    ? selectedAccountSeries
+        .filter((series) => series.name !== "ALL")
+        .filter((series) => allSelectedIncludesTotal || selectedAccounts.length > 1)
+        .map((series) => ({
+          ...series,
+          data: filterPointsByStart(series.data, chartStart),
+        }))
     : [];
   const chartEmptyMessage = chartNeedsAccountSelection
-    ? "Select an account and click Add to chart. Include ALL to view total portfolio return."
+    ? "Select one or more accounts and click Add to chart."
     : chartNeedsSelection
       ? "Enable at least one series (Sleeve, ETF, Portfolio, or SPX)."
       : undefined;
@@ -2432,11 +2769,10 @@ export default function App() {
               const max = positionsDisplay.length - 1;
               const next = key === "arrowdown" ? Math.min(prev + 1, max) : Math.max(prev - 1, 0);
               const row: any = positionsDisplay[next];
-              const asset = String(row?.asset_class || "").toLowerCase();
+              const asset = String(row?.row?.asset_class || row?.asset_class || "").toLowerCase();
               const symbol =
-                asset === "option" && row?.underlying
-                    ? row.underlying
-                    : row?.symbol;
+                row?.selectSymbol ||
+                (asset === "option" && row?.row?.underlying ? row.row.underlying : row?.row?.symbol || row?.symbol);
               if (symbol) setCurrentSymbol(symbol);
               return next;
             });
@@ -3252,107 +3588,133 @@ export default function App() {
                         </div>
                       ) : (
                         positionsDisplay.map((row: any, idx: number) => {
-                          const navPct = snapshot ? (row.market_value / Math.max(snapshot.nlv, 1)) * 100 : 0;
-                          const dayPnl = safeNumber(row.day_pnl);
-                          const totalPnl = safeNumber(row.total_pnl);
-                          const asset = String(row.asset_class || "").toLowerCase();
-                          const isOptionSymbol = asset === "option" || (row.symbol && parseOsiSymbol(row.symbol));
-                          const displaySymbol =
-                            isOptionSymbol && row.symbol && !parseOsiSymbol(row.symbol)
-                              ? buildOsiSymbol(
-                                  row.underlying ?? row.symbol,
-                                  row.expiry ? normalizeExpiryInput(String(row.expiry)) : "",
-                                  row.option_type?.toString().startsWith("P") ? "P" : "C",
-                                  row.strike ?? 0
-                                ) || row.symbol
-                              : row.symbol;
-                          const selectSymbol = isOptionSymbol && row.underlying ? row.underlying : row.symbol;
-                          const isShort = Number(row.qty || 0) < 0;
-                          const typeBase = row.asset_class ? String(row.asset_class).toUpperCase() : "—";
-                          const typeDisplay = isShort ? `${typeBase} SHORT` : typeBase;
+                          const isGroupRow = row.kind === "group";
+                          const position = isGroupRow ? null : row.row;
+                          const navBase = isGroupRow ? safeNumber(row.marketValue) : safeNumber(position?.market_value);
+                          const navPct = snapshot ? (navBase / Math.max(snapshot.nlv, 1)) * 100 : 0;
+                          const dayPnl = safeNumber(isGroupRow ? row.dayPnl : position?.day_pnl);
+                          const totalPnl = safeNumber(isGroupRow ? row.totalPnl : position?.total_pnl);
+                          const selectSymbol = row.selectSymbol;
                           return (
                             <div
-                              className={`row positions ${idx % 2 ? "alt" : ""} ${currentSymbol === selectSymbol ? "selected" : ""} ${selectedPosIndex === idx ? "selected" : ""}`}
-                              key={row.instrument_id ?? `${row.symbol}-${idx}`}
+                              className={`row positions ${isGroupRow ? "positions-group" : row.child ? "positions-child" : ""} ${idx % 2 ? "alt" : ""} ${currentSymbol === selectSymbol ? "selected" : ""} ${selectedPosIndex === idx ? "selected" : ""}`}
+                              key={row.key ?? `${row.symbol}-${idx}`}
                               onClick={() => {
                                 setActiveTable("positions");
                                 setSelectedPosIndex(idx);
-                                setCurrentSymbol(selectSymbol);
+                                if (selectSymbol) setCurrentSymbol(selectSymbol);
                               }}
                               onContextMenu={(event) => {
                                 event.preventDefault();
                                 setActiveTable("positions");
                                 setSelectedPosIndex(idx);
-                                setCurrentSymbol(selectSymbol);
+                                if (selectSymbol) setCurrentSymbol(selectSymbol);
                                 setContextMenu({
                                   x: event.clientX,
                                   y: event.clientY,
-                                  symbol: row.symbol,
+                                  symbol: isGroupRow ? row.symbol : position?.symbol,
                                   selectSymbol,
                                   mode: "positions",
-                                  instrumentId: row.instrument_id,
-                                  isStrategySummary: false,
+                                  instrumentId: isGroupRow ? null : position?.instrument_id,
+                                  isStrategySummary: isGroupRow,
                                 });
                               }}
                               role="button"
                               tabIndex={0}
                             >
-                              <div className="mono">
-                                <span>{displaySymbol}</span>
+                              <div className={`mono position-symbol-cell ${row.child ? "indented" : ""}`}>
+                                {isGroupRow ? (
+                                  <>
+                                    <button
+                                      type="button"
+                                      className="positions-toggle"
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        setExpandedPositionGroups((prev) => ({
+                                          ...prev,
+                                          [row.groupKey]: !prev[row.groupKey],
+                                        }));
+                                      }}
+                                    >
+                                      {row.expanded ? "-" : "+"}
+                                    </button>
+                                    <span>{row.symbol}</span>
+                                  </>
+                                ) : (
+                                  <span>{row.displaySymbol}</span>
+                                )}
                               </div>
-                              <div className="mono">{typeDisplay}</div>
-                              <div className="num mono">{formatNumber(row.qty)}</div>
-                              <div className="num mono">{formatNumber(safeNumber(row.avg_cost))}</div>
-                              <div className="num mono">{formatNumber(row.price)}</div>
+                              <div className="mono">{row.typeDisplay}</div>
+                              <div className="num mono">
+                                {isGroupRow ? row.qtyDisplay : formatNumber(position?.qty)}
+                              </div>
+                              <div className="num mono">
+                                {isGroupRow ? row.avgDisplay : formatNumber(safeNumber(position?.avg_cost))}
+                              </div>
+                              <div className="num mono">
+                                {isGroupRow ? row.lastDisplay : formatNumber(position?.price)}
+                              </div>
                               <div className={`num mono ${dayPnl < 0 ? "neg" : "pos"}`}>{formatSignedMoney(dayPnl)}</div>
                               <div className={`num mono ${totalPnl < 0 ? "neg" : "pos"}`}>{formatSignedMoney(totalPnl)}</div>
                               <div className="num mono">{navPct.toFixed(1)}%</div>
-                              <div className="centered mono">{row.expiry ?? "—"}</div>
+                              <div className="centered mono">{isGroupRow ? "—" : position?.expiry ?? "—"}</div>
                               <div className="centered mono cell-strike">
-                                {row.strike ? formatNumber(row.strike) : "—"}
+                                {isGroupRow ? "—" : position?.strike ? formatNumber(position.strike) : "—"}
                               </div>
                               <div className="centered cell-entry-date">
-                                <input
-                                  key={`${row.instrument_id ?? row.symbol}-entry-${row.entry_date ?? ""}`}
-                                  className="input input-mini mono"
-                                  type="date"
-                                  defaultValue={row.entry_date ?? ""}
-                                  onBlur={(e) => updatePositionEntryDate(row, e.target.value)}
-                                  onKeyDown={(e) => {
-                                    if (e.key === "Enter") {
-                                      (e.target as HTMLInputElement).blur();
-                                    }
-                                  }}
-                                />
+                                {isGroupRow ? (
+                                  <span className="mono">—</span>
+                                ) : (
+                                  <input
+                                    key={`${position?.instrument_id ?? position?.symbol}-entry-${position?.entry_date ?? ""}`}
+                                    className="input input-mini mono"
+                                    type="date"
+                                    defaultValue={position?.entry_date ?? ""}
+                                    onBlur={(e) => updatePositionEntryDate(position, e.target.value)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter") {
+                                        (e.target as HTMLInputElement).blur();
+                                      }
+                                    }}
+                                  />
+                                )}
                               </div>
                               <div className="cell-owner">
-                                <input
-                                  key={`${row.instrument_id ?? row.symbol}-owner-${row.owner ?? ""}`}
-                                  className="input input-mini"
-                                  list="label-options"
-                                  placeholder="Label"
-                                  defaultValue={row.owner ?? ""}
-                                  onBlur={(e) => updatePositionOwner(row, e.target.value)}
-                                  onKeyDown={(e) => {
-                                    if (e.key === "Enter") {
-                                      (e.target as HTMLInputElement).blur();
-                                    }
-                                  }}
-                                />
+                                {isGroupRow ? (
+                                  <span>{row.ownerDisplay}</span>
+                                ) : (
+                                  <input
+                                    key={`${position?.instrument_id ?? position?.symbol}-owner-${position?.owner ?? ""}`}
+                                    className="input input-mini"
+                                    list="label-options"
+                                    placeholder="Label"
+                                    defaultValue={position?.owner ?? ""}
+                                    onBlur={(e) => updatePositionOwner(position, e.target.value)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter") {
+                                        (e.target as HTMLInputElement).blur();
+                                      }
+                                    }}
+                                  />
+                                )}
                               </div>
                               <div className="cell-sector">
-                                <select
-                                  className="input input-mini"
-                                  value={row.sector ?? ""}
-                                  onChange={(e) => updatePositionSector(row, e.target.value)}
-                                >
-                                  <option value="">Unassigned</option>
-                                  {sectorOptions.map((sector) => (
-                                    <option key={sector} value={sector}>
-                                      {sector}
-                                    </option>
-                                  ))}
-                                </select>
+                                {isGroupRow ? (
+                                  <span>{row.sectorDisplay}</span>
+                                ) : (
+                                  <select
+                                    className="input input-mini"
+                                    value={position?.sector ?? ""}
+                                    onChange={(e) => updatePositionSector(position, e.target.value)}
+                                  >
+                                    <option value="">Unassigned</option>
+                                    {sectorOptions.map((sector) => (
+                                      <option key={sector} value={sector}>
+                                        {sector}
+                                      </option>
+                                    ))}
+                                  </select>
+                                )}
                               </div>
                             </div>
                           );
