@@ -29,6 +29,7 @@ const ALL_SECTORS = [...SP500_SECTORS, ...MANUAL_ONLY_SECTORS];
 
 const UNCLASSIFIED_SECTOR = "Unclassified";
 const SECTOR_OVERRIDE_AUTO = "__AUTO__";
+const POSITION_ATTRIBUTION_HELD = "__HELD_ACCOUNT__";
 
 const SECTOR_TO_ETF = Object.fromEntries(SP500_SECTORS.map(({ name, etf }) => [name, etf]));
 const ETF_TO_SECTOR = Object.fromEntries(SP500_SECTORS.map(({ name, etf }) => [etf, name]));
@@ -153,9 +154,10 @@ const ACCOUNT_COLORS = [
   '#756f7f',
   '#8f8a6f',
 ];
-const APP_BUILD_VERSION = "2026.04.01.2";
+const APP_BUILD_VERSION = "2026.04.01.3";
 const APP_STATE_STORAGE_KEY = `portfolio-dashboard.app-state.${APP_BUILD_VERSION}`;
 const LEGACY_APP_STATE_STORAGE_KEYS = [
+  "portfolio-dashboard.app-state.2026.04.01.2",
   "portfolio-dashboard.app-state.2026.03.10.2",
 ];
 const MARKET_CACHE_STORAGE_KEY = "portfolio-dashboard.market-cache.v2";
@@ -311,6 +313,7 @@ function normalizeSharedDashboardState(rawState) {
     realizedTrades,
     sectorTargetsByAccount: normalizeSectorTargetsByAccount(rawState?.sectorTargetsByAccount || rawState?.sectorTargets, accountNames),
     sectorOverrides: asPlainObject(rawState?.sectorOverrides),
+    positionAttributionOverrides: asPlainObject(rawState?.positionAttributionOverrides),
   };
 }
 
@@ -322,6 +325,7 @@ function buildSharedDashboardStatePayload(rawState) {
     realizedTrades: normalized.realizedTrades,
     sectorTargetsByAccount: normalized.sectorTargetsByAccount,
     sectorOverrides: normalized.sectorOverrides,
+    positionAttributionOverrides: normalized.positionAttributionOverrides,
   };
 }
 
@@ -341,6 +345,7 @@ function hasSharedDashboardStateContent(rawState) {
     || normalized.realizedTrades.length
     || Object.keys(normalized.sectorTargetsByAccount || {}).length
     || Object.keys(normalized.sectorOverrides || {}).length
+    || Object.keys(normalized.positionAttributionOverrides || {}).length
   );
 }
 
@@ -734,9 +739,29 @@ function getPositionUnderlying(position) {
     .toUpperCase();
 }
 
+function getPositionHeldAccount(position) {
+  return String(position?.custodyAccount || position?.account || '').trim();
+}
+
+function getPositionAttributedAccount(position, positionAttributionOverrides = {}) {
+  const heldAccount = getPositionHeldAccount(position);
+  const key = getPositionAttributionKey(position);
+  return key ? (positionAttributionOverrides[key] || heldAccount) : heldAccount;
+}
+
+function getPositionDisplayAccount(position) {
+  return String(position?.attributedAccount || getPositionHeldAccount(position) || '').trim();
+}
+
+function getPositionAttributionKey(position) {
+  const heldAccount = getPositionHeldAccount(position);
+  const underlying = getPositionUnderlying(position);
+  return heldAccount && underlying ? `${heldAccount}::${underlying}` : '';
+}
+
 function getPositionGroupKey(position, accountScope = 'ALL') {
   const underlying = getPositionUnderlying(position);
-  const accountKey = accountScope === 'ALL' ? String(position?.account || 'ALL').trim().toUpperCase() : '';
+  const accountKey = accountScope === 'ALL' ? getPositionDisplayAccount(position).toUpperCase() : '';
   return `${accountKey}::${underlying}`;
 }
 
@@ -750,10 +775,15 @@ function getPositionOverrideCandidates(position) {
 }
 
 function getPositionOverrideValue(position, sectorOverrides = {}) {
-  const accountName = position?.account;
-  for (const symbol of getPositionOverrideCandidates(position)) {
-    const value = sectorOverrides[getSectorOverrideKey(accountName, symbol)];
-    if (value) return value;
+  const accountNames = [...new Set([
+    position?.attributedAccount,
+    getPositionHeldAccount(position),
+  ].filter(Boolean))];
+  for (const accountName of accountNames) {
+    for (const symbol of getPositionOverrideCandidates(position)) {
+      const value = sectorOverrides[getSectorOverrideKey(accountName, symbol)];
+      if (value) return value;
+    }
   }
   return SECTOR_OVERRIDE_AUTO;
 }
@@ -773,6 +803,18 @@ function formatPositionQty(qty) {
   if (!Number.isFinite(qty)) return '--';
   const decimals = Number.isInteger(qty) ? 0 : 2;
   return qty.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+}
+
+function formatShortAccountName(accountName) {
+  const raw = String(accountName || '');
+  return raw.split('...')[1] ? `...${raw.split('...')[1]}` : raw;
+}
+
+function summarizeAccountNames(accountNames = []) {
+  const uniqueNames = [...new Set(accountNames.filter(Boolean))];
+  if (!uniqueNames.length) return '--';
+  if (uniqueNames.length === 1) return formatShortAccountName(uniqueNames[0]);
+  return `${formatShortAccountName(uniqueNames[0])} +${uniqueNames.length - 1}`;
 }
 
 function filterTradesByDateRange(trades, startDate, endDate) {
@@ -1230,6 +1272,7 @@ export default function App() {
     realizedTrades: persisted.realizedTrades,
     sectorTargetsByAccount: persisted.sectorTargetsByAccount || persisted.sectorTargets,
     sectorOverrides: persisted.sectorOverrides,
+    positionAttributionOverrides: persisted.positionAttributionOverrides,
   }));
   const lastSharedStateSignatureRef = useRef(getSharedDashboardStateSignature(sharedSeedRef.current));
   const sharedStateUpdatedAtRef = useRef(null);
@@ -1254,6 +1297,7 @@ export default function App() {
   const [riskMatrixMode, setRiskMatrixMode] = useState(persisted.riskMatrixMode || 'sectors');
   const [sectorTargetsByAccount, setSectorTargetsByAccount] = useState(sharedSeedRef.current.sectorTargetsByAccount);
   const [sectorOverrides, setSectorOverrides] = useState(sharedSeedRef.current.sectorOverrides);
+  const [positionAttributionOverrides, setPositionAttributionOverrides] = useState(sharedSeedRef.current.positionAttributionOverrides);
   const [performanceChartSelection, setPerformanceChartSelection] = useState(() =>
     normalizePerformanceChartSelection(persisted.performanceChartSelection, [], persisted.showBenchmark ?? true),
   );
@@ -1336,6 +1380,7 @@ export default function App() {
     setRealizedTrades(normalized.realizedTrades);
     setSectorTargetsByAccount(normalized.sectorTargetsByAccount);
     setSectorOverrides(normalized.sectorOverrides);
+    setPositionAttributionOverrides(normalized.positionAttributionOverrides);
     setSharedStateUpdatedAt(updatedAt || null);
     setSharedStateReady(true);
     setSharedSyncStatus(updatedAt ? 'Shared workspace synced' : 'Shared workspace ready');
@@ -1416,6 +1461,7 @@ export default function App() {
       realizedTrades,
       sectorTargetsByAccount,
       sectorOverrides,
+      positionAttributionOverrides,
     });
     const signature = getSharedDashboardStateSignature(payload);
 
@@ -1444,7 +1490,7 @@ export default function App() {
     }, SHARED_DASHBOARD_SAVE_DEBOUNCE_MS);
 
     return () => window.clearTimeout(timeoutId);
-  }, [sharedStateReady, accounts, balanceHistory, realizedTrades, sectorTargetsByAccount, sectorOverrides]);
+  }, [sharedStateReady, accounts, balanceHistory, realizedTrades, sectorTargetsByAccount, sectorOverrides, positionAttributionOverrides]);
 
   useEffect(() => {
     saveJSONStorage(APP_STATE_STORAGE_KEY, {
@@ -1460,9 +1506,10 @@ export default function App() {
       riskMatrixMode,
       sectorTargetsByAccount,
       sectorOverrides,
+      positionAttributionOverrides,
       performanceChartSelection,
     });
-  }, [timeframe, sectorTimeframe, realizedTimeframe, accounts, balanceHistory, realizedTrades, selectedAccount, showBenchmark, selectedSector, riskMatrixMode, sectorTargetsByAccount, sectorOverrides, performanceChartSelection]);
+  }, [timeframe, sectorTimeframe, realizedTimeframe, accounts, balanceHistory, realizedTrades, selectedAccount, showBenchmark, selectedSector, riskMatrixMode, sectorTargetsByAccount, sectorOverrides, positionAttributionOverrides, performanceChartSelection]);
 
   useEffect(() => {
     saveJSONStorage(SECURITY_HISTORY_STORAGE_KEY, securityHistoryData);
@@ -1480,6 +1527,7 @@ export default function App() {
       realizedTrades: [],
       sectorTargetsByAccount: {},
       sectorOverrides: {},
+      positionAttributionOverrides: {},
     });
     const clearedSignature = getSharedDashboardStateSignature(clearedSharedState);
 
@@ -1490,6 +1538,7 @@ export default function App() {
     setSelectedAccount('ALL');
     setSectorTargetsByAccount({});
     setSectorOverrides({});
+    setPositionAttributionOverrides({});
     setSpxData([]);
     setSectorBenchmarkData({});
     setSecurityHistoryData({});
@@ -1639,24 +1688,37 @@ export default function App() {
     [accounts, selectedAccount],
   );
 
+  const allPositions = useMemo(
+    () => Object.values(accounts).flatMap((accountData) => accountData?.positions || []),
+    [accounts],
+  );
+
   const selectedPositions = useMemo(
-    () => selectedAccountsData.flatMap((accountData) => (accountData?.positions || []).map((position) => {
-      const override = sectorOverrides[getSectorOverrideKey(position.account, position.overrideSymbol || position.symbol)]
-        || sectorOverrides[getSectorOverrideKey(position.account, position.symbol)]
-        || sectorOverrides[getSectorOverrideKey(position.account, position.normalizedSymbol)]
-        || sectorOverrides[getSectorOverrideKey(position.account, position.baseSymbol)];
-      const assignedSector = override && override !== SECTOR_OVERRIDE_AUTO
-        ? override
-        : (position.mainSector || UNCLASSIFIED_SECTOR);
-      const mainSector = ALL_SECTOR_SET.has(assignedSector) ? assignedSector : null;
-      return {
-        ...position,
-        sector: assignedSector,
-        mainSector,
-        isSectorETF: !!(mainSector && SECTOR_TO_ETF[mainSector] && position.cleanSym === SECTOR_TO_ETF[mainSector]),
-      };
-    })),
-    [selectedAccountsData, sectorOverrides],
+    () => allPositions
+      .map((position) => {
+        const custodyAccount = getPositionHeldAccount(position);
+        const attributedAccount = getPositionAttributedAccount(position, positionAttributionOverrides);
+        if (selectedAccount !== 'ALL' && attributedAccount !== selectedAccount) return null;
+
+        const enrichedPosition = {
+          ...position,
+          custodyAccount,
+          attributedAccount,
+        };
+        const override = getPositionOverrideValue(enrichedPosition, sectorOverrides);
+        const assignedSector = override && override !== SECTOR_OVERRIDE_AUTO
+          ? override
+          : (position.mainSector || UNCLASSIFIED_SECTOR);
+        const mainSector = ALL_SECTOR_SET.has(assignedSector) ? assignedSector : null;
+        return {
+          ...enrichedPosition,
+          sector: assignedSector,
+          mainSector,
+          isSectorETF: !!(mainSector && SECTOR_TO_ETF[mainSector] && position.cleanSym === SECTOR_TO_ETF[mainSector]),
+        };
+      })
+      .filter(Boolean),
+    [allPositions, positionAttributionOverrides, sectorOverrides, selectedAccount],
   );
 
   const selectedRealizedTrades = useMemo(
@@ -2355,6 +2417,8 @@ export default function App() {
         const groupSector = orderedRows.every((row) => row.sector === orderedRows[0]?.sector)
           ? orderedRows[0]?.sector
           : 'Mixed';
+        const heldAccounts = [...new Set(orderedRows.map((row) => getPositionHeldAccount(row)).filter(Boolean))];
+        const attributedAccountName = getPositionDisplayAccount(first);
         return {
           groupKey,
           rows: orderedRows,
@@ -2362,7 +2426,9 @@ export default function App() {
           primaryRow,
           symbol: getPositionUnderlying(first),
           description: primaryRow?.description || `${summarizeGroupedPositionTypes(orderedRows) || `${orderedRows.length} lines`}`,
-          accountName: String(first?.account || ''),
+          accountName: attributedAccountName,
+          attributedAccountName,
+          heldAccounts,
           totalMarketValue,
           totalCostBasis,
           totalGain: totalMarketValue - totalCostBasis,
@@ -2372,6 +2438,7 @@ export default function App() {
           typeDisplay: summarizeGroupedPositionTypes(orderedRows) || (isOptionPosition(first) ? 'Option Strategy' : first?.assetType || 'Position'),
           sectorDisplay: groupSector || UNCLASSIFIED_SECTOR,
           overrideValue: orderedRows.map((row) => getPositionOverrideValue(row, sectorOverrides)).find((value) => value !== SECTOR_OVERRIDE_AUTO) || SECTOR_OVERRIDE_AUTO,
+          attributionChanged: orderedRows.some((row) => getPositionDisplayAccount(row) !== getPositionHeldAccount(row)),
           expanded: Boolean(expandedPositionGroups[groupKey]),
         };
       })
@@ -2439,6 +2506,24 @@ export default function App() {
         return next;
       }
       next[keys[0]] = nextSector;
+      return next;
+    });
+  }, []);
+
+  const updatePositionAttributionOverride = useCallback((positionInput, nextAccount) => {
+    const positions = Array.isArray(positionInput) ? positionInput : [positionInput];
+    setPositionAttributionOverrides((prev) => {
+      const next = { ...prev };
+      positions.forEach((position) => {
+        const key = getPositionAttributionKey(position);
+        const heldAccount = getPositionHeldAccount(position);
+        if (!key || !heldAccount) return;
+        if (!nextAccount || nextAccount === heldAccount) {
+          if (key in next) delete next[key];
+          return;
+        }
+        next[key] = nextAccount;
+      });
       return next;
     });
   }, []);
@@ -2948,11 +3033,17 @@ export default function App() {
           <div style={{ marginBottom:'12px', color:PALETTE.textDim, fontSize:'11px' }}>
             {positionGroupCount} grouped lines · {selectedPositions.length} total positions · {selectedAccount === 'ALL' ? 'All Accounts' : selectedAccount}
           </div>
+          <div style={{ ...S.card, marginBottom:'12px', background:'linear-gradient(180deg, rgba(23,26,30,0.98), rgba(11,13,16,0.98))' }}>
+            <div style={{ ...S.cardTitle, color:PALETTE.accentBright, marginBottom:'6px' }}>DESK ATTRIBUTION</div>
+            <div style={{ color:PALETTE.textMuted, fontSize:'11px', lineHeight:'1.6' }}>
+              Reassign holdings to the desk account that should own them economically. Held account, uploaded balances, and performance history remain unchanged.
+            </div>
+          </div>
           <div style={S.card}>
             <div style={S.tableWrapper}>
               <table style={S.table}>
                 <thead>
-                  <tr>{['Symbol','Description','Account','Type','Sector Assignment','Qty','Price','Market Value','Cost Basis','Gain $','Gain %'].map(h => <th key={h} style={S.th}>{h}</th>)}</tr>
+                  <tr>{['Symbol','Description','Account Routing','Type','Sector Assignment','Qty','Price','Market Value','Cost Basis','Gain $','Gain %'].map(h => <th key={h} style={S.th}>{h}</th>)}</tr>
                 </thead>
                 <tbody>
                   {positionsDisplay.map((entry, i) => {
@@ -2961,7 +3052,13 @@ export default function App() {
                     const sectorValue = isGroup ? entry.sectorDisplay : (row?.sector || UNCLASSIFIED_SECTOR);
                     const gainValue = isGroup ? entry.totalGain : ((row?.mktVal || 0) - (row?.costBasis || 0));
                     const gainPct = isGroup ? entry.totalGainPct : row?.gainPct;
-                    const accountName = isGroup ? entry.accountName : row?.account;
+                    const attributedAccountName = isGroup ? entry.attributedAccountName : getPositionDisplayAccount(row);
+                    const heldAccounts = isGroup ? entry.heldAccounts : [getPositionHeldAccount(row)];
+                    const heldAccountLabel = summarizeAccountNames(heldAccounts);
+                    const attributionChanged = isGroup
+                      ? entry.attributionChanged
+                      : getPositionDisplayAccount(row) !== getPositionHeldAccount(row);
+                    const attributionValue = attributionChanged ? attributedAccountName : POSITION_ATTRIBUTION_HELD;
                     const badgeColor = isGroup
                       ? PALETTE.accentMuted
                       : isOptionPosition(row)
@@ -3020,8 +3117,40 @@ export default function App() {
                             ? entry.description
                             : (row.description || (isOptionPosition(row) ? row.symbol : '--'))}
                         </td>
-                        <td style={{ ...S.td, color: PALETTE.textMuted }}>
-                          {accountName?.split('...')[1] ? `...${accountName.split('...')[1]}` : accountName}
+                        <td style={{ ...S.td, minWidth:'210px' }}>
+                          <div style={{ display:'flex', flexDirection:'column', gap:'6px' }}>
+                            <div style={{ display:'flex', flexDirection:'column', gap:'2px' }}>
+                              <span style={{ color: attributionChanged ? PALETTE.accentBright : PALETTE.textStrong, fontSize:'11px', fontWeight:600 }}>
+                                Desk {formatShortAccountName(attributedAccountName)}
+                              </span>
+                              <span style={{ color:PALETTE.textDim, fontSize:'10px' }}>
+                                Held {heldAccountLabel}
+                              </span>
+                            </div>
+                            {!entry.child ? (
+                              <select
+                                value={attributionValue || POSITION_ATTRIBUTION_HELD}
+                                onChange={(e) => updatePositionAttributionOverride(
+                                  isGroup ? entry.rows : row,
+                                  e.target.value === POSITION_ATTRIBUTION_HELD ? '' : e.target.value,
+                                )}
+                                style={{ ...S.input, padding:'4px 6px', fontSize:'10px', minWidth:'176px' }}
+                              >
+                                <option value={POSITION_ATTRIBUTION_HELD}>
+                                  {isGroup ? 'Held Accounts (reset each line)' : `Held Account (${heldAccountLabel})`}
+                                </option>
+                                {accountList.map((accountName) => (
+                                  <option key={accountName} value={accountName}>
+                                    {formatShortAccountName(accountName)}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              <span style={{ color: attributionChanged ? PALETTE.accentBright : PALETTE.textDim, fontSize:'10px' }}>
+                                {attributionChanged ? 'Attributed away from held account' : 'Held in legal account'}
+                              </span>
+                            )}
+                          </div>
                         </td>
                         <td style={S.td}>
                           {isGroup ? (
@@ -3059,7 +3188,7 @@ export default function App() {
                               <select
                                 value={getPositionOverrideValue(row, sectorOverrides)}
                                 onChange={(e) => updatePositionSectorOverride(
-                                  row.account,
+                                  row.attributedAccount || getPositionHeldAccount(row),
                                   getPositionOverrideCandidates(row),
                                   e.target.value,
                                 )}
