@@ -1,8 +1,8 @@
-@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap");
 
 :root {
   color-scheme: dark;
-  background: #020304;
+  background: #060709;
   font-family: "IBM Plex Sans", system-ui, sans-serif;
 }
 
@@ -16,10 +16,10 @@ body,
 
 body {
   background:
-    radial-gradient(circle at top left, rgba(245, 166, 35, 0.08), transparent 24%),
-    radial-gradient(circle at top right, rgba(88, 211, 230, 0.06), transparent 30%),
-    linear-gradient(180deg, #11161c 0%, #020304 100%);
-  color: #d8dce2;
+    radial-gradient(circle at top left, rgba(216, 139, 47, 0.08), transparent 22%),
+    radial-gradient(circle at top right, rgba(126, 139, 146, 0.05), transparent 28%),
+    linear-gradient(180deg, #15191f 0%, #060709 100%);
+  color: #ddd7cc;
   font-family: "IBM Plex Sans", system-ui, sans-serif;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;

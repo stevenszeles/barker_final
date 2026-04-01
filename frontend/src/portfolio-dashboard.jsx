@@ -107,8 +107,53 @@ const SECTOR_COLORS = Object.fromEntries([
   [UNCLASSIFIED_SECTOR, "#666"],
 ]);
 
-const ACCOUNT_COLORS = ["#00d4ff","#7c4dff","#ff6b35","#00e676","#ffd600","#e91e63","#ff9800","#4caf50","#2196f3","#ff5722","#9c27b0","#00bcd4"];
-const APP_BUILD_VERSION = "2026.04.01.1";
+const PALETTE = {
+  bg: '#060709',
+  bgRaised: '#0f1216',
+  bgPanelTop: '#181c21',
+  bgPanelBottom: '#0b0d11',
+  bgHeader: '#1b1f25',
+  bgHeaderShadow: '#12151a',
+  border: 'rgba(157, 138, 107, 0.18)',
+  borderStrong: 'rgba(216, 139, 47, 0.28)',
+  borderSubtle: 'rgba(255, 255, 255, 0.05)',
+  accent: '#d88b2f',
+  accentBright: '#f0b35b',
+  accentMuted: '#b87628',
+  text: '#ddd7cc',
+  textStrong: '#f3ecdf',
+  textMuted: '#9d9588',
+  textDim: '#6f685f',
+  portfolio: '#ddd6c8',
+  benchmark: '#b7772c',
+  positive: '#67a86f',
+  negative: '#c7695c',
+  warning: '#c5a14d',
+  info: '#98a5ad',
+  steel: '#87949c',
+  slate: '#7e8b92',
+  moss: '#7b9774',
+  rust: '#aa7257',
+  plum: '#897f8f',
+  brass: '#b49b63',
+  lineGrid: 'rgba(108, 101, 91, 0.18)',
+};
+
+const ACCOUNT_COLORS = [
+  PALETTE.steel,
+  PALETTE.accentMuted,
+  PALETTE.moss,
+  PALETTE.rust,
+  PALETTE.plum,
+  PALETTE.brass,
+  '#70838c',
+  '#9b815f',
+  '#7d8d84',
+  '#9a6554',
+  '#756f7f',
+  '#8f8a6f',
+];
+const APP_BUILD_VERSION = "2026.04.01.2";
 const APP_STATE_STORAGE_KEY = `portfolio-dashboard.app-state.${APP_BUILD_VERSION}`;
 const LEGACY_APP_STATE_STORAGE_KEYS = [
   "portfolio-dashboard.app-state.2026.03.10.2",
@@ -674,6 +719,62 @@ function getValueOnOrBefore(series, targetDate) {
   return getLastValueOnOrBefore(series, targetDate)?.[1] ?? null;
 }
 
+function isOptionPosition(position) {
+  return String(position?.assetType || '').toLowerCase().includes('option');
+}
+
+function isEtfPosition(position) {
+  const assetType = String(position?.assetType || '').toLowerCase();
+  return assetType.includes('etf') || Boolean(position?.isSectorETF);
+}
+
+function getPositionUnderlying(position) {
+  return String(position?.baseSymbol || position?.overrideSymbol || position?.normalizedSymbol || position?.symbol || '')
+    .trim()
+    .toUpperCase();
+}
+
+function getPositionGroupKey(position, accountScope = 'ALL') {
+  const underlying = getPositionUnderlying(position);
+  const accountKey = accountScope === 'ALL' ? String(position?.account || 'ALL').trim().toUpperCase() : '';
+  return `${accountKey}::${underlying}`;
+}
+
+function getPositionOverrideCandidates(position) {
+  return [...new Set([
+    position?.overrideSymbol,
+    position?.symbol,
+    position?.normalizedSymbol,
+    position?.baseSymbol,
+  ].filter(Boolean))];
+}
+
+function getPositionOverrideValue(position, sectorOverrides = {}) {
+  const accountName = position?.account;
+  for (const symbol of getPositionOverrideCandidates(position)) {
+    const value = sectorOverrides[getSectorOverrideKey(accountName, symbol)];
+    if (value) return value;
+  }
+  return SECTOR_OVERRIDE_AUTO;
+}
+
+function summarizeGroupedPositionTypes(rows) {
+  const equityCount = rows.filter((row) => !isOptionPosition(row) && !isEtfPosition(row)).length;
+  const etfCount = rows.filter((row) => isEtfPosition(row)).length;
+  const optionCount = rows.filter((row) => isOptionPosition(row)).length;
+  return [
+    equityCount ? `${equityCount} ${equityCount === 1 ? 'Stock' : 'Stocks'}` : null,
+    etfCount ? `${etfCount} ${etfCount === 1 ? 'ETF' : 'ETFs'}` : null,
+    optionCount ? `${optionCount} ${optionCount === 1 ? 'Option Leg' : 'Option Legs'}` : null,
+  ].filter(Boolean).join(' · ');
+}
+
+function formatPositionQty(qty) {
+  if (!Number.isFinite(qty)) return '--';
+  const decimals = Number.isInteger(qty) ? 0 : 2;
+  return qty.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+}
+
 function filterTradesByDateRange(trades, startDate, endDate) {
   return trades.filter((trade) => {
     const iso = trade.closedDateISO || normalizeDateInput(trade.closedDate);
@@ -783,7 +884,7 @@ async function loadBenchmarkHistorySeries(symbol, { days = 3650, retries = 1, fo
 function fmt$(n) { if (n===undefined||n===null||isNaN(n)) return '--'; return new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',minimumFractionDigits:0,maximumFractionDigits:0}).format(n); }
 function fmtPct(n,decimals=2) { if (n===undefined||n===null||isNaN(n)) return '--'; return `${n>=0?'+':''}${n.toFixed(decimals)}%`; }
 function fmtNum(n,d=2) { if (n===undefined||n===null||isNaN(n)) return '--'; return n.toFixed(d); }
-const CHART_TICK_STYLE = { fill:'#7f8790', fontSize:10 };
+const CHART_TICK_STYLE = { fill:PALETTE.textDim, fontSize:10 };
 
 function getTickInterval(length, targetTicks = 8) {
   if (!length || length <= targetTicks) return 0;
@@ -798,31 +899,31 @@ function getCategoryAxisWidth(labels, minWidth = 120, maxWidth = 220) {
 // ─── STYLES ───────────────────────────────────────────────────────────────────
 const S = {
   app: {
-    background:'#020304',
-    color:'#d8dce2',
-    fontFamily:"'IBM Plex Mono', 'JetBrains Mono', 'SFMono-Regular', 'Menlo', monospace",
+    background:PALETTE.bg,
+    color:PALETTE.text,
+    fontFamily:"'IBM Plex Sans', 'IBM Plex Sans Condensed', 'Helvetica Neue', sans-serif",
     minHeight:'100vh',
     fontSize:'12px',
     padding:'14px',
     backgroundImage:[
-      'radial-gradient(circle at top left, rgba(255,166,52,0.08), transparent 24%)',
-      'radial-gradient(circle at top right, rgba(37,117,252,0.05), transparent 28%)',
-      'linear-gradient(180deg, rgba(18,22,27,0.98), rgba(2,3,4,1))',
-      'repeating-linear-gradient(0deg, rgba(255,255,255,0.015) 0, rgba(255,255,255,0.015) 1px, transparent 1px, transparent 28px)',
-      'repeating-linear-gradient(90deg, rgba(255,255,255,0.012) 0, rgba(255,255,255,0.012) 1px, transparent 1px, transparent 28px)',
+      `radial-gradient(circle at top left, ${hexToRgba(PALETTE.accent, 0.08)}, transparent 24%)`,
+      `radial-gradient(circle at top right, ${hexToRgba(PALETTE.steel, 0.06)}, transparent 30%)`,
+      'linear-gradient(180deg, rgba(18, 21, 26, 0.98), rgba(6, 7, 9, 1))',
+      'repeating-linear-gradient(0deg, rgba(255,255,255,0.012) 0, rgba(255,255,255,0.012) 1px, transparent 1px, transparent 30px)',
+      'repeating-linear-gradient(90deg, rgba(255,255,255,0.01) 0, rgba(255,255,255,0.01) 1px, transparent 1px, transparent 30px)',
     ].join(','),
   },
   screen: {
     maxWidth:'1680px',
     margin:'0 auto',
-    background:'linear-gradient(180deg, rgba(15,18,21,0.99), rgba(4,6,8,1))',
-    border:'1px solid rgba(244,178,79,0.14)',
+    background:'linear-gradient(180deg, rgba(17,19,23,0.99), rgba(6,7,9,1))',
+    border:`1px solid ${PALETTE.border}`,
     boxShadow:'0 18px 48px rgba(0,0,0,0.48)',
     overflow:'hidden',
   },
   headerShell: {
-    background:'linear-gradient(180deg, rgba(22,25,29,0.98), rgba(8,10,12,0.98))',
-    borderBottom:'1px solid rgba(244,178,79,0.1)',
+    background:'linear-gradient(180deg, rgba(26,29,34,0.98), rgba(10,11,14,0.98))',
+    borderBottom:`1px solid ${PALETTE.borderStrong}`,
   },
   header: {
     padding:'10px 18px',
@@ -830,26 +931,28 @@ const S = {
     alignItems:'center',
     justifyContent:'space-between',
     gap:'18px',
-    borderBottom:'1px solid rgba(255,255,255,0.04)',
+    borderBottom:`1px solid ${PALETTE.borderSubtle}`,
   },
   logo: {
-    color:'#f4b24f',
+    color:PALETTE.accentBright,
     fontWeight:700,
     fontSize:'16px',
     letterSpacing:'2.8px',
     textTransform:'uppercase',
+    fontFamily:"'IBM Plex Sans Condensed', 'IBM Plex Sans', sans-serif",
   },
-  headerMeta: { color:'#8b9097', fontSize:'10px', letterSpacing:'1.5px', textTransform:'uppercase' },
+  headerMeta: { color:PALETTE.textMuted, fontSize:'10px', letterSpacing:'1.5px', textTransform:'uppercase' },
   statusPill: {
-    background:'linear-gradient(180deg, rgba(46,52,58,0.96), rgba(14,17,20,0.96))',
-    border:'1px solid rgba(255,255,255,0.08)',
-    color:'#d8dce2',
+    background:'linear-gradient(180deg, rgba(44,49,56,0.96), rgba(15,17,20,0.96))',
+    border:`1px solid ${PALETTE.border}`,
+    color:PALETTE.text,
     padding:'6px 10px',
     borderRadius:'2px',
     fontSize:'10px',
     letterSpacing:'1.1px',
     textTransform:'uppercase',
     boxShadow:'none',
+    fontFamily:"'IBM Plex Sans Condensed', 'IBM Plex Sans', sans-serif",
   },
   marketRibbon: {
     display:'grid',
@@ -858,9 +961,9 @@ const S = {
     padding:'10px 18px 14px',
   },
   marketTile: {
-    background:'linear-gradient(180deg, rgba(30,35,40,0.96), rgba(9,11,14,0.96))',
-    border:'1px solid rgba(255,255,255,0.06)',
-    borderTop:'1px solid rgba(244,178,79,0.28)',
+    background:'linear-gradient(180deg, rgba(31,35,40,0.96), rgba(10,12,14,0.96))',
+    border:`1px solid ${PALETTE.borderSubtle}`,
+    borderTop:`1px solid ${PALETTE.borderStrong}`,
     borderRadius:'2px',
     padding:'8px 10px',
     boxShadow:'none',
@@ -868,63 +971,65 @@ const S = {
   tabs: {
     display:'flex',
     gap:'1px',
-    background:'#060709',
-    borderBottom:'1px solid rgba(255,170,86,0.12)',
+    background:PALETTE.bg,
+    borderBottom:`1px solid ${PALETTE.border}`,
     padding:'0 12px',
     overflowX:'auto',
   },
   tab: {
     padding:'11px 14px',
     cursor:'pointer',
-    color:'#8a9099',
+    color:PALETTE.textMuted,
     transition:'all .15s',
     fontWeight:700,
     fontSize:'10px',
     letterSpacing:'1.6px',
     textTransform:'uppercase',
     background:'linear-gradient(180deg, rgba(30,34,38,0.96), rgba(10,12,14,0.96))',
-    border:'1px solid rgba(255,255,255,0.04)',
+    border:`1px solid ${PALETTE.borderSubtle}`,
     borderBottom:'1px solid transparent',
     borderTopLeftRadius:'2px',
     borderTopRightRadius:'2px',
     marginTop:'8px',
     minWidth:'fit-content',
+    fontFamily:"'IBM Plex Sans Condensed', 'IBM Plex Sans', sans-serif",
   },
   tabActive: {
-    color:'#f4b24f',
-    borderColor:'rgba(244,178,79,0.28)',
-    borderBottomColor:'#060709',
+    color:PALETTE.accentBright,
+    borderColor:PALETTE.borderStrong,
+    borderBottomColor:PALETTE.bg,
     background:'linear-gradient(180deg, rgba(52,37,17,0.96), rgba(17,15,12,0.98))',
     boxShadow:'none',
   },
   selectorBar: {
     background:'linear-gradient(180deg, rgba(16,19,22,0.98), rgba(5,7,9,0.98))',
-    borderBottom:'1px solid rgba(255,255,255,0.05)',
+    borderBottom:`1px solid ${PALETTE.borderSubtle}`,
     padding:'10px 18px',
     display:'flex',
     gap:'8px',
     alignItems:'center',
     overflowX:'auto',
   },
-  selectorLabel: { color:'#767d86', fontSize:'10px', letterSpacing:'1.5px', textTransform:'uppercase', marginRight:'6px' },
+  selectorLabel: { color:PALETTE.textDim, fontSize:'10px', letterSpacing:'1.5px', textTransform:'uppercase', marginRight:'6px', fontFamily:"'IBM Plex Sans Condensed', 'IBM Plex Sans', sans-serif" },
   card: {
     background:'linear-gradient(180deg, rgba(22,26,30,0.98), rgba(7,9,11,0.99))',
-    border:'1px solid rgba(255,255,255,0.07)',
+    border:`1px solid ${PALETTE.borderSubtle}`,
     borderRadius:'2px',
     padding:'14px 16px',
     boxShadow:'0 8px 20px rgba(0,0,0,0.16)',
   },
   cardTitle: {
-    color:'#f0a33a',
+    color:PALETTE.accentBright,
     fontSize:'10px',
     letterSpacing:'1.8px',
     textTransform:'uppercase',
     marginBottom:'8px',
     fontWeight:700,
+    fontFamily:"'IBM Plex Sans Condensed', 'IBM Plex Sans', sans-serif",
   },
-  positive: { color:'#00e676' },
-  negative: { color:'#ff4444' },
-  neutral: { color:'#e0e0e0' },
+  positive: { color:PALETTE.positive },
+  negative: { color:PALETTE.negative },
+  neutral: { color:PALETTE.textStrong },
   grid: (cols) => {
     const minWidth = Math.min(280, Math.max(180, Math.floor(1120 / Math.max(cols, 1))));
     return { display:'grid', gridTemplateColumns:`repeat(auto-fit, minmax(${minWidth}px, 1fr))`, gap:'12px' };
@@ -933,26 +1038,27 @@ const S = {
   tableWrapper: {
     overflowX:'auto',
     overflowY:'hidden',
-    border:'1px solid rgba(255,255,255,0.04)',
-    background:'rgba(0,0,0,0.18)',
+    border:`1px solid ${PALETTE.borderSubtle}`,
+    background:'rgba(0,0,0,0.16)',
   },
   table: { width:'100%', borderCollapse:'collapse', fontSize:'11px' },
   th: {
     padding:'8px 12px',
     textAlign:'left',
-    color:'#f0a33a',
+    color:PALETTE.accentBright,
     fontWeight:700,
-    borderBottom:'1px solid rgba(255,170,86,0.14)',
+    borderBottom:`1px solid ${PALETTE.borderStrong}`,
     fontSize:'9px',
     letterSpacing:'1.4px',
     textTransform:'uppercase',
     background:'linear-gradient(180deg, rgba(45,31,15,0.62), rgba(15,16,18,0.98))',
     whiteSpace:'nowrap',
+    fontFamily:"'IBM Plex Sans Condensed', 'IBM Plex Sans', sans-serif",
   },
   td: {
     padding:'8px 12px',
-    borderBottom:'1px solid rgba(255,255,255,0.04)',
-    color:'#cfd4db',
+    borderBottom:`1px solid ${PALETTE.borderSubtle}`,
+    color:PALETTE.text,
     whiteSpace:'nowrap',
   },
   badge: (color) => ({
@@ -967,8 +1073,8 @@ const S = {
   }),
   btn: {
     background:'linear-gradient(180deg, rgba(36,41,46,0.96), rgba(10,12,15,0.96))',
-    border:'1px solid rgba(255,255,255,0.08)',
-    color:'#d8dce2',
+    border:`1px solid ${PALETTE.border}`,
+    color:PALETTE.text,
     padding:'6px 14px',
     borderRadius:'2px',
     cursor:'pointer',
@@ -976,25 +1082,27 @@ const S = {
     fontWeight:700,
     letterSpacing:'1px',
     boxShadow:'none',
+    fontFamily:"'IBM Plex Sans Condensed', 'IBM Plex Sans', sans-serif",
   },
   btnActive: {
     background:'linear-gradient(180deg, rgba(70,45,18,0.96), rgba(21,18,14,0.98))',
-    border:'1px solid rgba(244,178,79,0.34)',
-    color:'#f4b24f',
+    border:`1px solid ${PALETTE.borderStrong}`,
+    color:PALETTE.accentBright,
   },
   input: {
     background:'linear-gradient(180deg, rgba(14,17,20,0.96), rgba(7,9,11,0.98))',
-    border:'1px solid rgba(255,255,255,0.08)',
-    color:'#f4f6f8',
+    border:`1px solid ${PALETTE.border}`,
+    color:PALETTE.textStrong,
     padding:'8px 12px',
     borderRadius:'2px',
     fontSize:'12px',
     width:'100%',
     boxSizing:'border-box',
     boxShadow:'none',
+    fontFamily:"'IBM Plex Sans', sans-serif",
   },
   uploadBox: {
-    border:'1px dashed rgba(244,178,79,0.28)',
+    border:`1px dashed ${PALETTE.borderStrong}`,
     borderRadius:'2px',
     padding:'24px',
     textAlign:'center',
@@ -1019,14 +1127,14 @@ function hexToRgba(hex, alpha = 1) {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
-function signalPanelStyle(color = '#9aa4b2') {
+function signalPanelStyle(color = PALETTE.steel) {
   return {
     ...S.card,
     background:[
-      `linear-gradient(180deg, ${hexToRgba(color, 0.12)}, rgba(7,9,11,0) 44%)`,
+      `linear-gradient(180deg, ${hexToRgba(color, 0.1)}, rgba(7,9,11,0) 44%)`,
       'linear-gradient(180deg, rgba(22,26,30,0.98), rgba(6,8,10,0.99))',
     ].join(','),
-    borderColor: hexToRgba(color, 0.22),
+    borderColor: hexToRgba(color, 0.18),
     boxShadow:`inset 0 0 0 1px ${hexToRgba(color, 0.06)}, 0 8px 18px rgba(0,0,0,0.14)`,
   };
 }
@@ -1081,8 +1189,8 @@ function correlationColor(value) {
   if (!Number.isFinite(value)) return 'rgba(85, 92, 102, 0.18)';
   const clamped = Math.max(-1, Math.min(1, value));
   if (Math.abs(clamped) < 0.0001) return 'rgba(120, 128, 138, 0.18)';
-  if (clamped > 0) return `rgba(0, 230, 118, ${0.14 + Math.abs(clamped) * 0.42})`;
-  return `rgba(255, 68, 68, ${0.14 + Math.abs(clamped) * 0.42})`;
+  if (clamped > 0) return `rgba(103, 168, 111, ${0.14 + Math.abs(clamped) * 0.34})`;
+  return `rgba(199, 105, 92, ${0.14 + Math.abs(clamped) * 0.34})`;
 }
 
 function formatDeskTime(timeZone, options = {}) {
@@ -1100,11 +1208,11 @@ function formatDeskTime(timeZone, options = {}) {
 const CustomTooltip = ({ active, payload, label, mode='pct' }) => {
   if (!active || !payload?.length) return null;
   return (
-    <div style={{ background:'linear-gradient(180deg, rgba(24,28,32,0.99), rgba(8,10,12,0.99))', border:'1px solid rgba(244,178,79,0.16)', boxShadow:'0 10px 20px rgba(0,0,0,0.28)', padding:'10px 14px', borderRadius:'2px', fontSize:'11px' }}>
-      <div style={{ color:'#f0a33a', marginBottom:'6px', letterSpacing:'1px', textTransform:'uppercase', fontSize:'10px' }}>{label}</div>
+    <div style={{ background:'linear-gradient(180deg, rgba(24,28,32,0.99), rgba(8,10,12,0.99))', border:`1px solid ${PALETTE.borderStrong}`, boxShadow:'0 10px 20px rgba(0,0,0,0.28)', padding:'10px 14px', borderRadius:'2px', fontSize:'11px' }}>
+      <div style={{ color:PALETTE.accentBright, marginBottom:'6px', letterSpacing:'1px', textTransform:'uppercase', fontSize:'10px', fontFamily:"'IBM Plex Sans Condensed', 'IBM Plex Sans', sans-serif" }}>{label}</div>
       {payload.map((p, i) => (
         <div key={i} style={{ color: p.color, marginBottom:'2px' }}>
-          <span style={{color:'#9aa3ad'}}>{p.name}: </span>
+          <span style={{color:PALETTE.textMuted}}>{p.name}: </span>
           {mode==='pct' ? fmtPct(p.value) : mode==='$' ? fmt$(p.value) : fmtNum(p.value)}
         </div>
       ))}
@@ -1139,6 +1247,7 @@ export default function App() {
   const [spxLoading, setSpxLoading] = useState(false);
   const [securityHistoryLoading, setSecurityHistoryLoading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState({});
+  const [expandedPositionGroups, setExpandedPositionGroups] = useState({});
   const [selectedAccount, setSelectedAccount] = useState(persisted.selectedAccount || 'ALL');
   const [showBenchmark, setShowBenchmark] = useState(persisted.showBenchmark ?? true);
   const [selectedSector, setSelectedSector] = useState(persisted.selectedSector || SP500_SECTORS[0].name);
@@ -1731,7 +1840,7 @@ export default function App() {
       definitions.push({
         key: '__portfolio__',
         label: 'Aggregate Portfolio',
-        color: '#00d4ff',
+        color: PALETTE.portfolio,
         strokeWidth: 2.25,
         data: filterByTimeframe(selectedAggregateHistory, timeframe, performanceWindowEndDate),
       });
@@ -1754,7 +1863,7 @@ export default function App() {
       definitions.push({
         key: '__spx__',
         label: 'SPX',
-        color: '#7c4dff',
+        color: PALETTE.benchmark,
         strokeWidth: 1.6,
         strokeDasharray: '5 3',
         data: filterByTimeframe(spxData, timeframe, performanceWindowEndDate),
@@ -2216,10 +2325,106 @@ export default function App() {
     [realizedBySector.length],
   );
 
-  // Top positions
-  const topPositions = useMemo(() => {
-    return [...selectedPositions].sort((a,b) => Math.abs(b.mktVal) - Math.abs(a.mktVal));
-  }, [selectedPositions]);
+  const positionsDisplay = useMemo(() => {
+    const grouped = new Map();
+    selectedPositions.forEach((position) => {
+      const underlying = getPositionUnderlying(position);
+      if (!underlying) return;
+      const groupKey = getPositionGroupKey(position, selectedAccount);
+      if (!grouped.has(groupKey)) grouped.set(groupKey, []);
+      grouped.get(groupKey).push(position);
+    });
+
+    const groups = [...grouped.entries()]
+      .map(([groupKey, rows]) => {
+        const orderedRows = [...rows].sort((a, b) => {
+          const rank = (row) => {
+            if (isEtfPosition(row)) return 0;
+            if (!isOptionPosition(row)) return 1;
+            return 2;
+          };
+          const rankDiff = rank(a) - rank(b);
+          if (rankDiff !== 0) return rankDiff;
+          return String(a.symbol || '').localeCompare(String(b.symbol || ''));
+        });
+        const first = orderedRows[0];
+        const stockLikeRows = orderedRows.filter((row) => !isOptionPosition(row));
+        const primaryRow = stockLikeRows[0] || first;
+        const totalMarketValue = orderedRows.reduce((sum, row) => sum + (Number(row.mktVal) || 0), 0);
+        const totalCostBasis = orderedRows.reduce((sum, row) => sum + (Number(row.costBasis) || 0), 0);
+        const groupSector = orderedRows.every((row) => row.sector === orderedRows[0]?.sector)
+          ? orderedRows[0]?.sector
+          : 'Mixed';
+        return {
+          groupKey,
+          rows: orderedRows,
+          first,
+          primaryRow,
+          symbol: getPositionUnderlying(first),
+          description: primaryRow?.description || `${summarizeGroupedPositionTypes(orderedRows) || `${orderedRows.length} lines`}`,
+          accountName: String(first?.account || ''),
+          totalMarketValue,
+          totalCostBasis,
+          totalGain: totalMarketValue - totalCostBasis,
+          totalGainPct: totalCostBasis ? ((totalMarketValue - totalCostBasis) / totalCostBasis) * 100 : (first?.gainPct ?? null),
+          qtyDisplay: primaryRow ? formatPositionQty(Number(primaryRow.qty) || 0) : '--',
+          priceDisplay: primaryRow && Number.isFinite(Number(primaryRow.price)) ? `$${Number(primaryRow.price).toFixed(2)}` : '--',
+          typeDisplay: summarizeGroupedPositionTypes(orderedRows) || (isOptionPosition(first) ? 'Option Strategy' : first?.assetType || 'Position'),
+          sectorDisplay: groupSector || UNCLASSIFIED_SECTOR,
+          overrideValue: orderedRows.map((row) => getPositionOverrideValue(row, sectorOverrides)).find((value) => value !== SECTOR_OVERRIDE_AUTO) || SECTOR_OVERRIDE_AUTO,
+          expanded: Boolean(expandedPositionGroups[groupKey]),
+        };
+      })
+      .sort((a, b) => Math.abs(b.totalMarketValue) - Math.abs(a.totalMarketValue));
+
+    const displayRows = [];
+    groups.forEach((group) => {
+      const isGrouped = group.rows.length > 1;
+      if (!isGrouped) {
+        const row = group.rows[0];
+        displayRows.push({
+          kind: 'position',
+          key: `${group.groupKey}-${row.symbol}-${row.qty}-${row.mktVal}-${row.costBasis}`,
+          row,
+          groupKey: group.groupKey,
+          child: false,
+        });
+        return;
+      }
+      displayRows.push({
+        kind: 'group',
+        key: `group-${group.groupKey}`,
+        ...group,
+      });
+      if (!group.expanded) return;
+      group.rows.forEach((row, rowIndex) => {
+        displayRows.push({
+          kind: 'position',
+          key: `${group.groupKey}-${row.symbol}-${row.qty}-${row.mktVal}-${row.costBasis}-${rowIndex}`,
+          row,
+          groupKey: group.groupKey,
+          child: true,
+        });
+      });
+    });
+    return displayRows;
+  }, [expandedPositionGroups, sectorOverrides, selectedAccount, selectedPositions]);
+
+  useEffect(() => {
+    setExpandedPositionGroups((prev) => {
+      const valid = new Set(selectedPositions.map((position) => getPositionGroupKey(position, selectedAccount)));
+      const next = {};
+      Object.entries(prev).forEach(([key, value]) => {
+        if (valid.has(key)) next[key] = value;
+      });
+      return next;
+    });
+  }, [selectedAccount, selectedPositions]);
+
+  const positionGroupCount = useMemo(
+    () => positionsDisplay.filter((row) => row.kind === 'group' || !row.child).length,
+    [positionsDisplay],
+  );
 
   const updatePositionSectorOverride = useCallback((accountName, symbolInput, nextSector) => {
     const symbols = [...new Set((Array.isArray(symbolInput) ? symbolInput : [symbolInput]).filter(Boolean))];
@@ -2380,12 +2585,12 @@ export default function App() {
     { label:'UTC', zone:'UTC' },
   ];
   const sharedSyncTone = !sharedStateReady
-    ? '#ffd166'
+    ? PALETTE.warning
     : /failed|unavailable/i.test(sharedSyncStatus)
-      ? '#ff6b6b'
+      ? PALETTE.negative
       : /saving|loading|publishing|refreshing|clearing/i.test(sharedSyncStatus)
-        ? '#ffd166'
-        : '#00e676';
+        ? PALETTE.warning
+        : PALETTE.positive;
   const sharedSyncValue = !sharedStateReady
     ? 'Booting'
     : /failed|unavailable/i.test(sharedSyncStatus)
@@ -2394,13 +2599,13 @@ export default function App() {
         ? 'Syncing'
         : 'Shared';
   const terminalStatusTiles = [
-    { label:'Scope', value: selectedAccount === 'ALL' ? 'All Accounts' : selectedAccount.split('...')[1] ? `Acct ${selectedAccount.split('...')[1]}` : selectedAccount, tone:'#4ea1ff' },
-    { label:'Accounts', value: String(accountList.length), tone:'#f4b24f' },
-    { label:'Positions', value: String(selectedPositions.length), tone:'#00e676' },
+    { label:'Scope', value: selectedAccount === 'ALL' ? 'All Accounts' : selectedAccount.split('...')[1] ? `Acct ${selectedAccount.split('...')[1]}` : selectedAccount, tone:PALETTE.info },
+    { label:'Accounts', value: String(accountList.length), tone:PALETTE.accentBright },
+    { label:'Positions', value: String(selectedPositions.length), tone:PALETTE.textStrong },
     { label:'Workspace', value: sharedSyncValue, tone: sharedSyncTone },
-    { label:'Benchmarks', value: spxLoading ? 'Syncing' : spxData.length > 0 ? 'Live' : 'Offline', tone: spxLoading ? '#ffd166' : spxData.length > 0 ? '#00e676' : '#ff6b6b' },
-    { label:'Realized Rows', value: String(selectedRealizedTrades.length), tone:'#ff9f43' },
-    { label:'Build', value: APP_BUILD_VERSION, tone:'#c3a6ff' },
+    { label:'Benchmarks', value: spxLoading ? 'Syncing' : spxData.length > 0 ? 'Live' : 'Offline', tone: spxLoading ? PALETTE.warning : spxData.length > 0 ? PALETTE.positive : PALETTE.negative },
+    { label:'Realized Rows', value: String(selectedRealizedTrades.length), tone:PALETTE.accentMuted },
+    { label:'Build', value: APP_BUILD_VERSION, tone:PALETTE.textMuted },
   ];
 
   const TIMEFRAMES = ['1M','3M','6M','YTD','1Y','2Y','ALL'];
@@ -2423,20 +2628,20 @@ export default function App() {
             <div style={{ display:'flex', alignItems:'center', gap:'18px', flexWrap:'wrap' }}>
               <div style={S.logo}>Barker Capital Desk</div>
               <div style={S.headerMeta}>Multi-Account Portfolio Command Center</div>
-              <div style={{ ...S.statusPill, borderColor:'rgba(244,178,79,0.22)', color:'#f4b24f' }}>Client View Ready</div>
+              <div style={{ ...S.statusPill, borderColor:PALETTE.borderStrong, color:PALETTE.accentBright }}>Client View Ready</div>
             </div>
             <div style={{ display:'flex', alignItems:'center', gap:'10px', flexWrap:'wrap', justifyContent:'flex-end' }}>
-              <div style={{ ...S.statusPill, color:'#9aa3ad' }}>{new Date().toLocaleDateString('en-US',{weekday:'short',year:'numeric',month:'short',day:'numeric'})}</div>
-              <div style={{ ...S.statusPill, borderColor:'rgba(195,166,255,0.22)', color:'#c3a6ff' }}>Build {APP_BUILD_VERSION}</div>
-              <div style={{ ...S.statusPill, borderColor:'rgba(78,161,255,0.2)', color:'#9fd0ff' }}>{selectedAccountLabel}</div>
-              <div style={{ ...S.statusPill, borderColor:'rgba(0,230,118,0.2)', color: totalPortfolioValue > 0 ? '#6ef3a5' : '#7f8790', minWidth:'132px', textAlign:'right' }}>{fmt$(totalPortfolioValue)}</div>
+              <div style={{ ...S.statusPill, color:PALETTE.textMuted }}>{new Date().toLocaleDateString('en-US',{weekday:'short',year:'numeric',month:'short',day:'numeric'})}</div>
+              <div style={{ ...S.statusPill, borderColor:PALETTE.border, color:PALETTE.textMuted }}>Build {APP_BUILD_VERSION}</div>
+              <div style={{ ...S.statusPill, borderColor:PALETTE.border, color:PALETTE.info }}>{selectedAccountLabel}</div>
+              <div style={{ ...S.statusPill, borderColor:PALETTE.border, color: totalPortfolioValue > 0 ? PALETTE.textStrong : PALETTE.textDim, minWidth:'132px', textAlign:'right' }}>{fmt$(totalPortfolioValue)}</div>
             </div>
           </div>
           <div style={S.marketRibbon}>
             {deskClocks.map((clock) => (
               <div key={clock.label} style={S.marketTile}>
-                <div style={{ color:'#7b8188', fontSize:'9px', letterSpacing:'1.5px', textTransform:'uppercase', marginBottom:'4px' }}>{clock.label}</div>
-                <div style={{ color:'#f7f9fb', fontSize:'18px', fontWeight:700, letterSpacing:'0.8px' }}>{formatDeskTime(clock.zone)}</div>
+                <div style={{ color:PALETTE.textDim, fontSize:'9px', letterSpacing:'1.5px', textTransform:'uppercase', marginBottom:'4px', fontFamily:"'IBM Plex Sans Condensed', 'IBM Plex Sans', sans-serif" }}>{clock.label}</div>
+                <div style={{ color:PALETTE.textStrong, fontSize:'18px', fontWeight:700, letterSpacing:'0.8px', fontFamily:"'IBM Plex Mono', monospace" }}>{formatDeskTime(clock.zone)}</div>
               </div>
             ))}
             {terminalStatusTiles.map((tile) => (
@@ -2466,16 +2671,16 @@ export default function App() {
                   ...(selectedAccount===acc ? S.btnActive : {}),
                   fontSize:'10px',
                   padding:'4px 10px',
-                  borderColor: selectedAccount===acc ? 'rgba(244,178,79,0.32)' : 'rgba(255,255,255,0.08)',
-                  color: selectedAccount===acc ? '#f4b24f' : '#9ba3ad',
+                  borderColor: selectedAccount===acc ? PALETTE.borderStrong : PALETTE.border,
+                  color: selectedAccount===acc ? PALETTE.accentBright : PALETTE.textMuted,
                 }}>
                 {acc === 'ALL' ? 'ALL' : acc.split('...')[1] ? `...${acc.split('...')[1]}` : acc}
               </button>
             ))}
             <div style={{ marginLeft:'auto', display:'flex', gap:'8px', flexWrap:'wrap' }}>
-              <div style={{ ...S.statusPill, color:'#9aa3ad' }}>Chart TF {timeframe}</div>
-              <div style={{ ...S.statusPill, color:'#9aa3ad' }}>{selectedPositions.length} Live Positions</div>
-              <div style={{ ...S.statusPill, color: spxData.length > 0 ? '#6ef3a5' : '#ff8f8f' }}>{spxData.length > 0 ? 'SPX Feed OK' : 'SPX Feed Pending'}</div>
+              <div style={{ ...S.statusPill, color:PALETTE.textMuted }}>Chart TF {timeframe}</div>
+              <div style={{ ...S.statusPill, color:PALETTE.textMuted }}>{selectedPositions.length} Live Positions</div>
+              <div style={{ ...S.statusPill, color: spxData.length > 0 ? PALETTE.positive : PALETTE.negative }}>{spxData.length > 0 ? 'SPX Feed OK' : 'SPX Feed Pending'}</div>
             </div>
           </div>
         )}
@@ -2488,16 +2693,16 @@ export default function App() {
             <div style={{ ...S.grid(6), marginBottom:'16px' }}>
               {[
                 { label:'Portfolio NAV', val: fmt$(allTimeStats.currentNav), sub: 'Current Value' },
-                { label:'Total Return', val: fmtPct(allTimeStats.total), sub: 'Since Inception', color: allTimeStats.total >= 0 ? '#00e676' : '#ff4444' },
-                { label:'YTD Return', val: fmtPct(allTimeStats.ytd), sub: '2026', color: allTimeStats.ytd >= 0 ? '#00e676' : '#ff4444' },
-                { label:'Max Drawdown', val: fmtPct(-allTimeStats.maxDrawdown), sub: 'Peak to Trough', color:'#ff9800' },
+                { label:'Total Return', val: fmtPct(allTimeStats.total), sub: 'Since Inception', color: allTimeStats.total >= 0 ? PALETTE.positive : PALETTE.negative },
+                { label:'YTD Return', val: fmtPct(allTimeStats.ytd), sub: '2026', color: allTimeStats.ytd >= 0 ? PALETTE.positive : PALETTE.negative },
+                { label:'Max Drawdown', val: fmtPct(-allTimeStats.maxDrawdown), sub: 'Peak to Trough', color:PALETTE.warning },
                 { label:'Volatility', val: `${fmtNum(allTimeStats.volatility)}%`, sub: 'Annualized' },
-                { label:'Sharpe Ratio', val: fmtNum(allTimeStats.sharpe), sub: 'Risk-Adjusted', color: allTimeStats.sharpe >= 1 ? '#00e676' : allTimeStats.sharpe >= 0 ? '#ffd600' : '#ff4444' },
+                { label:'Sharpe Ratio', val: fmtNum(allTimeStats.sharpe), sub: 'Risk-Adjusted', color: allTimeStats.sharpe >= 1 ? PALETTE.positive : allTimeStats.sharpe >= 0 ? PALETTE.warning : PALETTE.negative },
               ].map(({ label, val, sub, color }) => (
                 <div key={label} style={signalPanelStyle(color || '#8f99a3')}>
                   <div style={S.cardTitle}>{label}</div>
-                  <div style={{ fontSize:'20px', fontWeight:700, color: color || '#e0e0e0', letterSpacing:'-0.5px' }}>{val}</div>
-                  <div style={{ fontSize:'10px', color:'#444', marginTop:'2px' }}>{sub}</div>
+                  <div style={{ fontSize:'20px', fontWeight:700, color: color || PALETTE.textStrong, letterSpacing:'-0.5px' }}>{val}</div>
+                  <div style={{ fontSize:'10px', color:PALETTE.textDim, marginTop:'2px' }}>{sub}</div>
                 </div>
               ))}
             </div>
@@ -2522,19 +2727,19 @@ export default function App() {
                     <XAxis dataKey="date" tick={CHART_TICK_STYLE} tickFormatter={d => d.slice(5)} interval={getTickInterval(chartData.length, 6)} minTickGap={24} tickMargin={8} />
                     <YAxis width={62} tick={CHART_TICK_STYLE} tickFormatter={v => `${v>=0?'+':''}${v.toFixed(1)}%`} tickMargin={8} />
                     <Tooltip content={<CustomTooltip mode="pct" />} />
-                    <ReferenceLine y={0} stroke="#333" strokeDasharray="2 2" />
-                    <Line type="monotone" dataKey="portPct" stroke="#00d4ff" dot={false} strokeWidth={2} name="Portfolio" />
-                    {showBenchmark && <Line type="monotone" dataKey="spxPct" stroke="#7c4dff" dot={false} strokeWidth={1.5} strokeDasharray="4 2" name="SPX" />}
+                    <ReferenceLine y={0} stroke={PALETTE.lineGrid} strokeDasharray="2 2" />
+                    <Line type="monotone" dataKey="portPct" stroke={PALETTE.portfolio} dot={false} strokeWidth={2} name="Portfolio" />
+                    {showBenchmark && <Line type="monotone" dataKey="spxPct" stroke={PALETTE.benchmark} dot={false} strokeWidth={1.5} strokeDasharray="4 2" name="SPX" />}
                   </LineChart>
                 </ResponsiveContainer>
               ) : (
-                <div style={{ height:220, display:'flex', alignItems:'center', justifyContent:'center', color:'#333' }}>
+                <div style={{ height:220, display:'flex', alignItems:'center', justifyContent:'center', color:PALETTE.textDim }}>
                   Upload balance history to view performance chart
                 </div>
               )}
               <div style={{ display:'flex', gap:'16px', marginTop:'8px' }}>
-                <label style={{ color:'#555', fontSize:'10px', cursor:'pointer', display:'flex', alignItems:'center', gap:'4px' }}>
-                  <input type="checkbox" checked={showBenchmark} onChange={e => setShowBenchmark(e.target.checked)} style={{ accentColor:'#7c4dff' }} />
+                <label style={{ color:PALETTE.textDim, fontSize:'10px', cursor:'pointer', display:'flex', alignItems:'center', gap:'4px' }}>
+                  <input type="checkbox" checked={showBenchmark} onChange={e => setShowBenchmark(e.target.checked)} style={{ accentColor:PALETTE.accent }} />
                   Show SPX Benchmark
                 </label>
               </div>
@@ -2543,17 +2748,17 @@ export default function App() {
             <div style={{ ...S.col, gap:'8px' }}>
               <div style={S.card}>
                 <div style={S.cardTitle}>TOTAL PORTFOLIO</div>
-                <div style={{ fontSize:'22px', fontWeight:700, color:'#00d4ff' }}>{fmt$(totalPortfolioValue)}</div>
-                <div style={{ fontSize:'10px', color:'#555', marginTop:'4px' }}>{accountSummary.length} accounts</div>
+                <div style={{ fontSize:'22px', fontWeight:700, color:PALETTE.textStrong }}>{fmt$(totalPortfolioValue)}</div>
+                <div style={{ fontSize:'10px', color:PALETTE.textDim, marginTop:'4px' }}>{accountSummary.length} accounts</div>
               </div>
               {accountSummary.slice(0,4).map(acc => (
-                <div key={acc.name} style={{ ...S.card, cursor:'pointer', borderColor: selectedAccount===acc.name ? '#00d4ff' : '#1a1a2e' }}
+                <div key={acc.name} style={{ ...S.card, cursor:'pointer', borderColor: selectedAccount===acc.name ? PALETTE.borderStrong : PALETTE.borderSubtle }}
                   onClick={() => setSelectedAccount(acc.name)}>
                   <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
                     <div style={{ color: acc.color, fontSize:'11px', fontWeight:700 }}>...{acc.name.split('...')[1]}</div>
-                    <div style={{ color: acc.today >= 0 ? '#00e676' : '#ff4444', fontSize:'11px' }}>{fmtPct(acc.today)}</div>
+                    <div style={{ color: acc.today >= 0 ? PALETTE.positive : PALETTE.negative, fontSize:'11px' }}>{fmtPct(acc.today)}</div>
                   </div>
-                  <div style={{ fontSize:'14px', fontWeight:700, color:'#e0e0e0', marginTop:'2px' }}>{fmt$(acc.total)}</div>
+                  <div style={{ fontSize:'14px', fontWeight:700, color:PALETTE.textStrong, marginTop:'2px' }}>{fmt$(acc.total)}</div>
                 </div>
               ))}
             </div>
@@ -2574,11 +2779,11 @@ export default function App() {
                       <tr key={acc.name} style={{ cursor:'pointer' }} onClick={() => setSelectedAccount(acc.name)}>
                         <td style={{ ...S.td }}><span style={{ color: acc.color }}>⬡</span> {acc.name.replace('Limit_Liability_Company ','LLC ').replace('Individual ','Indiv ')}</td>
                         <td style={{ ...S.td, fontWeight:700 }}>{fmt$(acc.total)}</td>
-                        <td style={{ ...S.td, color: acc.today >= 0 ? '#00e676' : '#ff4444' }}>{fmtPct(acc.today)}</td>
-                        <td style={{ ...S.td, color: acc.totalReturn >= 0 ? '#00e676' : '#ff4444' }}>{fmtPct(acc.totalReturn)}</td>
+                        <td style={{ ...S.td, color: acc.today >= 0 ? PALETTE.positive : PALETTE.negative }}>{fmtPct(acc.today)}</td>
+                        <td style={{ ...S.td, color: acc.totalReturn >= 0 ? PALETTE.positive : PALETTE.negative }}>{fmtPct(acc.totalReturn)}</td>
                         <td style={S.td}>{acc.posCount}</td>
                         <td style={S.td}>{fmt$(acc.cost)}</td>
-                        <td style={{ ...S.td, color: unrealized >= 0 ? '#00e676' : '#ff4444' }}>{fmt$(unrealized)} {acc.cost > 0 ? `(${fmtPct((unrealized/acc.cost)*100)})` : ''}</td>
+                        <td style={{ ...S.td, color: unrealized >= 0 ? PALETTE.positive : PALETTE.negative }}>{fmt$(unrealized)} {acc.cost > 0 ? `(${fmtPct((unrealized/acc.cost)*100)})` : ''}</td>
                       </tr>
                     );
                   })}
@@ -2604,7 +2809,7 @@ export default function App() {
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:'12px', flexWrap:'wrap', marginBottom:'12px' }}>
               <div>
                 <div style={S.cardTitle}>CHART SERIES</div>
-                <div style={{ color:'#666', fontSize:'11px' }}>
+                <div style={{ color:PALETTE.textDim, fontSize:'11px' }}>
                   Add or remove accounts from the normalized performance chart independently from the dashboard account filter.
                 </div>
               </div>
@@ -2617,14 +2822,14 @@ export default function App() {
               <button
                 type="button"
                 onClick={togglePerformanceAggregate}
-                style={{ ...S.btn, ...(performanceChartSelection.aggregate ? S.btnActive : {}), padding:'4px 10px', fontSize:'10px', borderColor:'#00d4ff', color:'#00d4ff' }}
+                style={{ ...S.btn, ...(performanceChartSelection.aggregate ? S.btnActive : {}), padding:'4px 10px', fontSize:'10px', borderColor:PALETTE.portfolio, color:PALETTE.portfolio }}
               >
                 Aggregate
               </button>
               <button
                 type="button"
                 onClick={togglePerformanceSPX}
-                style={{ ...S.btn, ...(performanceChartSelection.spx ? S.btnActive : {}), padding:'4px 10px', fontSize:'10px', borderColor:'#7c4dff', color:'#c3a6ff' }}
+                style={{ ...S.btn, ...(performanceChartSelection.spx ? S.btnActive : {}), padding:'4px 10px', fontSize:'10px', borderColor:PALETTE.benchmark, color:PALETTE.accentBright }}
               >
                 SPX
               </button>
@@ -2638,8 +2843,8 @@ export default function App() {
                     ...(performanceChartSelection.accounts?.[accountName] ? S.btnActive : {}),
                     padding:'4px 10px',
                     fontSize:'10px',
-                    borderColor: accountColorMap[accountName] || '#1a1a2e',
-                    color: performanceChartSelection.accounts?.[accountName] ? accountColorMap[accountName] || '#e0e0e0' : '#666',
+                    borderColor: accountColorMap[accountName] || PALETTE.borderSubtle,
+                    color: performanceChartSelection.accounts?.[accountName] ? accountColorMap[accountName] || PALETTE.textStrong : PALETTE.textDim,
                   }}
                 >
                   {accountName.split('...')[1] ? `...${accountName.split('...')[1]}` : accountName}
@@ -2666,12 +2871,12 @@ export default function App() {
             {performanceComparisonData.length > 0 ? (
               <ResponsiveContainer width="100%" height={372}>
                 <LineChart data={performanceComparisonData} margin={{ top:10, right:22, bottom:8, left:10 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#111" />
+                  <CartesianGrid strokeDasharray="3 3" stroke={PALETTE.lineGrid} />
                   <XAxis dataKey="date" tick={CHART_TICK_STYLE} tickFormatter={d => d.slice(0,7)} interval={getTickInterval(performanceComparisonData.length)} minTickGap={24} tickMargin={8} />
                   <YAxis width={62} tick={CHART_TICK_STYLE} tickFormatter={v => `${v>=0?'+':''}${v.toFixed(1)}%`} tickMargin={8} />
                   <Tooltip content={<CustomTooltip mode="pct" />} />
-                  <Legend wrapperStyle={{ fontSize:'11px', color:'#888', paddingTop:'6px' }} />
-                  <ReferenceLine y={0} stroke="#333" />
+                  <Legend wrapperStyle={{ fontSize:'11px', color:PALETTE.textMuted, paddingTop:'6px' }} />
+                  <ReferenceLine y={0} stroke={PALETTE.lineGrid} />
                   {performanceSeriesDefinitions.map((series) => (
                     <Line
                       key={series.key}
@@ -2688,7 +2893,7 @@ export default function App() {
                 </LineChart>
               </ResponsiveContainer>
             ) : (
-              <div style={{ height:360, display:'flex', alignItems:'center', justifyContent:'center', color:'#333' }}>
+              <div style={{ height:360, display:'flex', alignItems:'center', justifyContent:'center', color:PALETTE.textDim }}>
                 Select at least one account, aggregate portfolio, or SPX to chart performance.
               </div>
             )}
@@ -2698,14 +2903,14 @@ export default function App() {
           {stats && (
             <div style={{ ...S.grid(4), marginBottom:'16px' }}>
               {[
-                ['Period Return', fmtPct(stats.total), stats.total >= 0 ? '#00e676' : '#ff4444'],
-                ['YTD Return', fmtPct(stats.ytd), stats.ytd >= 0 ? '#00e676' : '#ff4444'],
-                ['Max Drawdown', fmtPct(-stats.maxDrawdown), '#ff9800'],
-                ['Annualized Vol', `${fmtNum(stats.volatility)}%`, '#e0e0e0'],
-                ['Sharpe Ratio', fmtNum(stats.sharpe), stats.sharpe >= 1 ? '#00e676' : '#ffd600'],
-                ['Calmar Ratio', fmtNum(stats.calmar), stats.calmar >= 1 ? '#00e676' : '#ffd600'],
-                ['Current NAV', fmt$(stats.currentNav), '#00d4ff'],
-                ['Data Points', filteredHistory.length.toString(), '#555'],
+                ['Period Return', fmtPct(stats.total), stats.total >= 0 ? PALETTE.positive : PALETTE.negative],
+                ['YTD Return', fmtPct(stats.ytd), stats.ytd >= 0 ? PALETTE.positive : PALETTE.negative],
+                ['Max Drawdown', fmtPct(-stats.maxDrawdown), PALETTE.warning],
+                ['Annualized Vol', `${fmtNum(stats.volatility)}%`, PALETTE.textStrong],
+                ['Sharpe Ratio', fmtNum(stats.sharpe), stats.sharpe >= 1 ? PALETTE.positive : PALETTE.warning],
+                ['Calmar Ratio', fmtNum(stats.calmar), stats.calmar >= 1 ? PALETTE.positive : PALETTE.warning],
+                ['Current NAV', fmt$(stats.currentNav), PALETTE.textStrong],
+                ['Data Points', filteredHistory.length.toString(), PALETTE.textDim],
               ].map(([label, val, color]) => (
                 <div key={label} style={signalPanelStyle(color || '#8f99a3')}>
                   <div style={S.cardTitle}>{label}</div>
@@ -2722,15 +2927,15 @@ export default function App() {
               <AreaChart data={filteredHistory.map(([d,v]) => ({ date:d, nav:v }))} margin={{ top:10, right:18, bottom:8, left:12 }}>
                 <defs>
                   <linearGradient id="navGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#00d4ff" stopOpacity={0.1}/>
-                    <stop offset="95%" stopColor="#00d4ff" stopOpacity={0}/>
+                    <stop offset="5%" stopColor={PALETTE.accentBright} stopOpacity={0.12}/>
+                    <stop offset="95%" stopColor={PALETTE.accentBright} stopOpacity={0}/>
                   </linearGradient>
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#111" />
+                <CartesianGrid strokeDasharray="3 3" stroke={PALETTE.lineGrid} />
                 <XAxis dataKey="date" tick={CHART_TICK_STYLE} tickFormatter={d => d.slice(0,7)} interval={getTickInterval(filteredHistory.length)} minTickGap={24} tickMargin={8} />
                 <YAxis width={76} tick={CHART_TICK_STYLE} tickFormatter={v => `$${(v/1000).toFixed(0)}K`} tickMargin={8} />
                 <Tooltip content={<CustomTooltip mode="$" />} />
-                <Area type="monotone" dataKey="nav" stroke="#00d4ff" fill="url(#navGrad)" strokeWidth={2} dot={false} name="NAV" />
+                <Area type="monotone" dataKey="nav" stroke={PALETTE.portfolio} fill="url(#navGrad)" strokeWidth={2} dot={false} name="NAV" />
               </AreaChart>
             </ResponsiveContainer>
           </div>
@@ -2740,8 +2945,8 @@ export default function App() {
       {/* ══════ POSITIONS TAB ══════ */}
       {tab === 'positions' && (
         <div style={S.section}>
-          <div style={{ marginBottom:'12px', color:'#555', fontSize:'11px' }}>
-            {topPositions.length} positions · {selectedAccount === 'ALL' ? 'All Accounts' : selectedAccount}
+          <div style={{ marginBottom:'12px', color:PALETTE.textDim, fontSize:'11px' }}>
+            {positionGroupCount} grouped lines · {selectedPositions.length} total positions · {selectedAccount === 'ALL' ? 'All Accounts' : selectedAccount}
           </div>
           <div style={S.card}>
             <div style={S.tableWrapper}>
@@ -2750,47 +2955,122 @@ export default function App() {
                   <tr>{['Symbol','Description','Account','Type','Sector Assignment','Qty','Price','Market Value','Cost Basis','Gain $','Gain %'].map(h => <th key={h} style={S.th}>{h}</th>)}</tr>
                 </thead>
                 <tbody>
-                  {topPositions.map((p, i) => (
-                    <tr key={i}>
-                      <td style={{ ...S.td, fontWeight:700, color: p.assetType?.includes('Option') ? '#ffd600' : '#00d4ff' }}>{p.symbol}</td>
-                      <td style={{ ...S.td, maxWidth:'260px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{p.description || (p.assetType?.includes('Option') ? p.symbol : '--')}</td>
-                      <td style={S.td}>{p.account?.split('...')[1] ? `...${p.account.split('...')[1]}` : p.account}</td>
-                      <td style={S.td}><span style={S.badge(p.assetType?.includes('Option') ? '#ffd600' : p.assetType?.includes('ETF') ? '#7c4dff' : '#00d4ff')}>{p.assetType?.includes('Option') ? 'OPT' : p.assetType?.includes('ETF') ? 'ETF' : 'EQ'}</span></td>
-                      <td style={S.td}>
-                        <div style={{ display:'flex', flexDirection:'column', gap:'6px', minWidth:'180px' }}>
-                          <div><span style={{ color: SECTOR_COLORS[p.sector] || '#666' }}>●</span> {p.sector}</div>
-                          <select
-                            value={
-                              sectorOverrides[getSectorOverrideKey(p.account, p.overrideSymbol || p.symbol)]
-                              || sectorOverrides[getSectorOverrideKey(p.account, p.symbol)]
-                              || sectorOverrides[getSectorOverrideKey(p.account, p.normalizedSymbol)]
-                              || sectorOverrides[getSectorOverrideKey(p.account, p.baseSymbol)]
-                              || SECTOR_OVERRIDE_AUTO
-                            }
-                            onChange={(e) => updatePositionSectorOverride(
-                              p.account,
-                              [p.overrideSymbol || p.symbol, p.symbol, p.normalizedSymbol, p.baseSymbol],
-                              e.target.value,
+                  {positionsDisplay.map((entry, i) => {
+                    const isGroup = entry.kind === 'group';
+                    const row = isGroup ? null : entry.row;
+                    const sectorValue = isGroup ? entry.sectorDisplay : (row?.sector || UNCLASSIFIED_SECTOR);
+                    const gainValue = isGroup ? entry.totalGain : ((row?.mktVal || 0) - (row?.costBasis || 0));
+                    const gainPct = isGroup ? entry.totalGainPct : row?.gainPct;
+                    const accountName = isGroup ? entry.accountName : row?.account;
+                    const badgeColor = isGroup
+                      ? PALETTE.accentMuted
+                      : isOptionPosition(row)
+                        ? PALETTE.warning
+                        : isEtfPosition(row)
+                          ? PALETTE.steel
+                          : PALETTE.info;
+                    const badgeLabel = isGroup
+                      ? 'GROUP'
+                      : isOptionPosition(row)
+                        ? 'OPT'
+                        : isEtfPosition(row)
+                          ? 'ETF'
+                          : 'EQ';
+
+                    return (
+                      <tr
+                        key={entry.key}
+                        style={{
+                          background: isGroup
+                            ? 'linear-gradient(90deg, rgba(216,139,47,0.14) 0%, rgba(18,21,25,0.98) 22%, rgba(18,21,25,0.98) 100%)'
+                            : entry.child
+                              ? 'rgba(11,13,16,0.95)'
+                              : i % 2
+                                ? 'rgba(17,19,22,0.98)'
+                                : 'rgba(13,15,18,0.98)',
+                        }}
+                      >
+                        <td style={{ ...S.td, fontWeight:700, color: isGroup ? PALETTE.textStrong : (isOptionPosition(row) ? PALETTE.warning : PALETTE.portfolio) }}>
+                          <div style={{ display:'flex', alignItems:'center', gap:'8px', paddingLeft: entry.child ? '20px' : 0 }}>
+                            {isGroup && (
+                              <button
+                                type="button"
+                                onClick={() => setExpandedPositionGroups((prev) => ({ ...prev, [entry.groupKey]: !prev[entry.groupKey] }))}
+                                style={{
+                                  width:'18px',
+                                  height:'18px',
+                                  border:`1px solid ${PALETTE.borderStrong}`,
+                                  background:'linear-gradient(180deg, rgba(53,40,21,0.96), rgba(16,14,12,0.98))',
+                                  color:PALETTE.accentBright,
+                                  cursor:'pointer',
+                                  borderRadius:'2px',
+                                  fontSize:'10px',
+                                  lineHeight:'16px',
+                                  padding:0,
+                                }}
+                              >
+                                {entry.expanded ? '−' : '+'}
+                              </button>
                             )}
-                            style={{ ...S.input, padding:'4px 6px', fontSize:'10px', minWidth:'160px' }}
-                          >
-                            <option value={SECTOR_OVERRIDE_AUTO}>Auto ({p.mainSector || UNCLASSIFIED_SECTOR})</option>
-                            {ALL_SECTORS.map((sector) => (
-                              <option key={sector.name} value={sector.name}>{sector.name}</option>
-                            ))}
-                            <option value={UNCLASSIFIED_SECTOR}>{UNCLASSIFIED_SECTOR}</option>
-                          </select>
-                        </div>
-                      </td>
-                      <td style={{ ...S.td, color: p.qty < 0 ? '#ff4444' : '#e0e0e0' }}>{p.qty < 0 ? p.qty.toLocaleString() : p.qty.toLocaleString()}</td>
-                      <td style={S.td}>{p.price ? `$${p.price.toFixed(2)}` : '--'}</td>
-                      <td style={{ ...S.td, fontWeight:600 }}>{fmt$(p.mktVal)}</td>
-                      <td style={S.td}>{fmt$(p.costBasis)}</td>
-                      <td style={{ ...S.td, color: (p.mktVal - p.costBasis) >= 0 ? '#00e676' : '#ff4444' }}>{fmt$(p.mktVal - p.costBasis)}</td>
-                      <td style={{ ...S.td, color: p.gainPct >= 0 ? '#00e676' : '#ff4444', fontWeight:600 }}>{fmtPct(p.gainPct)}</td>
-                    </tr>
-                  ))}
-                  {topPositions.length === 0 && (
+                            <span>{isGroup ? entry.symbol : row.symbol}</span>
+                          </div>
+                        </td>
+                        <td style={{ ...S.td, maxWidth:'300px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', color: entry.child ? PALETTE.textMuted : PALETTE.text }}>
+                          {isGroup
+                            ? entry.description
+                            : (row.description || (isOptionPosition(row) ? row.symbol : '--'))}
+                        </td>
+                        <td style={{ ...S.td, color: PALETTE.textMuted }}>
+                          {accountName?.split('...')[1] ? `...${accountName.split('...')[1]}` : accountName}
+                        </td>
+                        <td style={S.td}>
+                          {isGroup ? (
+                            <div style={{ display:'flex', flexDirection:'column', gap:'5px' }}>
+                              <span style={S.badge(badgeColor)}>GROUP</span>
+                              <span style={{ color:PALETTE.textMuted, fontSize:'10px' }}>{entry.typeDisplay}</span>
+                            </div>
+                          ) : (
+                            <span style={S.badge(badgeColor)}>{badgeLabel}</span>
+                          )}
+                        </td>
+                        <td style={S.td}>
+                          {isGroup ? (
+                            <div style={{ display:'flex', flexDirection:'column', gap:'6px', minWidth:'180px' }}>
+                              <div><span style={{ color: SECTOR_COLORS[sectorValue] || PALETTE.textDim }}>●</span> {sectorValue}</div>
+                              <select
+                                value={entry.overrideValue || SECTOR_OVERRIDE_AUTO}
+                                onChange={(e) => updatePositionSectorOverride(
+                                  entry.accountName,
+                                  entry.rows.flatMap((position) => getPositionOverrideCandidates(position)),
+                                  e.target.value,
+                                )}
+                                style={{ ...S.input, padding:'4px 6px', fontSize:'10px', minWidth:'160px' }}
+                              >
+                                <option value={SECTOR_OVERRIDE_AUTO}>Auto ({entry.first?.mainSector || UNCLASSIFIED_SECTOR})</option>
+                                {ALL_SECTORS.map((sector) => (
+                                  <option key={sector.name} value={sector.name}>{sector.name}</option>
+                                ))}
+                                <option value={UNCLASSIFIED_SECTOR}>{UNCLASSIFIED_SECTOR}</option>
+                              </select>
+                            </div>
+                          ) : (
+                            <div style={{ color: entry.child ? PALETTE.textDim : PALETTE.textMuted }}>
+                              <span style={{ color: SECTOR_COLORS[sectorValue] || PALETTE.textDim }}>●</span> {sectorValue}
+                            </div>
+                          )}
+                        </td>
+                        <td style={{ ...S.td, color: Number(isGroup ? entry.primaryRow?.qty : row?.qty) < 0 ? PALETTE.negative : PALETTE.textStrong }}>
+                          {isGroup ? entry.qtyDisplay : formatPositionQty(Number(row?.qty) || 0)}
+                        </td>
+                        <td style={S.td}>{isGroup ? entry.priceDisplay : (row?.price ? `$${row.price.toFixed(2)}` : '--')}</td>
+                        <td style={{ ...S.td, fontWeight:600 }}>{fmt$(isGroup ? entry.totalMarketValue : row?.mktVal)}</td>
+                        <td style={S.td}>{fmt$(isGroup ? entry.totalCostBasis : row?.costBasis)}</td>
+                        <td style={{ ...S.td, color: gainValue >= 0 ? PALETTE.positive : PALETTE.negative }}>{fmt$(gainValue)}</td>
+                        <td style={{ ...S.td, color: gainPct >= 0 ? PALETTE.positive : PALETTE.negative, fontWeight:600 }}>{fmtPct(gainPct)}</td>
+                      </tr>
+                    );
+                  })}
+                  {positionsDisplay.length === 0 && (
                     <tr><td colSpan={11} style={{ ...S.td, textAlign:'center', color:'#333', padding:'32px' }}>Upload a positions file to view holdings</td></tr>
                   )}
                 </tbody>
