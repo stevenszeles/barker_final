@@ -155,7 +155,7 @@ const ACCOUNT_COLORS = [
   '#756f7f',
   '#8f8a6f',
 ];
-const APP_BUILD_VERSION = "2026.04.02.2";
+const APP_BUILD_VERSION = "2026.04.02.3";
 const APP_STATE_STORAGE_KEY = `portfolio-dashboard.app-state.${APP_BUILD_VERSION}`;
 const LEGACY_APP_STATE_STORAGE_KEYS = [
   "portfolio-dashboard.app-state.2026.04.02.1",
@@ -167,6 +167,7 @@ const MARKET_CACHE_STORAGE_KEY = "portfolio-dashboard.market-cache.v2";
 const SECURITY_HISTORY_STORAGE_KEY = "portfolio-dashboard.security-history.v1";
 const SHARED_DASHBOARD_STATE_ENDPOINT = "/api/admin/shared-dashboard-state";
 const SHARED_DASHBOARD_POLL_MS = 60000;
+const SHARED_DASHBOARD_POLL_JITTER_MS = 15000;
 const SHARED_DASHBOARD_SAVE_DEBOUNCE_MS = 900;
 
 function loadJSONStorage(key, fallback) {
@@ -350,6 +351,77 @@ function hasSharedDashboardStateContent(rawState) {
     || Object.keys(normalized.sectorOverrides || {}).length
     || Object.keys(normalized.positionAttributionOverrides || {}).length
   );
+}
+
+function cloneJSONValue(value) {
+  if (value === undefined) return undefined;
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return value;
+  }
+}
+
+function deepEqualJSON(a, b) {
+  try {
+    return JSON.stringify(a) === JSON.stringify(b);
+  } catch {
+    return false;
+  }
+}
+
+function isMergeableObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function mergeSharedStateValues(baseValue, localValue, remoteValue, path = '') {
+  if (deepEqualJSON(localValue, baseValue)) {
+    return { value: cloneJSONValue(remoteValue), conflicts: [] };
+  }
+  if (deepEqualJSON(remoteValue, baseValue)) {
+    return { value: cloneJSONValue(localValue), conflicts: [] };
+  }
+  if (deepEqualJSON(localValue, remoteValue)) {
+    return { value: cloneJSONValue(localValue), conflicts: [] };
+  }
+
+  if (isMergeableObject(baseValue) || isMergeableObject(localValue) || isMergeableObject(remoteValue)) {
+    const baseObject = isMergeableObject(baseValue) ? baseValue : {};
+    const localObject = isMergeableObject(localValue) ? localValue : {};
+    const remoteObject = isMergeableObject(remoteValue) ? remoteValue : {};
+    const merged = {};
+    const conflicts = [];
+    const keys = [...new Set([
+      ...Object.keys(baseObject),
+      ...Object.keys(localObject),
+      ...Object.keys(remoteObject),
+    ])];
+
+    keys.forEach((key) => {
+      const nextPath = path ? `${path}.${key}` : key;
+      const result = mergeSharedStateValues(baseObject[key], localObject[key], remoteObject[key], nextPath);
+      if (result.conflicts.length) {
+        conflicts.push(...result.conflicts);
+        return;
+      }
+      if (result.value !== undefined) merged[key] = result.value;
+    });
+
+    return { value: merged, conflicts };
+  }
+
+  return { value: cloneJSONValue(localValue), conflicts: [path || '(root)'] };
+}
+
+function mergeSharedDashboardStates(baseState, localState, remoteState) {
+  const base = buildSharedDashboardStatePayload(baseState || {});
+  const local = buildSharedDashboardStatePayload(localState || {});
+  const remote = buildSharedDashboardStatePayload(remoteState || {});
+  const result = mergeSharedStateValues(base, local, remote);
+  return {
+    mergedState: buildSharedDashboardStatePayload(result.value || {}),
+    conflicts: result.conflicts || [],
+  };
 }
 
 function resolveMainSector(symbol, cleanSym, assetType = "") {
@@ -1065,7 +1137,7 @@ function parseStooqHistory(text, days = 3650) {
 async function loadBenchmarkHistorySeries(symbol, { days = 3650, retries = 1, forceRefresh = false } = {}) {
   const stooqSymbol = toStooqSymbol(symbol);
   if (!stooqSymbol) throw new Error(`No benchmark data for ${symbol}`);
-  const shouldRefresh = forceRefresh || symbol === '^GSPC';
+  const shouldRefresh = !!forceRefresh;
   const params = new URLSearchParams({
     s: stooqSymbol,
     i: 'd',
@@ -1441,8 +1513,14 @@ export default function App() {
     sectorOverrides: persisted.sectorOverrides,
     positionAttributionOverrides: persisted.positionAttributionOverrides,
   }));
-  const lastSharedStateSignatureRef = useRef(getSharedDashboardStateSignature(sharedSeedRef.current));
+  const sharedStateSnapshotRef = useRef(buildSharedDashboardStatePayload({}));
+  const workspaceStateRef = useRef(sharedSeedRef.current);
+  const lastSharedStateSignatureRef = useRef(getSharedDashboardStateSignature(sharedStateSnapshotRef.current));
+  const sharedStateVersionRef = useRef(0);
   const sharedStateUpdatedAtRef = useRef(null);
+  const sharedStateDirtyRef = useRef(false);
+  const sharedStateFetchInFlightRef = useRef(false);
+  const sharedStateSaveInFlightRef = useRef(false);
 
   const [tab, setTab] = useState('overview');
   const [timeframe, setTimeframe] = useState(persisted.timeframe || '1Y');
@@ -1474,6 +1552,58 @@ export default function App() {
   const [sharedStateReady, setSharedStateReady] = useState(false);
   const [sharedStateUpdatedAt, setSharedStateUpdatedAt] = useState(null);
   const [sharedSyncStatus, setSharedSyncStatus] = useState('Booting shared workspace');
+
+  const setLocalWorkspaceState = useCallback((rawState) => {
+    const normalized = buildSharedDashboardStatePayload(rawState);
+    workspaceStateRef.current = normalized;
+    setAccounts(normalized.accounts);
+    setBalanceHistory(normalized.balanceHistory);
+    setRealizedTrades(normalized.realizedTrades);
+    setSectorTargetsByAccount(normalized.sectorTargetsByAccount);
+    setSectorOverrides(normalized.sectorOverrides);
+    setPositionAttributionOverrides(normalized.positionAttributionOverrides);
+    return normalized;
+  }, []);
+
+  const commitSharedDashboardSnapshot = useCallback((rawState, updatedAt = null, version = 0, status = 'Shared workspace live') => {
+    const normalized = buildSharedDashboardStatePayload(rawState);
+    sharedStateSnapshotRef.current = normalized;
+    lastSharedStateSignatureRef.current = getSharedDashboardStateSignature(normalized);
+    sharedStateUpdatedAtRef.current = updatedAt || null;
+    sharedStateVersionRef.current = Number.isFinite(Number(version)) ? Number(version) : 0;
+    sharedStateDirtyRef.current = false;
+    setSharedStateUpdatedAt(updatedAt || null);
+    setSharedStateReady(true);
+    setSharedSyncStatus(status);
+    return normalized;
+  }, []);
+
+  const applySharedDashboardState = useCallback((rawState, updatedAt = null, version = 0, status = null) => {
+    const normalized = commitSharedDashboardSnapshot(
+      rawState,
+      updatedAt,
+      version,
+      status || (updatedAt ? 'Shared workspace synced' : 'Shared workspace ready'),
+    );
+    setLocalWorkspaceState(normalized);
+    return normalized;
+  }, [commitSharedDashboardSnapshot, setLocalWorkspaceState]);
+
+  const markSharedWorkspaceDirty = useCallback((status = 'Local edits pending sync') => {
+    sharedStateDirtyRef.current = true;
+    setSharedSyncStatus(status);
+  }, []);
+
+  useEffect(() => {
+    workspaceStateRef.current = buildSharedDashboardStatePayload({
+      accounts,
+      balanceHistory,
+      realizedTrades,
+      sectorTargetsByAccount,
+      sectorOverrides,
+      positionAttributionOverrides,
+    });
+  }, [accounts, balanceHistory, positionAttributionOverrides, realizedTrades, sectorOverrides, sectorTargetsByAccount]);
 
   // Load SPX and sector ETF benchmarks using the proxied Stooq daily history feed.
   const loadBenchmarks = useCallback(async ({ forceRefresh = false, spxOnly = false } = {}) => {
@@ -1541,69 +1671,70 @@ export default function App() {
     };
   }, [loadBenchmarks]);
 
-  const applySharedDashboardState = useCallback((rawState, updatedAt = null) => {
-    const normalized = buildSharedDashboardStatePayload(rawState);
-    lastSharedStateSignatureRef.current = getSharedDashboardStateSignature(normalized);
-    sharedStateUpdatedAtRef.current = updatedAt || null;
-    setAccounts(normalized.accounts);
-    setBalanceHistory(normalized.balanceHistory);
-    setRealizedTrades(normalized.realizedTrades);
-    setSectorTargetsByAccount(normalized.sectorTargetsByAccount);
-    setSectorOverrides(normalized.sectorOverrides);
-    setPositionAttributionOverrides(normalized.positionAttributionOverrides);
-    setSharedStateUpdatedAt(updatedAt || null);
-    setSharedStateReady(true);
-    setSharedSyncStatus(updatedAt ? 'Shared workspace synced' : 'Shared workspace ready');
-    return normalized;
+  const requestSharedDashboardState = useCallback(async () => {
+    const response = await fetch(SHARED_DASHBOARD_STATE_ENDPOINT, { cache:'no-store' });
+    if (!response.ok) throw new Error(`Shared state fetch failed (${response.status})`);
+    const payload = await response.json();
+    return {
+      payload,
+      updatedAt: payload?.updated_at || null,
+      version: Number.isFinite(Number(payload?.version)) ? Number(payload.version) : 0,
+      state: buildSharedDashboardStatePayload(payload?.state || {}),
+    };
   }, []);
 
   const fetchSharedDashboardState = useCallback(async ({ silent = false, preferLocalSeed = false } = {}) => {
-    if (!silent) setSharedSyncStatus(preferLocalSeed ? 'Loading shared workspace' : 'Refreshing shared workspace');
+    if (sharedStateFetchInFlightRef.current) return null;
+    sharedStateFetchInFlightRef.current = true;
+    if (!silent && !sharedStateDirtyRef.current) {
+      setSharedSyncStatus(preferLocalSeed ? 'Loading shared workspace' : 'Refreshing shared workspace');
+    }
     try {
-      const response = await fetch(SHARED_DASHBOARD_STATE_ENDPOINT, { cache:'no-store' });
-      if (!response.ok) throw new Error(`Shared state fetch failed (${response.status})`);
-      const payload = await response.json();
-      const updatedAt = payload?.updated_at || null;
-      const remoteState = buildSharedDashboardStatePayload(payload?.state || {});
+      const remote = await requestSharedDashboardState();
+      const updatedAt = remote.updatedAt;
+      const remoteState = remote.state;
       const remoteHasContent = hasSharedDashboardStateContent(remoteState);
       const remoteSignature = getSharedDashboardStateSignature(remoteState);
 
       if ((remoteHasContent || !preferLocalSeed)
         && remoteSignature === lastSharedStateSignatureRef.current
-        && updatedAt === sharedStateUpdatedAtRef.current) {
+        && updatedAt === sharedStateUpdatedAtRef.current
+        && remote.version === sharedStateVersionRef.current) {
         setSharedStateReady(true);
         sharedStateUpdatedAtRef.current = updatedAt;
         setSharedStateUpdatedAt(updatedAt);
-        if (!silent) setSharedSyncStatus('Shared workspace live');
-        return payload;
+        if (!silent && !sharedStateDirtyRef.current) setSharedSyncStatus('Shared workspace live');
+        return remote.payload;
+      }
+
+      if (sharedStateDirtyRef.current && remote.version !== sharedStateVersionRef.current) {
+        setSharedStateReady(true);
+        setSharedSyncStatus('Remote changes detected · local edits pending');
+        return remote.payload;
       }
 
       if (remoteHasContent || !preferLocalSeed) {
-        applySharedDashboardState(remoteState, updatedAt);
+        applySharedDashboardState(remoteState, updatedAt, remote.version);
       } else {
-        const localSeed = sharedSeedRef.current;
-        sharedStateUpdatedAtRef.current = updatedAt;
-        setSharedStateUpdatedAt(updatedAt);
-        setSharedStateReady(true);
-        if (hasSharedDashboardStateContent(localSeed)) {
-          lastSharedStateSignatureRef.current = "";
-          setSharedSyncStatus('Publishing local workspace cache');
-        } else {
-          lastSharedStateSignatureRef.current = getSharedDashboardStateSignature(remoteState);
-          setSharedSyncStatus('Shared workspace ready');
-        }
+        commitSharedDashboardSnapshot(
+          {},
+          updatedAt,
+          remote.version,
+          hasSharedDashboardStateContent(sharedSeedRef.current)
+            ? 'Shared workspace empty · local cache loaded'
+            : 'Shared workspace ready',
+        );
       }
-      return payload;
+      return remote.payload;
     } catch (error) {
       console.warn('Shared workspace fetch failed', error);
-      if (!sharedStateReady && hasSharedDashboardStateContent(sharedSeedRef.current)) {
-        lastSharedStateSignatureRef.current = "";
-      }
       setSharedStateReady(true);
-      setSharedSyncStatus('Shared sync unavailable - using local cache');
+      setSharedSyncStatus('Shared sync unavailable - local cache active');
       return null;
+    } finally {
+      sharedStateFetchInFlightRef.current = false;
     }
-  }, [applySharedDashboardState, sharedStateReady]);
+  }, [applySharedDashboardState, commitSharedDashboardSnapshot, requestSharedDashboardState]);
 
   useEffect(() => {
     fetchSharedDashboardState({ preferLocalSeed: true });
@@ -1611,56 +1742,123 @@ export default function App() {
 
   useEffect(() => {
     if (!sharedStateReady) return undefined;
-    const intervalId = window.setInterval(() => {
-      fetchSharedDashboardState({ silent: true, preferLocalSeed: false });
-    }, SHARED_DASHBOARD_POLL_MS);
-    return () => window.clearInterval(intervalId);
+    let cancelled = false;
+    let timeoutId = null;
+
+    const schedule = () => {
+      const jitter = Math.round((Math.random() - 0.5) * SHARED_DASHBOARD_POLL_JITTER_MS);
+      timeoutId = window.setTimeout(async () => {
+        if (cancelled) return;
+        if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+          if (!sharedStateSaveInFlightRef.current) {
+            await fetchSharedDashboardState({ silent: true, preferLocalSeed: false });
+          }
+        }
+        schedule();
+      }, Math.max(15000, SHARED_DASHBOARD_POLL_MS + jitter));
+    };
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible' && !sharedStateSaveInFlightRef.current) {
+        fetchSharedDashboardState({ silent: true, preferLocalSeed: false });
+      }
+    };
+
+    schedule();
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      cancelled = true;
+      if (timeoutId) window.clearTimeout(timeoutId);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
   }, [fetchSharedDashboardState, sharedStateReady]);
 
-  useEffect(() => {
-    if (!sharedStateUpdatedAt) return;
-    loadBenchmarks({ forceRefresh: true, spxOnly: true });
-  }, [sharedStateUpdatedAt, loadBenchmarks]);
+  const saveSharedDashboardState = useCallback(async (statePayload, baseVersion, { allowMerge = true } = {}) => {
+    sharedStateSaveInFlightRef.current = true;
+    try {
+      setSharedSyncStatus('Saving shared workspace');
+      let response = await fetch(SHARED_DASHBOARD_STATE_ENDPOINT, {
+        method:'POST',
+        headers:{ 'Content-Type':'application/json' },
+        body: JSON.stringify({ state: statePayload, base_version: baseVersion }),
+      });
+
+      if (response.status === 409 && allowMerge) {
+        const latest = await requestSharedDashboardState();
+        const { mergedState, conflicts } = mergeSharedDashboardStates(
+          sharedStateSnapshotRef.current,
+          statePayload,
+          latest.state,
+        );
+
+        if (!conflicts.length && !deepEqualJSON(mergedState, latest.state)) {
+          setLocalWorkspaceState(mergedState);
+          sharedStateDirtyRef.current = true;
+          setSharedSyncStatus('Merging remote workspace changes');
+          response = await fetch(SHARED_DASHBOARD_STATE_ENDPOINT, {
+            method:'POST',
+            headers:{ 'Content-Type':'application/json' },
+            body: JSON.stringify({ state: mergedState, base_version: latest.version }),
+          });
+          if (!response.ok) throw new Error(`Shared state merged save failed (${response.status})`);
+          const mergedResult = await response.json();
+          commitSharedDashboardSnapshot(
+            mergedResult?.state || mergedState,
+            mergedResult?.updated_at || null,
+            mergedResult?.version || (latest.version + 1),
+            'Shared workspace live',
+          );
+          return true;
+        }
+
+        applySharedDashboardState(
+          latest.state,
+          latest.updatedAt,
+          latest.version,
+          conflicts.length
+            ? 'Remote conflict detected · reloaded latest workspace'
+            : 'Shared workspace synced',
+        );
+        return false;
+      }
+
+      if (!response.ok) throw new Error(`Shared state save failed (${response.status})`);
+      const result = await response.json();
+      commitSharedDashboardSnapshot(
+        result?.state || statePayload,
+        result?.updated_at || null,
+        result?.version || (baseVersion + 1),
+        'Shared workspace live',
+      );
+      return true;
+    } catch (error) {
+      console.warn('Shared workspace save failed', error);
+      setSharedSyncStatus('Shared sync failed - local cache only');
+      return false;
+    } finally {
+      sharedStateSaveInFlightRef.current = false;
+    }
+  }, [applySharedDashboardState, commitSharedDashboardSnapshot, requestSharedDashboardState, setLocalWorkspaceState]);
 
   useEffect(() => {
     if (!sharedStateReady) return undefined;
 
-    const payload = buildSharedDashboardStatePayload({
-      accounts,
-      balanceHistory,
-      realizedTrades,
-      sectorTargetsByAccount,
-      sectorOverrides,
-      positionAttributionOverrides,
-    });
+    const payload = workspaceStateRef.current;
     const signature = getSharedDashboardStateSignature(payload);
 
-    if (signature === lastSharedStateSignatureRef.current) return undefined;
+    if (signature === lastSharedStateSignatureRef.current) {
+      sharedStateDirtyRef.current = false;
+      return undefined;
+    }
+    if (!sharedStateDirtyRef.current || sharedStateSaveInFlightRef.current) return undefined;
 
     const timeoutId = window.setTimeout(async () => {
-      if (signature === lastSharedStateSignatureRef.current) return;
-
-      try {
-        setSharedSyncStatus('Saving shared workspace');
-        const response = await fetch(SHARED_DASHBOARD_STATE_ENDPOINT, {
-          method:'POST',
-          headers:{ 'Content-Type':'application/json' },
-          body: JSON.stringify({ state: payload }),
-        });
-        if (!response.ok) throw new Error(`Shared state save failed (${response.status})`);
-        const result = await response.json();
-        lastSharedStateSignatureRef.current = signature;
-        sharedStateUpdatedAtRef.current = result?.updated_at || null;
-        setSharedStateUpdatedAt(result?.updated_at || null);
-        setSharedSyncStatus('Shared workspace live');
-      } catch (error) {
-        console.warn('Shared workspace save failed', error);
-        setSharedSyncStatus('Shared sync failed - local cache only');
-      }
+      if (signature === lastSharedStateSignatureRef.current || !sharedStateDirtyRef.current) return;
+      await saveSharedDashboardState(payload, sharedStateVersionRef.current);
     }, SHARED_DASHBOARD_SAVE_DEBOUNCE_MS);
 
     return () => window.clearTimeout(timeoutId);
-  }, [sharedStateReady, accounts, balanceHistory, realizedTrades, sectorTargetsByAccount, sectorOverrides, positionAttributionOverrides]);
+  }, [accounts, balanceHistory, positionAttributionOverrides, realizedTrades, saveSharedDashboardState, sectorOverrides, sectorTargetsByAccount, sharedStateReady]);
 
   useEffect(() => {
     saveJSONStorage(APP_STATE_STORAGE_KEY, {
@@ -1693,16 +1891,7 @@ export default function App() {
       : window.confirm("Delete all uploaded accounts, balance history, realized trades, saved weights, and cached benchmark data?");
     if (!confirmed) return;
 
-    const clearedSharedState = buildSharedDashboardStatePayload({
-      accounts: {},
-      balanceHistory: {},
-      realizedTrades: [],
-      sectorTargetsByAccount: {},
-      sectorOverrides: {},
-      positionAttributionOverrides: {},
-    });
-    const clearedSignature = getSharedDashboardStateSignature(clearedSharedState);
-
+    markSharedWorkspaceDirty('Clearing shared workspace');
     setAccounts({});
     setBalanceHistory({});
     setRealizedTrades([]);
@@ -1726,25 +1915,7 @@ export default function App() {
     LEGACY_APP_STATE_STORAGE_KEYS.forEach(clearJSONStorage);
     clearJSONStorage(MARKET_CACHE_STORAGE_KEY);
     clearJSONStorage(SECURITY_HISTORY_STORAGE_KEY);
-    setSharedSyncStatus('Clearing shared workspace');
-    fetch(SHARED_DASHBOARD_STATE_ENDPOINT, {
-      method:'POST',
-      headers:{ 'Content-Type':'application/json' },
-      body: JSON.stringify({ state: clearedSharedState }),
-    })
-      .then(async (response) => {
-        if (!response.ok) throw new Error(`Shared state clear failed (${response.status})`);
-        const result = await response.json();
-        lastSharedStateSignatureRef.current = clearedSignature;
-        sharedStateUpdatedAtRef.current = result?.updated_at || null;
-        setSharedStateUpdatedAt(result?.updated_at || null);
-        setSharedSyncStatus('Shared workspace live');
-      })
-      .catch((error) => {
-        console.warn('Shared workspace clear failed', error);
-        setSharedSyncStatus('Shared sync failed - local cache only');
-      });
-  }, []);
+  }, [markSharedWorkspaceDirty]);
 
   // File upload handlers
   const handlePositionsUpload = useCallback((file) => {
@@ -1752,13 +1923,14 @@ export default function App() {
     reader.onload = (e) => {
       try {
         const parsed = parsePositionsCSV(e.target.result);
+        markSharedWorkspaceDirty('Positions upload pending sync');
         setAccounts(parsed);
         setUploadStatus(s => ({ ...s, positions: `✓ ${Object.keys(parsed).length} accounts, ${Object.values(parsed).reduce((a,acc)=>a+acc.positions.length,0)} positions` }));
         loadBenchmarks({ forceRefresh: true, spxOnly: true });
       } catch(err) { setUploadStatus(s => ({ ...s, positions: `✗ Parse error: ${err.message}` })); }
     };
     reader.readAsText(file);
-  }, [loadBenchmarks]);
+  }, [loadBenchmarks, markSharedWorkspaceDirty]);
 
   const handleBalancesUpload = useCallback(async (fileInput) => {
     const files = Array.isArray(fileInput) ? fileInput : [fileInput].filter(Boolean);
@@ -1776,6 +1948,7 @@ export default function App() {
         ...prev,
         ...Object.fromEntries(parsedResults.map(({ account, data }) => [account, data])),
       }));
+      markSharedWorkspaceDirty('Balance history upload pending sync');
 
       if (parsedResults.length === 1) {
         const { account, data } = parsedResults[0];
@@ -1797,13 +1970,14 @@ export default function App() {
     } catch (err) {
       setUploadStatus((s) => ({ ...s, balances: `✗ Parse error: ${err.message}` }));
     }
-  }, [loadBenchmarks]);
+  }, [loadBenchmarks, markSharedWorkspaceDirty]);
 
   const handleRealizedUpload = useCallback((file) => {
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
         const trades = parseRealizedCSV(e.target.result);
+        markSharedWorkspaceDirty('Realized trades upload pending sync');
         setRealizedTrades(trades);
         const accountCount = new Set(trades.map(t => t.account)).size;
         setUploadStatus(s => ({
@@ -1816,7 +1990,7 @@ export default function App() {
       } catch(err) { setUploadStatus(s => ({ ...s, realized: `✗ Parse error: ${err.message}` })); }
     };
     reader.readAsText(file);
-  }, [loadBenchmarks]);
+  }, [loadBenchmarks, markSharedWorkspaceDirty]);
 
   // Derived: account list
   const accountList = useMemo(() => {
@@ -2902,6 +3076,7 @@ export default function App() {
     const symbols = [...new Set((Array.isArray(symbolInput) ? symbolInput : [symbolInput]).filter(Boolean))];
     const keys = symbols.map((symbol) => getSectorOverrideKey(accountName, symbol));
     if (!keys.length) return;
+    markSharedWorkspaceDirty('Sector overrides pending sync');
     setSectorOverrides((prev) => {
       const next = { ...prev };
       keys.forEach((key) => {
@@ -2913,10 +3088,11 @@ export default function App() {
       next[keys[0]] = nextSector;
       return next;
     });
-  }, []);
+  }, [markSharedWorkspaceDirty]);
 
   const updatePositionAttributionOverride = useCallback((positionInput, nextAccount) => {
     const positions = Array.isArray(positionInput) ? positionInput : [positionInput];
+    markSharedWorkspaceDirty('Desk attribution pending sync');
     setPositionAttributionOverrides((prev) => {
       const next = { ...prev };
       positions.forEach((position) => {
@@ -2931,11 +3107,12 @@ export default function App() {
       });
       return next;
     });
-  }, []);
+  }, [markSharedWorkspaceDirty]);
 
   const updateRealizedTradeSectorOverride = useCallback((trade, nextSector) => {
     const key = getRealizedTradeOverrideKey(trade);
     if (!key) return;
+    markSharedWorkspaceDirty('Realized trade sector override pending sync');
     setSectorOverrides((prev) => {
       const next = { ...prev };
       if (!nextSector || nextSector === SECTOR_OVERRIDE_AUTO) {
@@ -2945,10 +3122,11 @@ export default function App() {
       next[key] = nextSector;
       return next;
     });
-  }, []);
+  }, [markSharedWorkspaceDirty]);
 
   const setSectorAllocationBias = useCallback((sectorName, mode) => {
     if (!editableSectorScope) return;
+    markSharedWorkspaceDirty('Sector targets pending sync');
     setSectorTargetsByAccount(prev => {
       const currentScope = prev[editableSectorScope] || buildInitialSectorTargets();
       const current = currentScope[sectorName] || { benchmarkWeight: 0, targetWeight: 0 };
@@ -2966,10 +3144,11 @@ export default function App() {
         },
       };
     });
-  }, [editableSectorScope]);
+  }, [editableSectorScope, markSharedWorkspaceDirty]);
 
   const nudgeSectorActiveWeight = useCallback((sectorName, delta) => {
     if (!editableSectorScope) return;
+    markSharedWorkspaceDirty('Sector targets pending sync');
     setSectorTargetsByAccount(prev => {
       const currentScope = prev[editableSectorScope] || buildInitialSectorTargets();
       const current = currentScope[sectorName] || { benchmarkWeight: 0, targetWeight: 0 };
@@ -2985,10 +3164,11 @@ export default function App() {
         },
       };
     });
-  }, [editableSectorScope]);
+  }, [editableSectorScope, markSharedWorkspaceDirty]);
 
   const updateSectorBenchmarkWeight = useCallback((sectorName, nextWeight) => {
     if (!editableSectorScope) return;
+    markSharedWorkspaceDirty('Sector targets pending sync');
     setSectorTargetsByAccount(prev => {
       const currentScope = prev[editableSectorScope] || buildInitialSectorTargets();
       const current = currentScope[sectorName] || { benchmarkWeight: 0, targetWeight: 0 };
@@ -3005,10 +3185,11 @@ export default function App() {
         },
       };
     });
-  }, [editableSectorScope]);
+  }, [editableSectorScope, markSharedWorkspaceDirty]);
 
   const updateSectorTargetWeight = useCallback((sectorName, nextWeight) => {
     if (!editableSectorScope) return;
+    markSharedWorkspaceDirty('Sector targets pending sync');
     setSectorTargetsByAccount(prev => {
       const currentScope = prev[editableSectorScope] || buildInitialSectorTargets();
       const current = currentScope[sectorName] || { benchmarkWeight: 0, targetWeight: 0 };
@@ -3023,7 +3204,7 @@ export default function App() {
         },
       };
     });
-  }, [editableSectorScope]);
+  }, [editableSectorScope, markSharedWorkspaceDirty]);
 
   const togglePerformanceAggregate = useCallback(() => {
     setPerformanceChartSelection((prev) => ({ ...prev, aggregate: !prev.aggregate }));
@@ -3076,16 +3257,16 @@ export default function App() {
   ];
   const sharedSyncTone = !sharedStateReady
     ? PALETTE.warning
-    : /failed|unavailable/i.test(sharedSyncStatus)
+    : /failed|unavailable|conflict/i.test(sharedSyncStatus)
       ? PALETTE.negative
-      : /saving|loading|publishing|refreshing|clearing/i.test(sharedSyncStatus)
+      : /saving|loading|publishing|refreshing|clearing|pending|detected|merging/i.test(sharedSyncStatus)
         ? PALETTE.warning
         : PALETTE.positive;
   const sharedSyncValue = !sharedStateReady
     ? 'Booting'
-    : /failed|unavailable/i.test(sharedSyncStatus)
+    : /failed|unavailable|conflict/i.test(sharedSyncStatus)
       ? 'Error'
-      : /saving|loading|publishing|refreshing|clearing/i.test(sharedSyncStatus)
+      : /saving|loading|publishing|refreshing|clearing|pending|detected|merging/i.test(sharedSyncStatus)
         ? 'Syncing'
         : 'Shared';
   const terminalStatusTiles = [

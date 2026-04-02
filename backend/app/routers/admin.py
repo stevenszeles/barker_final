@@ -8,7 +8,7 @@ import hashlib
 import re
 import os
 import threading
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, HTTPException, UploadFile, File, Response
 from pydantic import BaseModel
 
 from ..db import with_conn
@@ -25,6 +25,7 @@ _NAV_REBUILD_INFLIGHT: set[tuple[str, int]] = set()
 _NAV_REBUILD_SEMAPHORE = threading.Semaphore(1)
 SHARED_DASHBOARD_STATE_KEY = "shared_dashboard_state"
 SHARED_DASHBOARD_STATE_UPDATED_AT_KEY = "shared_dashboard_state_updated_at"
+SHARED_DASHBOARD_STATE_VERSION_KEY = "shared_dashboard_state_version"
 
 
 class ResetPayload(BaseModel):
@@ -80,11 +81,35 @@ class SectorPerformanceInputPayload(BaseModel):
 
 class SharedDashboardStatePayload(BaseModel):
     state: Dict[str, Any]
+    base_version: Optional[int] = None
 
 
 class SharedDashboardStateResponse(BaseModel):
     state: Optional[Dict[str, Any]] = None
     updated_at: Optional[str] = None
+    version: int = 0
+
+
+def _decode_shared_dashboard_state(raw_state: Optional[str]) -> Optional[Dict[str, Any]]:
+    if not raw_state:
+        return None
+    try:
+        decoded = json.loads(raw_state)
+    except Exception as exc:
+        logger.warning("Shared dashboard state decode failed: %s", exc)
+        return None
+    if not isinstance(decoded, dict):
+        logger.warning("Shared dashboard state ignored because payload was not an object")
+        return None
+    return decoded
+
+
+def _coerce_shared_dashboard_state_version(raw_version: Optional[str]) -> int:
+    try:
+        value = int(str(raw_version or "0").strip() or "0")
+    except Exception:
+        return 0
+    return max(value, 0)
 
 
 def _balance_history_mode() -> str:
@@ -150,12 +175,19 @@ def list_accounts():
 
 
 @router.get("/shared-dashboard-state", response_model=SharedDashboardStateResponse)
-def get_shared_dashboard_state():
+def get_shared_dashboard_state(response: Response):
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+
     def _run(conn):
         cur = conn.cursor()
         cur.execute(
-            "SELECT key, value FROM settings WHERE key IN (?, ?)",
-            (SHARED_DASHBOARD_STATE_KEY, SHARED_DASHBOARD_STATE_UPDATED_AT_KEY),
+            "SELECT key, value FROM settings WHERE key IN (?, ?, ?)",
+            (
+                SHARED_DASHBOARD_STATE_KEY,
+                SHARED_DASHBOARD_STATE_UPDATED_AT_KEY,
+                SHARED_DASHBOARD_STATE_VERSION_KEY,
+            ),
         )
         rows = cur.fetchall()
         values = {}
@@ -171,30 +203,57 @@ def get_shared_dashboard_state():
     stored = with_conn(_run)
     raw_state = stored.get(SHARED_DASHBOARD_STATE_KEY)
     updated_at = stored.get(SHARED_DASHBOARD_STATE_UPDATED_AT_KEY)
-    if not raw_state:
-        return SharedDashboardStateResponse(state=None, updated_at=updated_at)
-
-    try:
-        decoded = json.loads(raw_state)
-    except Exception as exc:
-        logger.warning("Shared dashboard state decode failed: %s", exc)
-        return SharedDashboardStateResponse(state=None, updated_at=updated_at)
-
-    if not isinstance(decoded, dict):
-        logger.warning("Shared dashboard state ignored because payload was not an object")
-        return SharedDashboardStateResponse(state=None, updated_at=updated_at)
-
-    return SharedDashboardStateResponse(state=decoded, updated_at=updated_at)
+    version = _coerce_shared_dashboard_state_version(stored.get(SHARED_DASHBOARD_STATE_VERSION_KEY))
+    decoded = _decode_shared_dashboard_state(raw_state)
+    return SharedDashboardStateResponse(state=decoded, updated_at=updated_at, version=version)
 
 
 @router.post("/shared-dashboard-state", response_model=SharedDashboardStateResponse)
-def save_shared_dashboard_state(payload: SharedDashboardStatePayload):
+def save_shared_dashboard_state(payload: SharedDashboardStatePayload, response: Response):
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    response.headers["Pragma"] = "no-cache"
     state = payload.state or {}
     serialized = json.dumps(state, separators=(",", ":"), sort_keys=True)
     updated_at = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
 
     def _run(conn):
         cur = conn.cursor()
+        cur.execute(
+            "SELECT key, value FROM settings WHERE key IN (?, ?, ?)",
+            (
+                SHARED_DASHBOARD_STATE_KEY,
+                SHARED_DASHBOARD_STATE_UPDATED_AT_KEY,
+                SHARED_DASHBOARD_STATE_VERSION_KEY,
+            ),
+        )
+        rows = cur.fetchall()
+        stored = {}
+        for row in rows:
+            if row is None:
+                continue
+            key = row[0]
+            if not key:
+                continue
+            stored[key] = row[1]
+
+        current_state = _decode_shared_dashboard_state(stored.get(SHARED_DASHBOARD_STATE_KEY))
+        current_updated_at = stored.get(SHARED_DASHBOARD_STATE_UPDATED_AT_KEY)
+        current_version = _coerce_shared_dashboard_state_version(stored.get(SHARED_DASHBOARD_STATE_VERSION_KEY))
+        requested_version = payload.base_version
+        if requested_version is None:
+            requested_version = 0 if current_state is None and current_version == 0 else None
+
+        if requested_version is None or int(requested_version) != current_version:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "Shared dashboard state is stale. Refresh before saving.",
+                    "version": current_version,
+                    "updated_at": current_updated_at,
+                },
+            )
+
+        next_version = current_version + 1
         cur.execute(
             "INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?)",
             (SHARED_DASHBOARD_STATE_KEY, serialized),
@@ -203,10 +262,15 @@ def save_shared_dashboard_state(payload: SharedDashboardStatePayload):
             "INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?)",
             (SHARED_DASHBOARD_STATE_UPDATED_AT_KEY, updated_at),
         )
+        cur.execute(
+            "INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?)",
+            (SHARED_DASHBOARD_STATE_VERSION_KEY, str(next_version)),
+        )
         conn.commit()
+        return next_version
 
-    with_conn(_run)
-    return SharedDashboardStateResponse(state=state, updated_at=updated_at)
+    version = with_conn(_run)
+    return SharedDashboardStateResponse(state=state, updated_at=updated_at, version=version)
 
 
 @router.post("/reset")

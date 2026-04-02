@@ -1,4 +1,6 @@
 from datetime import date, timedelta
+import threading
+import time
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import PlainTextResponse
@@ -10,6 +12,9 @@ router = APIRouter(prefix="/stooq", tags=["stooq"])
 
 
 BENCHMARK_SYMBOLS = {"^SPX", "SPX", "$SPX", "^GSPC"}
+_REFRESH_GUARD_LOCK = threading.Lock()
+_LAST_REFRESH_AT: dict[str, float] = {}
+_REFRESH_COOLDOWN_SECONDS = 45.0
 
 
 def _normalize_history_symbol(raw_symbol: str) -> tuple[str, bool]:
@@ -28,6 +33,16 @@ def _history_candidates(symbol: str, is_benchmark: bool) -> list[str]:
             if alias not in candidates:
                 candidates.append(alias)
     return candidates
+
+
+def _claim_refresh_slot(symbol: str, cooldown_seconds: float = _REFRESH_COOLDOWN_SECONDS) -> bool:
+    now = time.time()
+    with _REFRESH_GUARD_LOCK:
+        previous = _LAST_REFRESH_AT.get(symbol, 0.0)
+        if previous and (now - previous) < cooldown_seconds:
+            return False
+        _LAST_REFRESH_AT[symbol] = now
+        return True
 
 
 def _load_cached_history(symbols: list[str], start_iso: str) -> list[dict]:
@@ -76,7 +91,11 @@ def stooq_daily_history(
         raise HTTPException(status_code=400, detail="Symbol is required")
 
     start_iso = (date.today() - timedelta(days=3650)).isoformat()
-    if is_benchmark or refresh:
+    history = _load_cached_history(_history_candidates(normalized_symbol, is_benchmark), start_iso)
+    latest_cached_date = history[-1].get("date") if history else None
+    needs_cache_warm = not latest_cached_date or latest_cached_date < date.today().isoformat()
+
+    if (refresh or (is_benchmark and needs_cache_warm)) and _claim_refresh_slot(normalized_symbol):
         try:
             if is_benchmark:
                 legacy_engine.ensure_benchmark_cache_current(normalized_symbol, start_iso)
@@ -84,19 +103,22 @@ def stooq_daily_history(
                 legacy_engine.ensure_symbol_history(normalized_symbol, start_iso, is_bench=False)
         except Exception:
             pass
+
     history = _load_cached_history(_history_candidates(normalized_symbol, is_benchmark), start_iso)
     latest_cached_date = history[-1].get("date") if history else None
     if not latest_cached_date or latest_cached_date < date.today().isoformat():
-        try:
-            legacy_engine.fetch_prices_incremental(normalized_symbol, start_iso, is_bench=is_benchmark)
-        except Exception:
-            pass
+        if _claim_refresh_slot(f"{normalized_symbol}:incremental", cooldown_seconds=20.0):
+            try:
+                legacy_engine.fetch_prices_incremental(normalized_symbol, start_iso, is_bench=is_benchmark)
+            except Exception:
+                pass
         history = _load_cached_history(_history_candidates(normalized_symbol, is_benchmark), start_iso)
     if len(history) < 2:
-        try:
-            legacy_engine.ensure_symbol_history(normalized_symbol, start_iso, is_bench=is_benchmark)
-        except Exception:
-            pass
+        if _claim_refresh_slot(f"{normalized_symbol}:history", cooldown_seconds=60.0):
+            try:
+                legacy_engine.ensure_symbol_history(normalized_symbol, start_iso, is_bench=is_benchmark)
+            except Exception:
+                pass
         history = _load_cached_history(_history_candidates(normalized_symbol, is_benchmark), start_iso)
     if len(history) < 2:
         history = _direct_history_fallback(s, normalized_symbol, start_iso)
