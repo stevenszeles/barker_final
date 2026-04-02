@@ -155,7 +155,7 @@ const ACCOUNT_COLORS = [
   '#756f7f',
   '#8f8a6f',
 ];
-const APP_BUILD_VERSION = "2026.04.02.3";
+const APP_BUILD_VERSION = "2026.04.02.4";
 const APP_STATE_STORAGE_KEY = `portfolio-dashboard.app-state.${APP_BUILD_VERSION}`;
 const LEGACY_APP_STATE_STORAGE_KEYS = [
   "portfolio-dashboard.app-state.2026.04.02.1",
@@ -264,7 +264,13 @@ function getSectorOverrideKey(accountName, symbol) {
   return `${accountName}::${symbol}`;
 }
 
-function getRealizedTradeOverrideKey(trade) {
+function formatOverrideNumber(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return '';
+  return Number.isInteger(numeric) ? String(numeric) : numeric.toFixed(6).replace(/0+$/, '').replace(/\.$/, '');
+}
+
+function getLegacyRealizedTradeOverrideKey(trade) {
   if (!trade) return null;
   const closedDate = normalizeDateInput(trade.closedDate) || String(trade.closedDate || '');
   const openedDate = normalizeDateInput(trade.openedDate) || String(trade.openedDate || '');
@@ -278,6 +284,41 @@ function getRealizedTradeOverrideKey(trade) {
     String(trade.proceeds ?? ''),
     String(trade.cost ?? ''),
   ].join('::');
+}
+
+function getRealizedTradeOverrideKeys(trade) {
+  if (!trade) return [];
+  const accountName = normalizeAccountName(trade.account);
+  const closedDate = normalizeDateInput(trade.closedDate) || String(trade.closedDate || '').trim();
+  const openedDate = normalizeDateInput(trade.openedDate) || String(trade.openedDate || '').trim();
+  const symbol = String(trade.symbol || '').trim();
+  const baseSymbol = String(trade.baseSym || '').trim();
+  const qty = formatOverrideNumber(Math.abs(Number(trade.qty)));
+  const term = String(trade.term || '').trim().toUpperCase();
+  const tradeType = trade?.isOption ? 'OPT' : 'EQ';
+
+  const stableKeys = [
+    ['REALIZED_V2', accountName, symbol, closedDate, openedDate, qty, term, tradeType].join('::'),
+    baseSymbol && baseSymbol !== symbol
+      ? ['REALIZED_V2', accountName, baseSymbol, closedDate, openedDate, qty, term, tradeType].join('::')
+      : null,
+  ].filter(Boolean);
+
+  const legacyKey = getLegacyRealizedTradeOverrideKey(trade);
+  return [...new Set([...stableKeys, legacyKey].filter(Boolean))];
+}
+
+function getRealizedTradeOverrideMatch(trade, sectorOverrides = {}) {
+  const keys = getRealizedTradeOverrideKeys(trade);
+  for (const key of keys) {
+    const value = sectorOverrides[key];
+    if (value) return { key, value, keys };
+  }
+  return {
+    key: keys[0] || null,
+    value: null,
+    keys,
+  };
 }
 
 function normalizeAccountName(value) {
@@ -2119,8 +2160,8 @@ export default function App() {
 
   const selectedRealizedTrades = useMemo(
     () => (selectedAccount === 'ALL' ? realizedTrades : realizedTrades.filter(t => t.account === selectedAccount)).map((trade) => {
-      const tradeOverrideKey = getRealizedTradeOverrideKey(trade);
-      const override = (tradeOverrideKey ? sectorOverrides[tradeOverrideKey] : null)
+      const { key: tradeOverrideKey, value: tradeSectorOverride, keys: tradeOverrideKeys } = getRealizedTradeOverrideMatch(trade, sectorOverrides);
+      const override = tradeSectorOverride
         || sectorOverrides[getSectorOverrideKey(trade.account, trade.baseSym)]
         || sectorOverrides[getSectorOverrideKey(trade.account, trade.symbol)];
       const assignedSector = override && override !== SECTOR_OVERRIDE_AUTO
@@ -2128,8 +2169,9 @@ export default function App() {
         : (trade.mainSector || UNCLASSIFIED_SECTOR);
       return {
         ...trade,
+        tradeOverrideKeys,
         tradeOverrideKey,
-        tradeSectorOverride: tradeOverrideKey ? (sectorOverrides[tradeOverrideKey] || null) : null,
+        tradeSectorOverride,
         sector: assignedSector,
         mainSector: ALL_SECTOR_SET.has(assignedSector) ? assignedSector : null,
       };
@@ -3110,16 +3152,18 @@ export default function App() {
   }, [markSharedWorkspaceDirty]);
 
   const updateRealizedTradeSectorOverride = useCallback((trade, nextSector) => {
-    const key = getRealizedTradeOverrideKey(trade);
-    if (!key) return;
+    const keys = getRealizedTradeOverrideKeys(trade);
+    if (!keys.length) return;
     markSharedWorkspaceDirty('Realized trade sector override pending sync');
     setSectorOverrides((prev) => {
       const next = { ...prev };
-      if (!nextSector || nextSector === SECTOR_OVERRIDE_AUTO) {
+      keys.forEach((key) => {
         if (key in next) delete next[key];
+      });
+      if (!nextSector || nextSector === SECTOR_OVERRIDE_AUTO) {
         return next;
       }
-      next[key] = nextSector;
+      next[keys[0]] = nextSector;
       return next;
     });
   }, [markSharedWorkspaceDirty]);
