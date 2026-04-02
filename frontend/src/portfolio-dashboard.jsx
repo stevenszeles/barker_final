@@ -154,9 +154,10 @@ const ACCOUNT_COLORS = [
   '#756f7f',
   '#8f8a6f',
 ];
-const APP_BUILD_VERSION = "2026.04.01.3";
+const APP_BUILD_VERSION = "2026.04.02.1";
 const APP_STATE_STORAGE_KEY = `portfolio-dashboard.app-state.${APP_BUILD_VERSION}`;
 const LEGACY_APP_STATE_STORAGE_KEYS = [
+  "portfolio-dashboard.app-state.2026.04.01.3",
   "portfolio-dashboard.app-state.2026.04.01.2",
   "portfolio-dashboard.app-state.2026.03.10.2",
 ];
@@ -595,6 +596,58 @@ function buildAggregateHistory(histories, accountNames = null) {
     });
     return [date, total];
   });
+}
+
+function expandHistoryToDates(series, dates) {
+  const points = Array.isArray(series) ? series : [];
+  const indices = { value: 0 };
+  let lastValue = 0;
+  return dates.map((date) => {
+    while (indices.value < points.length && points[indices.value][0] <= date) {
+      lastValue = points[indices.value][1];
+      indices.value += 1;
+    }
+    return [date, Number.isFinite(lastValue) ? lastValue : 0];
+  });
+}
+
+function estimateAttributedPositionValueSeries(position, dates, sourceHistory, priceSeries) {
+  const currentValue = Number(position?.mktVal);
+  if (!Number.isFinite(currentValue) || !dates?.length) return { series: [], method: 'none' };
+
+  const latestPriceFromSeries = priceSeries?.[priceSeries.length - 1]?.[1];
+  const referencePrice = Number(position?.price);
+  const scalePrice = Number.isFinite(referencePrice) && referencePrice !== 0
+    ? referencePrice
+    : (Number.isFinite(latestPriceFromSeries) && latestPriceFromSeries !== 0 ? latestPriceFromSeries : null);
+
+  if (priceSeries?.length && Number.isFinite(scalePrice) && scalePrice !== 0) {
+    const series = dates
+      .map((date) => {
+        const price = getValueOnOrBefore(priceSeries, date);
+        if (!Number.isFinite(price)) return null;
+        return [date, currentValue * (price / scalePrice)];
+      })
+      .filter(Boolean);
+    if (series.length) return { series, method: 'price' };
+  }
+
+  const sourceLast = sourceHistory?.[sourceHistory.length - 1]?.[1];
+  if (Number.isFinite(sourceLast) && sourceLast !== 0 && sourceHistory?.length) {
+    const series = dates
+      .map((date) => {
+        const sourceValue = getValueOnOrBefore(sourceHistory, date);
+        if (!Number.isFinite(sourceValue)) return null;
+        return [date, currentValue * (sourceValue / sourceLast)];
+      })
+      .filter(Boolean);
+    if (series.length) return { series, method: 'account' };
+  }
+
+  return {
+    series: dates.map((date) => [date, currentValue]),
+    method: 'flat',
+  };
 }
 
 function buildPortfolioBenchmarkChartData(portfolioSeries, benchmarkSeries) {
@@ -1298,6 +1351,7 @@ export default function App() {
   const [sectorTargetsByAccount, setSectorTargetsByAccount] = useState(sharedSeedRef.current.sectorTargetsByAccount);
   const [sectorOverrides, setSectorOverrides] = useState(sharedSeedRef.current.sectorOverrides);
   const [positionAttributionOverrides, setPositionAttributionOverrides] = useState(sharedSeedRef.current.positionAttributionOverrides);
+  const [performanceAccountingMode, setPerformanceAccountingMode] = useState(persisted.performanceAccountingMode || 'desk');
   const [performanceChartSelection, setPerformanceChartSelection] = useState(() =>
     normalizePerformanceChartSelection(persisted.performanceChartSelection, [], persisted.showBenchmark ?? true),
   );
@@ -1507,9 +1561,10 @@ export default function App() {
       sectorTargetsByAccount,
       sectorOverrides,
       positionAttributionOverrides,
+      performanceAccountingMode,
       performanceChartSelection,
     });
-  }, [timeframe, sectorTimeframe, realizedTimeframe, accounts, balanceHistory, realizedTrades, selectedAccount, showBenchmark, selectedSector, riskMatrixMode, sectorTargetsByAccount, sectorOverrides, positionAttributionOverrides, performanceChartSelection]);
+  }, [timeframe, sectorTimeframe, realizedTimeframe, accounts, balanceHistory, realizedTrades, selectedAccount, showBenchmark, selectedSector, riskMatrixMode, sectorTargetsByAccount, sectorOverrides, positionAttributionOverrides, performanceAccountingMode, performanceChartSelection]);
 
   useEffect(() => {
     saveJSONStorage(SECURITY_HISTORY_STORAGE_KEY, securityHistoryData);
@@ -1721,6 +1776,21 @@ export default function App() {
     [allPositions, positionAttributionOverrides, sectorOverrides, selectedAccount],
   );
 
+  const transferredPositions = useMemo(
+    () => allPositions
+      .map((position) => ({
+        ...position,
+        custodyAccount: getPositionHeldAccount(position),
+        attributedAccount: getPositionAttributedAccount(position, positionAttributionOverrides),
+      }))
+      .filter((position) => {
+        const custodyAccount = getPositionHeldAccount(position);
+        const attributedAccount = getPositionDisplayAccount(position);
+        return custodyAccount && attributedAccount && custodyAccount !== attributedAccount && Number.isFinite(Number(position?.mktVal));
+      }),
+    [allPositions, positionAttributionOverrides],
+  );
+
   const selectedRealizedTrades = useMemo(
     () => (selectedAccount === 'ALL' ? realizedTrades : realizedTrades.filter(t => t.account === selectedAccount)).map((trade) => {
       const tradeOverrideKey = getRealizedTradeOverrideKey(trade);
@@ -1760,17 +1830,9 @@ export default function App() {
     return balanceHistory[selectedAccount] || [];
   }, [selectedAccount, balanceHistory]);
 
-  const aggregateHistory = useMemo(() => buildAggregateHistory(balanceHistory), [balanceHistory]);
   const selectedPerformanceAccounts = useMemo(
     () => accountList.filter((accountName) => performanceChartSelection.accounts?.[accountName]),
     [accountList, performanceChartSelection],
-  );
-  const selectedAggregateHistory = useMemo(
-    () => buildAggregateHistory(
-      balanceHistory,
-      selectedPerformanceAccounts.length ? selectedPerformanceAccounts : accountList,
-    ),
-    [accountList, balanceHistory, selectedPerformanceAccounts],
   );
   const accountColorMap = useMemo(
     () => Object.fromEntries(accountList.map((name, index) => [name, ACCOUNT_COLORS[index % ACCOUNT_COLORS.length]])),
@@ -1844,14 +1906,14 @@ export default function App() {
 
   const trackedSecuritySymbols = useMemo(() => {
     const symbolMap = new Map();
-    for (const position of selectedPositions) {
+    for (const position of [...selectedPositions, ...transferredPositions]) {
       if (!position.mainSector || position.isSectorETF || !position.historySymbol) continue;
       const key = getSecurityHistoryCacheKey(position.historySymbol);
       if (!key || symbolMap.has(key)) continue;
       symbolMap.set(key, position.historySymbol);
     }
     return [...symbolMap.entries()].map(([key, symbol]) => ({ key, symbol }));
-  }, [selectedPositions]);
+  }, [selectedPositions, transferredPositions]);
 
   useEffect(() => {
     const missingSymbols = trackedSecuritySymbols.filter(({ key }) => !securityHistoryData[key]?.length);
@@ -1884,16 +1946,121 @@ export default function App() {
     };
   }, [trackedSecuritySymbols, securityHistoryData]);
 
+  const getPositionHistorySeries = useCallback((position) => {
+    if (!position?.mainSector) return [];
+    if (position.isSectorETF && position.mainSector && SECTOR_TO_ETF[position.mainSector]) {
+      return sectorBenchmarkData[position.mainSector] || [];
+    }
+    const cacheKey = getSecurityHistoryCacheKey(position.historySymbol || position.symbol);
+    return cacheKey ? (securityHistoryData[cacheKey] || []) : [];
+  }, [sectorBenchmarkData, securityHistoryData]);
+
+  const deskPerformanceModel = useMemo(() => {
+    const globalDates = [...new Set(Object.values(balanceHistory || {}).flatMap((series) => (series || []).map(([date]) => date)))].sort();
+    if (!globalDates.length || !transferredPositions.length) {
+      return {
+        histories: balanceHistory,
+        transferCount: transferredPositions.length,
+        priceBackedCount: 0,
+        accountBackedCount: 0,
+        flatCount: 0,
+      };
+    }
+
+    const historyAccounts = [...new Set([
+      ...accountList,
+      ...Object.keys(balanceHistory || {}),
+      ...transferredPositions.flatMap((position) => [getPositionHeldAccount(position), getPositionDisplayAccount(position)]),
+    ])].filter(Boolean);
+
+    const expandedBaseByAccount = Object.fromEntries(
+      historyAccounts.map((accountName) => [accountName, expandHistoryToDates(balanceHistory[accountName] || [], globalDates)]),
+    );
+    const valueMaps = Object.fromEntries(
+      historyAccounts.map((accountName) => [accountName, new Map(expandedBaseByAccount[accountName].map(([date, value]) => [date, value]))]),
+    );
+
+    let priceBackedCount = 0;
+    let accountBackedCount = 0;
+    let flatCount = 0;
+
+    transferredPositions.forEach((position) => {
+      const heldAccount = getPositionHeldAccount(position);
+      const targetAccount = getPositionDisplayAccount(position);
+      if (!heldAccount || !targetAccount || heldAccount === targetAccount) return;
+
+      const sourceHistory = expandedBaseByAccount[heldAccount] || [];
+      const { series, method } = estimateAttributedPositionValueSeries(
+        position,
+        globalDates,
+        sourceHistory,
+        getPositionHistorySeries(position),
+      );
+
+      if (!series.length) return;
+      if (method === 'price') priceBackedCount += 1;
+      else if (method === 'account') accountBackedCount += 1;
+      else flatCount += 1;
+
+      series.forEach(([date, value]) => {
+        valueMaps[heldAccount].set(date, (valueMaps[heldAccount].get(date) || 0) - value);
+        if (!valueMaps[targetAccount]) valueMaps[targetAccount] = new Map(globalDates.map((historyDate) => [historyDate, 0]));
+        valueMaps[targetAccount].set(date, (valueMaps[targetAccount].get(date) || 0) + value);
+      });
+    });
+
+    return {
+      histories: Object.fromEntries(
+        Object.entries(valueMaps).map(([accountName, values]) => ([
+          accountName,
+          globalDates.map((date) => [date, parseFloat(((values.get(date) || 0)).toFixed(4))]),
+        ])),
+      ),
+      transferCount: transferredPositions.length,
+      priceBackedCount,
+      accountBackedCount,
+      flatCount,
+    };
+  }, [accountList, balanceHistory, transferredPositions, getPositionHistorySeries]);
+
+  const performanceHistorySource = useMemo(
+    () => (performanceAccountingMode === 'desk' ? deskPerformanceModel.histories : balanceHistory),
+    [balanceHistory, deskPerformanceModel.histories, performanceAccountingMode],
+  );
+
+  const performanceActiveHistory = useMemo(() => {
+    if (selectedAccount === 'ALL') return buildAggregateHistory(performanceHistorySource);
+    return performanceHistorySource[selectedAccount] || [];
+  }, [performanceHistorySource, selectedAccount]);
+
+  const selectedAggregateHistory = useMemo(
+    () => buildAggregateHistory(
+      performanceHistorySource,
+      selectedPerformanceAccounts.length ? selectedPerformanceAccounts : accountList,
+    ),
+    [accountList, performanceHistorySource, selectedPerformanceAccounts],
+  );
+
   const performanceWindowEndDate = useMemo(() => {
     const candidateSeries = [];
     if (performanceChartSelection.aggregate && selectedAggregateHistory.length) candidateSeries.push(selectedAggregateHistory);
     selectedPerformanceAccounts.forEach((accountName) => {
-      const history = balanceHistory[accountName];
+      const history = performanceHistorySource[accountName];
       if (history?.length) candidateSeries.push(history);
     });
     if (performanceChartSelection.spx && spxData.length) candidateSeries.push(spxData);
     return getLatestSeriesDate(candidateSeries);
-  }, [balanceHistory, performanceChartSelection, selectedAggregateHistory, selectedPerformanceAccounts, spxData]);
+  }, [performanceChartSelection, selectedAggregateHistory, selectedPerformanceAccounts, spxData, performanceHistorySource]);
+
+  const performanceComparisonEndDate = useMemo(
+    () => getLatestSeriesDate([performanceActiveHistory, spxData]),
+    [performanceActiveHistory, spxData],
+  );
+
+  const performanceFilteredHistory = useMemo(
+    () => filterByTimeframe(performanceActiveHistory, timeframe, performanceComparisonEndDate),
+    [performanceActiveHistory, timeframe, performanceComparisonEndDate],
+  );
 
   const performanceSeriesDefinitions = useMemo(() => {
     const definitions = [];
@@ -1910,7 +2077,7 @@ export default function App() {
 
     accountList.forEach((accountName, accountIndex) => {
       if (!performanceChartSelection.accounts?.[accountName]) return;
-      const history = balanceHistory[accountName] || [];
+      const history = performanceHistorySource[accountName] || [];
       if (!history.length) return;
       definitions.push({
         key: getPerformanceSeriesKey(accountName, accountIndex),
@@ -1933,7 +2100,7 @@ export default function App() {
     }
 
     return definitions.filter((series) => series.data.length);
-  }, [performanceChartSelection, selectedAggregateHistory, accountList, balanceHistory, accountColorMap, selectedAccount, spxData, timeframe, performanceWindowEndDate]);
+  }, [performanceChartSelection, selectedAggregateHistory, accountList, performanceHistorySource, accountColorMap, selectedAccount, spxData, timeframe, performanceWindowEndDate]);
 
   const performanceComparisonData = useMemo(
     () => buildNormalizedComparisonRows(performanceSeriesDefinitions),
@@ -1955,15 +2122,10 @@ export default function App() {
 
   const stats = useMemo(() => filteredHistory.length >= 2 ? computeReturns(filteredHistory) : null, [filteredHistory]);
   const allTimeStats = useMemo(() => activeHistory.length >= 2 ? computeReturns(activeHistory) : null, [activeHistory]);
-
-  const getPositionHistorySeries = useCallback((position) => {
-    if (!position?.mainSector) return [];
-    if (position.isSectorETF && position.mainSector && SECTOR_TO_ETF[position.mainSector]) {
-      return sectorBenchmarkData[position.mainSector] || [];
-    }
-    const cacheKey = getSecurityHistoryCacheKey(position.historySymbol || position.symbol);
-    return cacheKey ? (securityHistoryData[cacheKey] || []) : [];
-  }, [sectorBenchmarkData, securityHistoryData]);
+  const performanceStats = useMemo(
+    () => performanceFilteredHistory.length >= 2 ? computeReturns(performanceFilteredHistory) : null,
+    [performanceFilteredHistory],
+  );
 
   // Sector analytics from positions + sector ETF total return series.
   const sectorBreakdown = useMemo(() => {
@@ -2895,14 +3057,34 @@ export default function App() {
               <div>
                 <div style={S.cardTitle}>CHART SERIES</div>
                 <div style={{ color:PALETTE.textDim, fontSize:'11px' }}>
-                  Add or remove accounts from the normalized performance chart independently from the dashboard account filter.
+                  Toggle between legal broker NAV and desk-attributed NAV, then add or remove account lines independently from the dashboard account filter.
                 </div>
               </div>
               <div style={{ display:'flex', gap:'6px', flexWrap:'wrap' }}>
+                <button
+                  type="button"
+                  onClick={() => setPerformanceAccountingMode('desk')}
+                  style={{ ...S.btn, ...(performanceAccountingMode === 'desk' ? S.btnActive : {}), padding:'4px 10px', fontSize:'10px', borderColor:PALETTE.accentBright, color:PALETTE.accentBright }}
+                >
+                  Desk NAV
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPerformanceAccountingMode('legal')}
+                  style={{ ...S.btn, ...(performanceAccountingMode === 'legal' ? S.btnActive : {}), padding:'4px 10px', fontSize:'10px' }}
+                >
+                  Legal NAV
+                </button>
                 <button type="button" onClick={() => setAllPerformanceAccounts(true)} style={{ ...S.btn, padding:'4px 10px', fontSize:'10px' }}>All Accounts</button>
                 <button type="button" onClick={() => setAllPerformanceAccounts(false)} style={{ ...S.btn, padding:'4px 10px', fontSize:'10px' }}>Clear Accounts</button>
               </div>
             </div>
+            {performanceAccountingMode === 'desk' && deskPerformanceModel.transferCount > 0 && (
+              <div style={{ color:PALETTE.textDim, fontSize:'10px', marginBottom:'10px' }}>
+                Desk NAV is reallocated from {deskPerformanceModel.transferCount} transferred positions.
+                {' '}Direct price history: {deskPerformanceModel.priceBackedCount} · account-return fallback: {deskPerformanceModel.accountBackedCount} · flat fallback: {deskPerformanceModel.flatCount}
+              </div>
+            )}
             <div style={{ display:'flex', gap:'8px', flexWrap:'wrap' }}>
               <button
                 type="button"
@@ -2941,7 +3123,7 @@ export default function App() {
           {/* Full chart */}
           <div style={{ ...S.card, marginBottom:'16px' }}>
             <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'12px' }}>
-              <div style={S.cardTitle}>NORMALIZED PERFORMANCE COMPARISON · {timeframe}</div>
+              <div style={S.cardTitle}>NORMALIZED PERFORMANCE COMPARISON · {timeframe} · {performanceAccountingMode === 'desk' ? 'Desk NAV' : 'Legal NAV'}</div>
               {performanceSeriesSummary.length > 0 && (
                 <div style={{ display:'flex', gap:'14px', fontSize:'11px', flexWrap:'wrap', justifyContent:'flex-end' }}>
                   {performanceSeriesSummary.map((series) => (
@@ -2985,17 +3167,17 @@ export default function App() {
           </div>
 
           {/* Stats grid */}
-          {stats && (
+          {performanceStats && (
             <div style={{ ...S.grid(4), marginBottom:'16px' }}>
               {[
-                ['Period Return', fmtPct(stats.total), stats.total >= 0 ? PALETTE.positive : PALETTE.negative],
-                ['YTD Return', fmtPct(stats.ytd), stats.ytd >= 0 ? PALETTE.positive : PALETTE.negative],
-                ['Max Drawdown', fmtPct(-stats.maxDrawdown), PALETTE.warning],
-                ['Annualized Vol', `${fmtNum(stats.volatility)}%`, PALETTE.textStrong],
-                ['Sharpe Ratio', fmtNum(stats.sharpe), stats.sharpe >= 1 ? PALETTE.positive : PALETTE.warning],
-                ['Calmar Ratio', fmtNum(stats.calmar), stats.calmar >= 1 ? PALETTE.positive : PALETTE.warning],
-                ['Current NAV', fmt$(stats.currentNav), PALETTE.textStrong],
-                ['Data Points', filteredHistory.length.toString(), PALETTE.textDim],
+                ['Period Return', fmtPct(performanceStats.total), performanceStats.total >= 0 ? PALETTE.positive : PALETTE.negative],
+                ['YTD Return', fmtPct(performanceStats.ytd), performanceStats.ytd >= 0 ? PALETTE.positive : PALETTE.negative],
+                ['Max Drawdown', fmtPct(-performanceStats.maxDrawdown), PALETTE.warning],
+                ['Annualized Vol', `${fmtNum(performanceStats.volatility)}%`, PALETTE.textStrong],
+                ['Sharpe Ratio', fmtNum(performanceStats.sharpe), performanceStats.sharpe >= 1 ? PALETTE.positive : PALETTE.warning],
+                ['Calmar Ratio', fmtNum(performanceStats.calmar), performanceStats.calmar >= 1 ? PALETTE.positive : PALETTE.warning],
+                ['Current NAV', fmt$(performanceStats.currentNav), PALETTE.textStrong],
+                ['Data Points', performanceFilteredHistory.length.toString(), PALETTE.textDim],
               ].map(([label, val, color]) => (
                 <div key={label} style={signalPanelStyle(color || '#8f99a3')}>
                   <div style={S.cardTitle}>{label}</div>
@@ -3007,9 +3189,9 @@ export default function App() {
 
           {/* NAV chart (absolute) */}
           <div style={S.card}>
-            <div style={S.cardTitle}>ABSOLUTE NAV — {selectedAccount === 'ALL' ? 'Aggregate Portfolio' : selectedAccount}</div>
+            <div style={S.cardTitle}>ABSOLUTE NAV — {selectedAccount === 'ALL' ? 'Aggregate Portfolio' : selectedAccount} · {performanceAccountingMode === 'desk' ? 'Desk NAV' : 'Legal NAV'}</div>
             <ResponsiveContainer width="100%" height={214}>
-              <AreaChart data={filteredHistory.map(([d,v]) => ({ date:d, nav:v }))} margin={{ top:10, right:18, bottom:8, left:12 }}>
+              <AreaChart data={performanceFilteredHistory.map(([d,v]) => ({ date:d, nav:v }))} margin={{ top:10, right:18, bottom:8, left:12 }}>
                 <defs>
                   <linearGradient id="navGrad" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor={PALETTE.accentBright} stopOpacity={0.12}/>
@@ -3017,7 +3199,7 @@ export default function App() {
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke={PALETTE.lineGrid} />
-                <XAxis dataKey="date" tick={CHART_TICK_STYLE} tickFormatter={d => d.slice(0,7)} interval={getTickInterval(filteredHistory.length)} minTickGap={24} tickMargin={8} />
+                <XAxis dataKey="date" tick={CHART_TICK_STYLE} tickFormatter={d => d.slice(0,7)} interval={getTickInterval(performanceFilteredHistory.length)} minTickGap={24} tickMargin={8} />
                 <YAxis width={76} tick={CHART_TICK_STYLE} tickFormatter={v => `$${(v/1000).toFixed(0)}K`} tickMargin={8} />
                 <Tooltip content={<CustomTooltip mode="$" />} />
                 <Area type="monotone" dataKey="nav" stroke={PALETTE.portfolio} fill="url(#navGrad)" strokeWidth={2} dot={false} name="NAV" />
@@ -3036,7 +3218,7 @@ export default function App() {
           <div style={{ ...S.card, marginBottom:'12px', background:'linear-gradient(180deg, rgba(23,26,30,0.98), rgba(11,13,16,0.98))' }}>
             <div style={{ ...S.cardTitle, color:PALETTE.accentBright, marginBottom:'6px' }}>DESK ATTRIBUTION</div>
             <div style={{ color:PALETTE.textMuted, fontSize:'11px', lineHeight:'1.6' }}>
-              Reassign holdings to the desk account that should own them economically. Held account, uploaded balances, and performance history remain unchanged.
+              Reassign holdings to the desk account that should own them economically. Legal balances stay untouched; desk-attributed NAV is rebuilt separately in the Performance tab.
             </div>
           </div>
           <div style={S.card}>
