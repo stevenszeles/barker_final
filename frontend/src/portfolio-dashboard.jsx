@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine, Area, AreaChart, BarChart, Bar, Cell } from "recharts";
+import { api } from "./services/api";
 
 // ─── SEED DATA: Account ...013 balance history (May 2024 – Mar 2026) ──────────
 const SEED_BALANCE_013 = [["2024-05-14",336796.23],["2024-05-15",338431.74],["2024-05-16",341946.65],["2024-05-17",340212.38],["2024-05-18",340212.38],["2024-05-19",340212.38],["2024-05-20",341036.3],["2024-05-21",340910.62],["2024-05-22",341620.03],["2024-05-23",340192.89],["2024-05-24",336561.39],["2024-05-25",336561.39],["2024-05-26",336561.39],["2024-05-27",336561.39],["2024-05-28",338394.89],["2024-05-29",337209.88],["2024-05-30",334379.67],["2024-05-31",333579.88],["2024-06-01",333579.88],["2024-06-02",333579.88],["2024-06-03",336725.03],["2024-06-04",335964.25],["2024-06-05",335755.5],["2024-06-06",339328.45],["2024-06-07",339080.66],["2024-06-08",339080.66],["2024-06-09",339080.66],["2024-06-10",338115.8],["2024-06-11",338526.13],["2024-06-12",339257.36],["2024-06-13",342526.41],["2024-06-14",343072.79],["2024-06-15",343072.79],["2024-06-16",343072.79],["2024-06-17",342703.67],["2024-06-18",345344.51],["2024-06-19",345344.51],["2024-06-20",346119.42],["2024-06-21",345551.8],["2024-06-22",345551.8],["2024-06-23",345551.8],["2024-06-24",345227.63],["2024-06-25",343981.7],["2024-06-26",344513.94],["2024-06-27",344576.64],["2024-06-28",345238.96],["2024-06-29",345238.96],["2024-06-30",345238.96],["2024-07-01",343939.67],["2024-07-02",343364.95],["2024-07-03",345412.73],["2024-07-04",345412.73],["2024-07-05",347279.17],["2024-07-06",347279.17],["2024-07-07",347279.17],["2024-07-08",348264.37],["2024-07-09",348556.14],["2024-07-10",348488.57],["2024-07-11",351915.09],["2024-07-12",350615.42],["2024-07-13",350615.42],["2024-07-14",350615.42],["2024-07-15",352243.86],["2024-07-16",353239.89],["2024-07-17",357007.41],["2024-07-18",352544.68],["2024-07-19",349816.64],["2024-07-20",349816.64],["2024-07-21",349816.64],["2024-07-22",347258.69],["2024-07-23",350531.2],["2024-07-24",349486.18],["2024-07-25",341694.4],["2024-07-26",341541.65],["2024-07-27",341541.65],["2024-07-28",341541.65],["2024-07-29",345345.94],["2024-07-30",344945.3],["2024-07-31",343864.25],["2024-08-01",348403.82],["2024-08-02",342236.3],["2024-08-03",342236.3],["2024-08-04",342236.3],["2024-08-05",335888.14],["2024-08-06",328895.94],["2024-08-07",330154.23],["2024-08-08",327486.21],["2024-08-09",333965.22],["2024-08-10",333965.22],["2024-08-11",333965.22],["2024-08-12",334904.75],["2024-08-13",334651.67],["2024-08-14",339668.8],["2024-08-15",340291.31],["2024-08-16",346321.3],["2024-08-17",346321.3],["2024-08-18",346321.3],["2024-08-19",347171.32],["2024-08-20",350642.42],["2024-08-21",349661.39],["2024-08-22",351351.36],["2024-08-23",348387.93],["2024-08-24",348387.93],["2024-08-25",348387.93],["2024-08-26",353212.82],["2024-08-27",352015.9],["2024-08-28",351838.75],["2024-08-29",349970.3],["2024-08-30",350105.04],["2024-08-31",350105.04],["2024-09-01",350105.04],["2024-09-02",350105.04],["2024-09-03",353281.52],["2024-09-04",346101.8],["2024-09-05",345997.56],["2024-09-06",344590.79],["2024-09-07",344590.79],["2024-09-08",344590.79],["2024-09-09",340351.06],["2024-09-10",343910.96],["2024-09-11",345769.0],["2024-09-12",348875.49],["2024-09-13",351137.48],["2024-09-14",351137.48],["2024-09-15",351137.48],["2024-09-16",353354.77],["2024-09-17",354631.71],["2024-09-18",354349.19],["2024-09-19",352605.02],["2024-09-20",357489.2],["2024-09-21",357489.2],["2024-09-22",357489.2],["2024-09-23",356944.55],["2024-09-24",357057.95],["2024-09-25",357948.82],["2024-09-26",357958.17],["2024-09-27",359830.16],["2024-09-28",359830.16],["2024-09-29",359830.16],["2024-09-30",359792.86],["2024-10-01",360534.07],["2024-10-02",358049.73],["2024-10-03",357937.92],["2024-10-04",356474.91],["2024-10-05",356474.91],["2024-10-06",356474.91],["2024-10-07",359116.84],["2024-10-08",356216.62],["2024-10-09",358680.94],["2024-10-10",360606.92],["2024-10-11",359762.49],["2024-10-12",359762.49],["2024-10-13",359762.49],["2024-10-14",361933.49],["2024-10-15",364238.16],["2024-10-16",362306.32],["2024-10-17",364777.8],["2024-10-18",364265.9],["2024-10-19",364265.9],["2024-10-20",364265.9],["2024-10-21",365376.52],["2024-10-22",363616.55],["2024-10-23",362703.21],["2024-10-24",360170.93],["2024-10-25",361359.15],["2024-10-26",361359.15],["2024-10-27",361359.15],["2024-10-28",360649.64],["2024-10-29",361818.95],["2024-10-30",361928.18],["2024-10-31",360671.06],["2024-11-01",355256.41],["2024-11-02",355256.41],["2024-11-03",355256.41],["2024-11-04",355974.23],["2024-11-05",355656.84],["2024-11-06",359967.71],["2024-11-07",368866.28],["2024-11-08",371464.94],["2024-11-09",371464.94],["2024-11-10",371464.94],["2024-11-11",373581.35],["2024-11-12",374334.92],["2024-11-13",372507.55],["2024-11-14",372551.76],["2024-11-15",370212.27],["2024-11-16",370212.27],["2024-11-17",370212.27],["2024-11-18",365935.78],["2024-11-19",367776.04],["2024-11-20",368780.35],["2024-11-21",368481.54],["2024-11-22",372222.79],["2024-11-23",372222.79],["2024-11-24",372222.79],["2024-11-25",374403.18],["2024-11-26",377131.62],["2024-11-27",378657.82],["2024-11-28",378657.82],["2024-11-29",377373.49],["2024-11-30",377373.49],["2024-12-01",377373.49],["2024-12-02",379547.15],["2024-12-03",379535.19],["2024-12-04",378514.93],["2024-12-05",380550.19],["2024-12-06",379689.91],["2024-12-07",379689.91],["2024-12-08",379689.91],["2024-12-09",380762.85],["2024-12-10",378095.74],["2024-12-11",376193.35],["2024-12-12",378303.38],["2024-12-13",376272.4],["2024-12-14",376272.4],["2024-12-15",376272.4],["2024-12-16",376077.96],["2024-12-17",377236.39],["2024-12-18",375866.72],["2024-12-19",364595.51],["2024-12-20",363859.06],["2024-12-21",363859.06],["2024-12-22",363859.06],["2024-12-23",367620.35],["2024-12-24",368127.36],["2024-12-25",368127.36],["2024-12-26",371778.31],["2024-12-27",373010.27],["2024-12-28",373010.27],["2024-12-29",373010.27],["2024-12-30",369372.3],["2024-12-31",365441.64],["2025-01-01",365441.64],["2025-01-02",364345.01],["2025-01-03",363726.26],["2025-01-04",363726.26],["2025-01-05",363726.26],["2025-01-06",367815.78],["2025-01-07",369010.62],["2025-01-08",365322.6],["2025-01-09",365649.22],["2025-01-10",365649.22],["2025-01-11",365649.22],["2025-01-12",365649.22],["2025-01-13",360088.02],["2025-01-14",360557.32],["2025-01-15",361601.46],["2025-01-16",367357.28],["2025-01-17",367844.39],["2025-01-18",367844.39],["2025-01-19",367844.39],["2025-01-20",367844.39],["2025-01-21",370999.03],["2025-01-22",374809.55],["2025-01-23",376223.44],["2025-01-24",378144.05],["2025-01-25",378144.05],["2025-01-26",378144.05],["2025-01-27",376815.96],["2025-01-28",369114.91],["2025-01-29",372646.97],["2025-01-30",371502.72],["2025-01-31",375307.69],["2025-02-01",375307.69],["2025-02-02",375307.69],["2025-02-03",371187.76],["2025-02-04",368763.37],["2025-02-05",371708.17],["2025-02-06",374514.87],["2025-02-07",376211.95],["2025-02-08",376211.95],["2025-02-09",376211.95],["2025-02-10",372773.86],["2025-02-11",376345.39],["2025-02-12",375958.16],["2025-02-13",373907.56],["2025-02-14",377961.21],["2025-02-15",377961.21],["2025-02-16",377961.21],["2025-02-17",377961.21],["2025-02-18",378425.74],["2025-02-19",381581.06],["2025-02-20",381948.66],["2025-02-21",379748.87],["2025-02-22",379748.87],["2025-02-23",372262.77],["2025-02-24",370136.54],["2025-02-25",368351.1],["2025-02-26",369140.72],["2025-02-27",363494.09],["2025-02-28",369214.84],["2025-03-01",369214.84],["2025-03-02",369214.84],["2025-03-03",362526.84],["2025-03-04",358421.47],["2025-03-05",362110.93],["2025-03-06",355217.11],["2025-03-07",357430.22],["2025-03-08",357430.22],["2025-03-09",357430.22],["2025-03-10",348222.04],["2025-03-11",345606.81],["2025-03-12",347514.63],["2025-03-13",342900.41],["2025-03-14",350292.4],["2025-03-15",350292.4],["2025-03-16",350292.4],["2025-03-17",353300.14],["2025-03-18",349694.5],["2025-03-19",353603.75],["2025-03-20",352783.37],["2025-03-21",352254.53],["2025-03-22",352254.53],["2025-03-23",352254.53],["2025-03-24",357223.03],["2025-03-25",357657.72],["2025-03-26",354758.76],["2025-03-27",353124.72],["2025-03-28",346380.4],["2025-03-29",346380.4],["2025-03-30",346380.4],["2025-03-31",348199.51],["2025-04-01",349623.33],["2025-04-02",352447.34],["2025-04-03",335268.99],["2025-04-04",315642.16],["2025-04-05",315642.16],["2025-04-06",315642.16],["2025-04-07",314792.71],["2025-04-08",310077.1],["2025-04-09",339375.21],["2025-04-10",326942.34],["2025-04-11",332047.49],["2025-04-12",332047.49],["2025-04-13",332047.49],["2025-04-14",334404.67],["2025-04-15",334110.56],["2025-04-16",327499.96],["2025-04-17",327931.8],["2025-04-18",327931.8],["2025-04-19",327931.8],["2025-04-20",327931.8],["2025-04-21",320300.18],["2025-04-22",328093.52],["2025-04-23",333707.92],["2025-04-24",341011.66],["2025-04-25",343409.45],["2025-04-26",343409.45],["2025-04-27",343409.45],["2025-04-28",343867.29],["2025-04-29",345905.09],["2025-04-30",345984.98],["2025-05-01",347801.88],["2025-05-02",352988.91],["2025-05-03",352988.91],["2025-05-04",352988.91],["2025-05-05",351163.15],["2025-05-06",349202.61],["2025-05-07",351455.9],["2025-05-08",353643.64],["2025-05-09",353524.32],["2025-05-10",353524.32],["2025-05-11",353524.32],["2025-05-12",364544.68],["2025-05-13",368215.79],["2025-05-14",368565.1],["2025-05-15",370295.62],["2025-05-16",372522.36],["2025-05-17",372522.36],["2025-05-18",372522.36],["2025-05-19",372549.05],["2025-05-20",371248.7],["2025-05-21",364890.09],["2025-05-22",364836.15],["2025-05-23",363675.11],["2025-05-24",363675.11],["2025-05-25",363675.11],["2025-05-26",363675.11],["2025-05-27",370992.95],["2025-05-28",369017.7],["2025-05-29",369704.23],["2025-05-30",369344.37],["2025-05-31",369344.37],["2025-06-01",369344.37],["2025-06-02",370960.24],["2025-06-03",373659.22],["2025-06-04",373620.16],["2025-06-05",371970.16],["2025-06-06",375698.54],["2025-06-07",375698.54],["2025-06-08",375698.54],["2025-06-09",376434.23],["2025-06-10",378430.29],["2025-06-11",378309.44],["2025-06-12",379560.37],["2025-06-13",375432.79],["2025-06-14",375432.79],["2025-06-15",375432.79],["2025-06-16",379725.22],["2025-06-17",376884.14],["2025-06-18",376956.92],["2025-06-19",376956.92],["2025-06-20",376195.02],["2025-06-21",376195.02],["2025-06-22",376195.02],["2025-06-23",378893.68],["2025-06-24",383646.63],["2025-06-25",384394.04],["2025-06-26",387565.65],["2025-06-27",389148.83],["2025-06-28",389148.83],["2025-06-29",389148.83],["2025-06-30",391483.46],["2025-07-01",390783.2],["2025-07-02",392804.09],["2025-07-03",395897.95],["2025-07-04",395897.95],["2025-07-05",395897.95],["2025-07-06",395897.95],["2025-07-07",392888.2],["2025-07-08",392570.74],["2025-07-09",394347.05],["2025-07-10",395232.26],["2025-07-11",393769.97],["2025-07-12",393769.97],["2025-07-13",393769.97],["2025-07-14",394944.97],["2025-07-15",393439.34],["2025-07-16",394937.13],["2025-07-17",397545.06],["2025-07-18",397712.28],["2025-07-19",397712.28],["2025-07-20",397712.28],["2025-07-21",397845.51],["2025-07-22",398003.77],["2025-07-23",401159.54],["2025-07-24",401474.39],["2025-07-25",402657.03],["2025-07-26",402657.03],["2025-07-27",402657.03],["2025-07-28",402690.6],["2025-07-29",401679.01],["2025-07-30",401168.0],["2025-07-31",399019.34],["2025-08-01",392280.6],["2025-08-02",392280.6],["2025-08-03",392280.6],["2025-08-04",398063.47],["2025-08-05",396512.53],["2025-08-06",399398.65],["2025-08-07",398933.69],["2025-08-08",401046.23],["2025-08-09",401046.23],["2025-08-10",401046.23],["2025-08-11",400032.28],["2025-08-12",404712.91],["2025-08-13",406384.59],["2025-08-14",405942.26],["2025-08-15",404310.86],["2025-08-16",404310.86],["2025-08-17",404310.86],["2025-08-18",404561.85],["2025-08-19",401585.85],["2025-08-20",400529.77],["2025-08-21",399347.11],["2025-08-22",405891.38],["2025-08-23",405891.38],["2025-08-24",405891.38],["2025-08-25",404383.25],["2025-08-26",406245.62],["2025-08-27",407121.15],["2025-08-28",408680.96],["2025-08-29",405722.61],["2025-08-30",405722.61],["2025-08-31",405722.61],["2025-09-01",405722.61],["2025-09-02",402789.12],["2025-09-03",404073.66],["2025-09-04",407318.94],["2025-09-05",406657.31],["2025-09-06",406657.31],["2025-09-07",406657.31],["2025-09-08",408156.29],["2025-09-09",409359.88],["2025-09-10",410902.74],["2025-09-11",415313.02],["2025-09-12",414604.99],["2025-09-13",414604.99],["2025-09-14",414604.99],["2025-09-15",417157.26],["2025-09-16",415740.2],["2025-09-17",415837.25],["2025-09-18",418957.57],["2025-09-19",421698.38],["2025-09-20",421698.38],["2025-09-21",421698.38],["2025-09-22",422967.35],["2025-09-23",421346.07],["2025-09-24",420469.24],["2025-09-25",418165.0],["2025-09-26",421052.0],["2025-09-27",421052.0],["2025-09-28",421052.0],["2025-09-29",423158.86],["2025-09-30",424674.68],["2025-10-01",426525.44],["2025-10-02",427119.97],["2025-10-03",427140.73],["2025-10-04",427140.73],["2025-10-05",427140.73],["2025-10-06",429655.37],["2025-10-07",428171.26],["2025-10-08",430811.65],["2025-10-09",428682.54],["2025-10-10",417486.45],["2025-10-11",417486.45],["2025-10-12",417486.45],["2025-10-13",424674.09],["2025-10-14",424898.29],["2025-10-15",427442.77],["2025-10-16",423997.76],["2025-10-17",424722.53],["2025-10-18",424722.53],["2025-10-19",424722.53],["2025-10-20",429252.28],["2025-10-21",428395.79],["2025-10-22",425382.7],["2025-10-23",427958.64],["2025-10-24",431759.44],["2025-10-25",431759.44],["2025-10-26",431759.44],["2025-10-27",436022.94],["2025-10-28",436897.36],["2025-10-29",435847.06],["2025-10-30",432676.07],["2025-10-31",434154.91],["2025-11-01",434154.91],["2025-11-02",434154.91],["2025-11-03",434607.7],["2025-11-04",429302.01],["2025-11-05",430899.22],["2025-11-06",425476.38],["2025-11-07",426391.26],["2025-11-08",426391.26],["2025-11-09",426391.26],["2025-11-10",432756.02],["2025-11-11",433393.05],["2025-11-12",433916.49],["2025-11-13",426453.74],["2025-11-14",425773.38],["2025-11-15",425773.38],["2025-11-16",425773.38],["2025-11-17",420929.86],["2025-11-18",417601.22],["2025-11-19",417880.63],["2025-11-20",410943.84],["2025-11-21",415204.1],["2025-11-22",415204.1],["2025-11-23",415204.1],["2025-11-24",420389.03],["2025-11-25",424278.95],["2025-11-26",427561.98],["2025-11-27",427561.98],["2025-11-28",430168.57],["2025-11-29",430168.57],["2025-11-30",430168.57],["2025-12-01",427556.24],["2025-12-02",428602.49],["2025-12-03",430418.82],["2025-12-04",430760.92],["2025-12-05",432191.88],["2025-12-06",432191.88],["2025-12-07",432191.88],["2025-12-08",431436.47],["2025-12-09",431180.33],["2025-12-10",434709.62],["2025-12-11",436108.29],["2025-12-12",431567.94],["2025-12-13",431567.94],["2025-12-14",431567.94],["2025-12-15",431016.71],["2025-12-16",430080.69],["2025-12-17",425399.56],["2025-12-18",428655.36],["2025-12-19",432582.21],["2025-12-20",432582.21],["2025-12-21",432582.21],["2025-12-22",434205.06],["2025-12-23",435554.1],["2025-12-24",438466.04],["2025-12-25",438466.04],["2025-12-26",438609.07],["2025-12-27",438609.07],["2025-12-28",438609.07],["2025-12-29",436781.9],["2025-12-30",436131.86],["2025-12-31",432961.36],["2026-01-01",432961.36],["2026-01-02",433819.65],["2026-01-03",433819.65],["2026-01-04",433819.65],["2026-01-05",436787.77],["2026-01-06",440782.0],["2026-01-07",438795.97],["2026-01-08",438356.0],["2026-01-09",441331.03],["2026-01-10",441331.03],["2026-01-11",441331.03],["2026-01-12",442150.72],["2026-01-13",440583.68],["2026-01-14",438746.54],["2026-01-15",440018.2],["2026-01-16",439583.21],["2026-01-17",439583.21],["2026-01-18",439583.21],["2026-01-19",439583.21],["2026-01-20",431967.72],["2026-01-21",436658.66],["2026-01-22",439367.3],["2026-01-23",439078.59],["2026-01-24",439078.59],["2026-01-25",439078.59],["2026-01-26",440753.06],["2026-01-27",441981.67],["2026-01-28",442274.84],["2026-01-29",441945.29],["2026-01-30",438390.79],["2026-01-31",438390.79],["2026-02-01",438390.79],["2026-02-02",441178.09],["2026-02-03",437663.84],["2026-02-04",434440.74],["2026-02-05",428495.54],["2026-02-06",437537.65],["2026-02-07",437537.65],["2026-02-08",437537.65],["2026-02-09",439403.36],["2026-02-10",440212.77],["2026-02-11",439734.05],["2026-02-12",433091.7],["2026-02-13",434745.31],["2026-02-14",434745.31],["2026-02-15",434745.31],["2026-02-16",434745.31],["2026-02-17",434623.85],["2026-02-18",437077.42],["2026-02-19",436228.78],["2026-02-20",438543.29],["2026-02-21",438543.29],["2026-02-22",438543.29],["2026-02-23",433525.85],["2026-02-24",437035.54],["2026-02-25",440201.26],["2026-02-26",439909.57],["2026-02-27",438900.8],["2026-02-28",438900.8],["2026-03-01",438900.8],["2026-03-02",438382.76],["2026-03-03",434254.86],["2026-03-04",438166.95],["2026-03-05",435899.92],["2026-03-06",430687.1],["2026-03-07",430687.1],["2026-03-09",430687.1]];
@@ -154,9 +155,10 @@ const ACCOUNT_COLORS = [
   '#756f7f',
   '#8f8a6f',
 ];
-const APP_BUILD_VERSION = "2026.04.02.1";
+const APP_BUILD_VERSION = "2026.04.02.2";
 const APP_STATE_STORAGE_KEY = `portfolio-dashboard.app-state.${APP_BUILD_VERSION}`;
 const LEGACY_APP_STATE_STORAGE_KEYS = [
+  "portfolio-dashboard.app-state.2026.04.02.1",
   "portfolio-dashboard.app-state.2026.04.01.3",
   "portfolio-dashboard.app-state.2026.04.01.2",
   "portfolio-dashboard.app-state.2026.03.10.2",
@@ -552,6 +554,118 @@ function computePeriodReturn(data) {
   const last = data[data.length - 1]?.[1];
   if (!first || !last) return null;
   return ((last - first) / first) * 100;
+}
+
+function computeDailyFlowFromTwr(prevNav, nextNav, prevTwr, nextTwr) {
+  if (!Number.isFinite(prevNav) || !Number.isFinite(nextNav) || !Number.isFinite(prevTwr) || !Number.isFinite(nextTwr) || prevNav === 0 || prevTwr === 0) {
+    return 0;
+  }
+  const dayReturn = (nextTwr / prevTwr) - 1;
+  if (!Number.isFinite(dayReturn)) return 0;
+  return nextNav - prevNav - (prevNav * dayReturn);
+}
+
+function buildPerformanceModelFromNavPoints(points = [], fallbackSeries = []) {
+  const navSeries = Array.isArray(points) && points.length
+    ? points
+        .map((point) => {
+          const nav = Number(point?.nav);
+          const twr = Number(point?.twr);
+          const date = String(point?.date || '');
+          if (!date || !Number.isFinite(nav)) return null;
+          return { date, nav, twr: Number.isFinite(twr) && twr > 0 ? twr : null };
+        })
+        .filter(Boolean)
+    : (fallbackSeries || []).map(([date, nav]) => ({ date, nav: Number(nav), twr: null })).filter((point) => point.date && Number.isFinite(point.nav));
+
+  if (!navSeries.length) {
+    return {
+      navSeries: [],
+      twrSeries: [],
+      flowSeries: [],
+      hasFlowAdjustedReturns: false,
+    };
+  }
+
+  const baseNav = navSeries[0]?.nav;
+  let hasFlowAdjustedReturns = navSeries.some((point) => Number.isFinite(point.twr));
+  let previousTwr = null;
+  const twrSeries = [];
+  const flowSeries = [];
+
+  navSeries.forEach((point, index) => {
+    let twrValue = point.twr;
+    if (!Number.isFinite(twrValue) || twrValue <= 0) {
+      twrValue = Number.isFinite(baseNav) && baseNav !== 0 ? point.nav / baseNav : 1;
+      hasFlowAdjustedReturns = false;
+    }
+    twrSeries.push([point.date, twrValue]);
+    if (index === 0) {
+      flowSeries.push([point.date, 0]);
+      previousTwr = twrValue;
+      return;
+    }
+    const flow = hasFlowAdjustedReturns
+      ? computeDailyFlowFromTwr(navSeries[index - 1].nav, point.nav, previousTwr, twrValue)
+      : 0;
+    flowSeries.push([point.date, Number.isFinite(flow) ? flow : 0]);
+    previousTwr = twrValue;
+  });
+
+  return {
+    navSeries: navSeries.map((point) => [point.date, point.nav]),
+    twrSeries,
+    flowSeries,
+    hasFlowAdjustedReturns,
+  };
+}
+
+function buildAggregatePerformanceModel(models = {}, accountNames = []) {
+  const selectedModels = (accountNames || []).map((name) => models?.[name]).filter((model) => model?.navSeries?.length);
+  if (!selectedModels.length) {
+    return { navSeries: [], twrSeries: [], flowSeries: [], hasFlowAdjustedReturns: false };
+  }
+
+  const dates = [...new Set(selectedModels.flatMap((model) => model.navSeries.map(([date]) => date)))].sort();
+  const navMaps = selectedModels.map((model) => new Map(expandHistoryToDates(model.navSeries, dates).map(([date, value]) => [date, value])));
+  const flowMaps = selectedModels.map((model) => new Map((model.flowSeries || []).map(([date, value]) => [date, value])));
+  const navSeries = [];
+  const flowSeries = [];
+  const twrSeries = [];
+  let previousNav = null;
+  let cumulative = 1;
+
+  dates.forEach((date) => {
+    const nav = navMaps.reduce((sum, valueMap) => sum + (valueMap.get(date) || 0), 0);
+    const flow = flowMaps.reduce((sum, valueMap) => sum + (valueMap.get(date) || 0), 0);
+    navSeries.push([date, nav]);
+    flowSeries.push([date, flow]);
+    if (previousNav === null || !Number.isFinite(previousNav) || previousNav === 0) {
+      cumulative = 1;
+    } else {
+      const dayReturn = (nav - previousNav - flow) / previousNav;
+      if (Number.isFinite(dayReturn)) cumulative *= (1 + dayReturn);
+    }
+    twrSeries.push([date, cumulative]);
+    previousNav = nav;
+  });
+
+  return {
+    navSeries,
+    twrSeries,
+    flowSeries,
+    hasFlowAdjustedReturns: selectedModels.every((model) => model.hasFlowAdjustedReturns),
+  };
+}
+
+function buildReturnStatsFromSeries(returnSeries, navSeries = []) {
+  if (!returnSeries || returnSeries.length < 2) return null;
+  const stats = computeReturns(returnSeries);
+  const currentNav = navSeries?.[navSeries.length - 1]?.[1];
+  return {
+    ...stats,
+    currentNav: Number.isFinite(currentNav) ? currentNav : stats.currentNav,
+  };
 }
 
 function getLatestSeriesDate(seriesList) {
@@ -1352,9 +1466,11 @@ export default function App() {
   const [sectorOverrides, setSectorOverrides] = useState(sharedSeedRef.current.sectorOverrides);
   const [positionAttributionOverrides, setPositionAttributionOverrides] = useState(sharedSeedRef.current.positionAttributionOverrides);
   const [performanceAccountingMode, setPerformanceAccountingMode] = useState(persisted.performanceAccountingMode || 'desk');
+  const [performanceChartMode, setPerformanceChartMode] = useState(persisted.performanceChartMode || 'line');
   const [performanceChartSelection, setPerformanceChartSelection] = useState(() =>
     normalizePerformanceChartSelection(persisted.performanceChartSelection, [], persisted.showBenchmark ?? true),
   );
+  const [legalNavPointsByAccount, setLegalNavPointsByAccount] = useState({});
   const [sharedStateReady, setSharedStateReady] = useState(false);
   const [sharedStateUpdatedAt, setSharedStateUpdatedAt] = useState(null);
   const [sharedSyncStatus, setSharedSyncStatus] = useState('Booting shared workspace');
@@ -1562,9 +1678,10 @@ export default function App() {
       sectorOverrides,
       positionAttributionOverrides,
       performanceAccountingMode,
+      performanceChartMode,
       performanceChartSelection,
     });
-  }, [timeframe, sectorTimeframe, realizedTimeframe, accounts, balanceHistory, realizedTrades, selectedAccount, showBenchmark, selectedSector, riskMatrixMode, sectorTargetsByAccount, sectorOverrides, positionAttributionOverrides, performanceAccountingMode, performanceChartSelection]);
+  }, [timeframe, sectorTimeframe, realizedTimeframe, accounts, balanceHistory, realizedTrades, selectedAccount, showBenchmark, selectedSector, riskMatrixMode, sectorTargetsByAccount, sectorOverrides, positionAttributionOverrides, performanceAccountingMode, performanceChartMode, performanceChartSelection]);
 
   useEffect(() => {
     saveJSONStorage(SECURITY_HISTORY_STORAGE_KEY, securityHistoryData);
@@ -1737,6 +1854,41 @@ export default function App() {
   useEffect(() => {
     if (selectedAccount !== 'ALL' && !accountList.includes(selectedAccount)) setSelectedAccount('ALL');
   }, [accountList, selectedAccount]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const targets = [...new Set(['ALL', ...accountList])];
+    if (!targets.length) {
+      setLegalNavPointsByAccount({});
+      return undefined;
+    }
+
+    (async () => {
+      try {
+        const rows = await Promise.all(
+          targets.map(async (accountName) => {
+            const response = await api.get('/portfolio/nav', {
+              params: {
+                limit: 2000,
+                ...(accountName === 'ALL' ? {} : { account: accountName }),
+                _ts: Date.now(),
+              },
+              headers: { 'Cache-Control': 'no-cache' },
+            });
+            return [accountName, Array.isArray(response.data) ? response.data : []];
+          }),
+        );
+        if (!cancelled) setLegalNavPointsByAccount(Object.fromEntries(rows));
+      } catch (error) {
+        console.warn('Legal NAV fetch failed for performance charts', error);
+        if (!cancelled) setLegalNavPointsByAccount({});
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [accountList, sharedStateUpdatedAt]);
 
   const selectedAccountsData = useMemo(
     () => (selectedAccount === 'ALL' ? Object.values(accounts) : [accounts[selectedAccount]].filter(Boolean)),
@@ -1955,11 +2107,40 @@ export default function App() {
     return cacheKey ? (securityHistoryData[cacheKey] || []) : [];
   }, [sectorBenchmarkData, securityHistoryData]);
 
+  const legalPerformanceModelsByAccount = useMemo(
+    () => Object.fromEntries(
+      accountList.map((accountName) => [
+        accountName,
+        buildPerformanceModelFromNavPoints(legalNavPointsByAccount[accountName], balanceHistory[accountName] || []),
+      ]),
+    ),
+    [accountList, balanceHistory, legalNavPointsByAccount],
+  );
+
+  const legalAggregatePerformanceModel = useMemo(
+    () => buildAggregatePerformanceModel(
+      legalPerformanceModelsByAccount,
+      selectedPerformanceAccounts.length ? selectedPerformanceAccounts : accountList,
+    ),
+    [accountList, legalPerformanceModelsByAccount, selectedPerformanceAccounts],
+  );
+
+  const legalActivePerformanceModel = useMemo(() => {
+    if (selectedAccount === 'ALL') {
+      return buildAggregatePerformanceModel(legalPerformanceModelsByAccount, accountList);
+    }
+    return legalPerformanceModelsByAccount[selectedAccount] || buildPerformanceModelFromNavPoints([], balanceHistory[selectedAccount] || []);
+  }, [accountList, balanceHistory, legalPerformanceModelsByAccount, selectedAccount]);
+
   const deskPerformanceModel = useMemo(() => {
-    const globalDates = [...new Set(Object.values(balanceHistory || {}).flatMap((series) => (series || []).map(([date]) => date)))].sort();
+    const globalDates = [...new Set(
+      Object.values(legalPerformanceModelsByAccount || {}).flatMap((model) => model?.navSeries?.map(([date]) => date) || []),
+    )].sort();
     if (!globalDates.length || !transferredPositions.length) {
       return {
-        histories: balanceHistory,
+        accountModels: legalPerformanceModelsByAccount,
+        aggregateModel: legalAggregatePerformanceModel,
+        activeModel: legalActivePerformanceModel,
         transferCount: transferredPositions.length,
         priceBackedCount: 0,
         accountBackedCount: 0,
@@ -1969,15 +2150,24 @@ export default function App() {
 
     const historyAccounts = [...new Set([
       ...accountList,
-      ...Object.keys(balanceHistory || {}),
+      ...Object.keys(legalPerformanceModelsByAccount || {}),
       ...transferredPositions.flatMap((position) => [getPositionHeldAccount(position), getPositionDisplayAccount(position)]),
     ])].filter(Boolean);
 
     const expandedBaseByAccount = Object.fromEntries(
-      historyAccounts.map((accountName) => [accountName, expandHistoryToDates(balanceHistory[accountName] || [], globalDates)]),
+      historyAccounts.map((accountName) => [
+        accountName,
+        expandHistoryToDates(legalPerformanceModelsByAccount[accountName]?.navSeries || [], globalDates),
+      ]),
     );
     const valueMaps = Object.fromEntries(
       historyAccounts.map((accountName) => [accountName, new Map(expandedBaseByAccount[accountName].map(([date, value]) => [date, value]))]),
+    );
+    const flowMaps = Object.fromEntries(
+      historyAccounts.map((accountName) => [
+        accountName,
+        new Map((legalPerformanceModelsByAccount[accountName]?.flowSeries || []).map(([date, value]) => [date, value])),
+      ]),
     );
 
     let priceBackedCount = 0;
@@ -2009,48 +2199,79 @@ export default function App() {
       });
     });
 
+    const accountModels = Object.fromEntries(
+      historyAccounts.map((accountName) => {
+        const navSeries = globalDates.map((date) => [date, parseFloat(((valueMaps[accountName]?.get(date) || 0)).toFixed(4))]);
+        const flowSeries = globalDates.map((date) => [date, parseFloat(((flowMaps[accountName]?.get(date) || 0)).toFixed(4))]);
+        let previousNav = null;
+        let cumulative = 1;
+        const twrSeries = globalDates.map((date, index) => {
+          const nav = navSeries[index]?.[1] || 0;
+          const flow = flowSeries[index]?.[1] || 0;
+          if (previousNav !== null && Number.isFinite(previousNav) && previousNav !== 0) {
+            const dayReturn = (nav - previousNav - flow) / previousNav;
+            if (Number.isFinite(dayReturn)) cumulative *= (1 + dayReturn);
+          } else {
+            cumulative = 1;
+          }
+          previousNav = nav;
+          return [date, cumulative];
+        });
+        return [accountName, {
+          navSeries,
+          flowSeries,
+          twrSeries,
+          hasFlowAdjustedReturns: historyAccounts.every((name) => legalPerformanceModelsByAccount[name]?.hasFlowAdjustedReturns !== false),
+        }];
+      }),
+    );
+
     return {
-      histories: Object.fromEntries(
-        Object.entries(valueMaps).map(([accountName, values]) => ([
-          accountName,
-          globalDates.map((date) => [date, parseFloat(((values.get(date) || 0)).toFixed(4))]),
-        ])),
+      accountModels,
+      aggregateModel: buildAggregatePerformanceModel(
+        accountModels,
+        selectedPerformanceAccounts.length ? selectedPerformanceAccounts : accountList,
       ),
+      activeModel: selectedAccount === 'ALL'
+        ? buildAggregatePerformanceModel(accountModels, accountList)
+        : (accountModels[selectedAccount] || { navSeries: [], twrSeries: [], flowSeries: [], hasFlowAdjustedReturns: false }),
       transferCount: transferredPositions.length,
       priceBackedCount,
       accountBackedCount,
       flatCount,
     };
-  }, [accountList, balanceHistory, transferredPositions, getPositionHistorySeries]);
+  }, [accountList, getPositionHistorySeries, legalActivePerformanceModel, legalAggregatePerformanceModel, legalPerformanceModelsByAccount, selectedAccount, selectedPerformanceAccounts, transferredPositions]);
 
-  const performanceHistorySource = useMemo(
-    () => (performanceAccountingMode === 'desk' ? deskPerformanceModel.histories : balanceHistory),
-    [balanceHistory, deskPerformanceModel.histories, performanceAccountingMode],
+  const performanceModelSource = useMemo(
+    () => (performanceAccountingMode === 'desk'
+      ? {
+          accountModels: deskPerformanceModel.accountModels || legalPerformanceModelsByAccount,
+          aggregateModel: deskPerformanceModel.aggregateModel || legalAggregatePerformanceModel,
+          activeModel: deskPerformanceModel.activeModel || legalActivePerformanceModel,
+        }
+      : {
+          accountModels: legalPerformanceModelsByAccount,
+          aggregateModel: legalAggregatePerformanceModel,
+          activeModel: legalActivePerformanceModel,
+        }),
+    [deskPerformanceModel.accountModels, deskPerformanceModel.activeModel, deskPerformanceModel.aggregateModel, legalActivePerformanceModel, legalAggregatePerformanceModel, legalPerformanceModelsByAccount, performanceAccountingMode],
   );
 
-  const performanceActiveHistory = useMemo(() => {
-    if (selectedAccount === 'ALL') return buildAggregateHistory(performanceHistorySource);
-    return performanceHistorySource[selectedAccount] || [];
-  }, [performanceHistorySource, selectedAccount]);
-
-  const selectedAggregateHistory = useMemo(
-    () => buildAggregateHistory(
-      performanceHistorySource,
-      selectedPerformanceAccounts.length ? selectedPerformanceAccounts : accountList,
-    ),
-    [accountList, performanceHistorySource, selectedPerformanceAccounts],
-  );
+  const performanceActiveHistory = performanceModelSource.activeModel?.navSeries || [];
+  const performanceActiveReturnSeries = performanceModelSource.activeModel?.twrSeries || [];
+  const selectedAggregateHistory = performanceModelSource.aggregateModel?.navSeries || [];
+  const selectedAggregateReturnSeries = performanceModelSource.aggregateModel?.twrSeries || [];
 
   const performanceWindowEndDate = useMemo(() => {
     const candidateSeries = [];
-    if (performanceChartSelection.aggregate && selectedAggregateHistory.length) candidateSeries.push(selectedAggregateHistory);
+    if (performanceChartSelection.aggregate && selectedAggregateReturnSeries.length) candidateSeries.push(selectedAggregateReturnSeries);
     selectedPerformanceAccounts.forEach((accountName) => {
-      const history = performanceHistorySource[accountName];
+      const history = performanceModelSource.accountModels?.[accountName]?.twrSeries;
       if (history?.length) candidateSeries.push(history);
     });
     if (performanceChartSelection.spx && spxData.length) candidateSeries.push(spxData);
     return getLatestSeriesDate(candidateSeries);
-  }, [performanceChartSelection, selectedAggregateHistory, selectedPerformanceAccounts, spxData, performanceHistorySource]);
+  }, [performanceChartSelection, performanceModelSource.accountModels, selectedAggregateReturnSeries, selectedPerformanceAccounts, spxData]);
 
   const performanceComparisonEndDate = useMemo(
     () => getLatestSeriesDate([performanceActiveHistory, spxData]),
@@ -2061,23 +2282,27 @@ export default function App() {
     () => filterByTimeframe(performanceActiveHistory, timeframe, performanceComparisonEndDate),
     [performanceActiveHistory, timeframe, performanceComparisonEndDate],
   );
+  const performanceFilteredReturnSeries = useMemo(
+    () => filterByTimeframe(performanceActiveReturnSeries, timeframe, performanceComparisonEndDate),
+    [performanceActiveReturnSeries, timeframe, performanceComparisonEndDate],
+  );
 
   const performanceSeriesDefinitions = useMemo(() => {
     const definitions = [];
 
-    if (performanceChartSelection.aggregate && selectedAggregateHistory.length) {
+    if (performanceChartSelection.aggregate && selectedAggregateReturnSeries.length) {
       definitions.push({
         key: '__portfolio__',
         label: 'Aggregate Portfolio',
         color: PALETTE.portfolio,
         strokeWidth: 2.25,
-        data: filterByTimeframe(selectedAggregateHistory, timeframe, performanceWindowEndDate),
+        data: filterByTimeframe(selectedAggregateReturnSeries, timeframe, performanceWindowEndDate),
       });
     }
 
     accountList.forEach((accountName, accountIndex) => {
       if (!performanceChartSelection.accounts?.[accountName]) return;
-      const history = performanceHistorySource[accountName] || [];
+      const history = performanceModelSource.accountModels?.[accountName]?.twrSeries || [];
       if (!history.length) return;
       definitions.push({
         key: getPerformanceSeriesKey(accountName, accountIndex),
@@ -2100,7 +2325,7 @@ export default function App() {
     }
 
     return definitions.filter((series) => series.data.length);
-  }, [performanceChartSelection, selectedAggregateHistory, accountList, performanceHistorySource, accountColorMap, selectedAccount, spxData, timeframe, performanceWindowEndDate]);
+  }, [performanceChartSelection, selectedAggregateReturnSeries, accountList, performanceModelSource.accountModels, accountColorMap, selectedAccount, spxData, timeframe, performanceWindowEndDate]);
 
   const performanceComparisonData = useMemo(
     () => buildNormalizedComparisonRows(performanceSeriesDefinitions),
@@ -2115,6 +2340,21 @@ export default function App() {
     [performanceSeriesDefinitions],
   );
 
+  const performanceBarData = useMemo(
+    () => performanceSeriesSummary.map((series) => ({
+      key: series.key,
+      label: series.label === 'Aggregate Portfolio'
+        ? 'Aggregate'
+        : series.label === 'SPX'
+          ? 'SPX'
+          : formatShortAccountName(series.label),
+      fullLabel: series.label,
+      value: Number.isFinite(series.periodReturn) ? series.periodReturn : 0,
+      color: series.color,
+    })),
+    [performanceSeriesSummary],
+  );
+
   // Merge portfolio + SPX for chart
   const chartData = useMemo(() => {
     return buildPortfolioBenchmarkChartData(filteredHistory, filteredSPX);
@@ -2123,8 +2363,11 @@ export default function App() {
   const stats = useMemo(() => filteredHistory.length >= 2 ? computeReturns(filteredHistory) : null, [filteredHistory]);
   const allTimeStats = useMemo(() => activeHistory.length >= 2 ? computeReturns(activeHistory) : null, [activeHistory]);
   const performanceStats = useMemo(
-    () => performanceFilteredHistory.length >= 2 ? computeReturns(performanceFilteredHistory) : null,
-    [performanceFilteredHistory],
+    () => buildReturnStatsFromSeries(
+      performanceFilteredReturnSeries,
+      performanceFilteredHistory,
+    ),
+    [performanceFilteredHistory, performanceFilteredReturnSeries],
   );
 
   // Sector analytics from positions + sector ETF total return series.
@@ -3063,6 +3306,20 @@ export default function App() {
               <div style={{ display:'flex', gap:'6px', flexWrap:'wrap' }}>
                 <button
                   type="button"
+                  onClick={() => setPerformanceChartMode('line')}
+                  style={{ ...S.btn, ...(performanceChartMode === 'line' ? S.btnActive : {}), padding:'4px 10px', fontSize:'10px' }}
+                >
+                  Line View
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPerformanceChartMode('bar')}
+                  style={{ ...S.btn, ...(performanceChartMode === 'bar' ? S.btnActive : {}), padding:'4px 10px', fontSize:'10px' }}
+                >
+                  Bar View
+                </button>
+                <button
+                  type="button"
                   onClick={() => setPerformanceAccountingMode('desk')}
                   style={{ ...S.btn, ...(performanceAccountingMode === 'desk' ? S.btnActive : {}), padding:'4px 10px', fontSize:'10px', borderColor:PALETTE.accentBright, color:PALETTE.accentBright }}
                 >
@@ -3123,7 +3380,10 @@ export default function App() {
           {/* Full chart */}
           <div style={{ ...S.card, marginBottom:'16px' }}>
             <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'12px' }}>
-              <div style={S.cardTitle}>NORMALIZED PERFORMANCE COMPARISON · {timeframe} · {performanceAccountingMode === 'desk' ? 'Desk NAV' : 'Legal NAV'}</div>
+              <div style={S.cardTitle}>
+                {performanceChartMode === 'bar' ? 'PERIOD RETURN SNAPSHOT' : 'NORMALIZED PERFORMANCE COMPARISON'}
+                {' '}· {timeframe} · {performanceAccountingMode === 'desk' ? 'Desk NAV' : 'Legal NAV'}
+              </div>
               {performanceSeriesSummary.length > 0 && (
                 <div style={{ display:'flex', gap:'14px', fontSize:'11px', flexWrap:'wrap', justifyContent:'flex-end' }}>
                   {performanceSeriesSummary.map((series) => (
@@ -3135,7 +3395,22 @@ export default function App() {
                 </div>
               )}
             </div>
-            {performanceComparisonData.length > 0 ? (
+            {performanceChartMode === 'bar' && performanceBarData.length > 0 ? (
+              <ResponsiveContainer width="100%" height={372}>
+                <BarChart data={performanceBarData} margin={{ top:10, right:22, bottom:8, left:10 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={PALETTE.lineGrid} />
+                  <XAxis dataKey="label" tick={CHART_TICK_STYLE} interval={0} minTickGap={24} tickMargin={8} />
+                  <YAxis width={62} tick={CHART_TICK_STYLE} tickFormatter={v => `${v>=0?'+':''}${v.toFixed(1)}%`} tickMargin={8} />
+                  <Tooltip content={<CustomTooltip mode="pct" />} />
+                  <ReferenceLine y={0} stroke={PALETTE.lineGrid} />
+                  <Bar dataKey="value" name="Return" radius={[2, 2, 0, 0]}>
+                    {performanceBarData.map((entry) => (
+                      <Cell key={entry.key} fill={entry.color} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            ) : performanceComparisonData.length > 0 ? (
               <ResponsiveContainer width="100%" height={372}>
                 <LineChart data={performanceComparisonData} margin={{ top:10, right:22, bottom:8, left:10 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke={PALETTE.lineGrid} />
