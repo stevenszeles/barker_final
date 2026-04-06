@@ -31,6 +31,10 @@ const ALL_SECTORS = [...SP500_SECTORS, ...MANUAL_ONLY_SECTORS];
 const UNCLASSIFIED_SECTOR = "Unclassified";
 const SECTOR_OVERRIDE_AUTO = "__AUTO__";
 const POSITION_ATTRIBUTION_HELD = "__HELD_ACCOUNT__";
+const FUTURES_STATEMENT_ACCOUNT_AUTO = "__AUTO_FUTURES_ACCOUNT__";
+const FUTURES_CLEARING_ACCOUNT = "Futures_Clearing ...FUT";
+const POSITION_SOURCE_STANDARD = "positions_csv";
+const POSITION_SOURCE_FUTURES = "futures_statement";
 
 const SECTOR_TO_ETF = Object.fromEntries(SP500_SECTORS.map(({ name, etf }) => [name, etf]));
 const ETF_TO_SECTOR = Object.fromEntries(SP500_SECTORS.map(({ name, etf }) => [etf, name]));
@@ -102,6 +106,49 @@ const SYMBOL_TO_SECTOR = {
   NKE:"Consumer Discretionary",
   OKLO:"Utilities",
   NBIS:"Information Technology",
+};
+
+const FUTURES_ROOT_TO_SECTOR = {
+  "/ES": "Equities",
+  "/MES": "Equities",
+  "/NQ": "Equities",
+  "/MNQ": "Equities",
+  "/RTY": "Equities",
+  "/M2K": "Equities",
+  "/YM": "Equities",
+  "/MYM": "Equities",
+  "/BTC": "Crypto",
+  "/MBT": "Crypto",
+  "/ETH": "Crypto",
+  "/MET": "Crypto",
+  "/GC": "Commodities",
+  "/MGC": "Commodities",
+  "/SI": "Commodities",
+  "/SIL": "Commodities",
+  "/HG": "Commodities",
+  "/MHG": "Commodities",
+  "/CL": "Commodities",
+  "/MCL": "Commodities",
+  "/NG": "Commodities",
+  "/MNG": "Commodities",
+  "/RB": "Commodities",
+  "/HO": "Commodities",
+  "/ZC": "Commodities",
+  "/ZS": "Commodities",
+  "/ZW": "Commodities",
+  "/ZM": "Commodities",
+  "/ZL": "Commodities",
+  "/KE": "Commodities",
+  "/HE": "Commodities",
+  "/LE": "Commodities",
+  "/GF": "Commodities",
+  "/CC": "Commodities",
+  "/KC": "Commodities",
+  "/CT": "Commodities",
+  "/SB": "Commodities",
+  "/OJ": "Commodities",
+  "/PL": "Commodities",
+  "/PA": "Commodities",
 };
 
 const SECTOR_COLORS = Object.fromEntries([
@@ -484,6 +531,160 @@ function parseCSVLine(line) {
   return result;
 }
 
+function parseCSVRows(text) {
+  return String(text || '')
+    .split(/\r?\n/)
+    .map((line) => parseCSVLine(line))
+    .filter((row) => row.some((cell) => String(cell || '').trim() !== ''));
+}
+
+function normalizeHeader(value) {
+  return String(value || '')
+    .replace(/^\uFEFF/, '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+function parseStatementNumber(value) {
+  const raw = String(value ?? '').replace(/"/g, '').trim();
+  if (!raw) return NaN;
+  const negative = raw.includes('(') || /^-/.test(raw);
+  const normalized = raw
+    .replace(/[,$()%+]/g, '')
+    .replace(/\(/g, '')
+    .replace(/\)/g, '')
+    .trim();
+  if (!normalized) return NaN;
+  const parsed = parseFloat(normalized);
+  if (!Number.isFinite(parsed)) return NaN;
+  return negative ? -Math.abs(parsed) : parsed;
+}
+
+function parseStatementMultiplier(value) {
+  const raw = String(value ?? '').replace(/"/g, '').trim();
+  if (!raw) return 1;
+  const fractionMatch = raw.match(/^(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)$/);
+  if (fractionMatch) {
+    const denominator = parseFloat(fractionMatch[2]);
+    return Number.isFinite(denominator) && denominator !== 0 ? denominator : 1;
+  }
+  const parsed = parseStatementNumber(raw);
+  return Number.isFinite(parsed) && parsed !== 0 ? Math.abs(parsed) : 1;
+}
+
+function getFutureRootSymbol(symbol) {
+  const raw = String(symbol || '').trim().toUpperCase();
+  if (!raw) return '';
+  const token = raw.split(/\s+/)[0];
+  const match = token.match(/^((?:\/)?[A-Z0-9]{1,5}?)[FGHJKMNQUVXZ](?:20)?\d{1,2}$/);
+  return match ? match[1] : token;
+}
+
+function resolveStatementFutureSector(symbol, description = '') {
+  const root = getFutureRootSymbol(symbol);
+  if (root && FUTURES_ROOT_TO_SECTOR[root]) return FUTURES_ROOT_TO_SECTOR[root];
+
+  const upper = String(description || '').toUpperCase();
+  if (upper.includes('BITCOIN') || upper.includes('ETHEREUM')) return 'Crypto';
+  if (
+    upper.includes('FUTURES')
+    || upper.includes('CRUDE')
+    || upper.includes('SOYBEAN')
+    || upper.includes('CORN')
+    || upper.includes('GOLD')
+    || upper.includes('SILVER')
+    || upper.includes('COPPER')
+    || upper.includes('NATURAL GAS')
+    || upper.includes('CATTLE')
+  ) {
+    return 'Commodities';
+  }
+  if (upper.includes('E-MINI') || upper.includes('MICRO E-MINI') || upper.includes('NASDAQ-100') || upper.includes('RUSSELL') || upper.includes('DOW')) {
+    return 'Equities';
+  }
+  return null;
+}
+
+function buildEmptyAccountData() {
+  return { positions: [], total: 0, cost: 0, cash: 0 };
+}
+
+function chooseFuturesStatementAccount(text, accountHint, preferredAccount, knownAccounts = [], selectedAccount = 'ALL') {
+  if (preferredAccount && preferredAccount !== FUTURES_STATEMENT_ACCOUNT_AUTO) return preferredAccount;
+
+  const candidates = [text, accountHint]
+    .map((value) => String(value || ''))
+    .join('\n');
+  const explicitMasked = candidates.match(/(?:Individual|Limit(?:_| )Liability(?:_| )Company)\s+\.{3}(\d+)/i);
+  if (explicitMasked) {
+    const exact = [...new Set(knownAccounts.filter(Boolean))].find((accountName) => accountName.endsWith(`...${explicitMasked[1]}`));
+    if (exact) return exact;
+    return normalizeAccountName(`Limit Liability Company ...${explicitMasked[1]}`);
+  }
+
+  const filenameMatch = String(accountHint || '').match(/X{3,4}(\d{3,4})/i);
+  if (filenameMatch) {
+    const exact = [...new Set(knownAccounts.filter(Boolean))].find((accountName) => accountName.endsWith(`...${filenameMatch[1]}`));
+    if (exact) return exact;
+  }
+
+  if (selectedAccount && selectedAccount !== 'ALL') return selectedAccount;
+  if (knownAccounts.length === 1) return knownAccounts[0];
+  return FUTURES_CLEARING_ACCOUNT;
+}
+
+function mergeStandardPositionAccounts(existingAccounts = {}, parsedAccounts = {}) {
+  const next = {};
+  const accountNames = [...new Set([...Object.keys(existingAccounts || {}), ...Object.keys(parsedAccounts || {})])];
+  accountNames.forEach((accountName) => {
+    const existing = existingAccounts?.[accountName] || buildEmptyAccountData();
+    const parsed = parsedAccounts?.[accountName];
+    const preservedSupplemental = (existing.positions || []).filter((position) => position?.source === POSITION_SOURCE_FUTURES);
+    if (parsed) {
+      next[accountName] = {
+        ...buildEmptyAccountData(),
+        ...parsed,
+        positions: [...(parsed.positions || []), ...preservedSupplemental],
+      };
+      return;
+    }
+    if (preservedSupplemental.length) {
+      next[accountName] = {
+        ...buildEmptyAccountData(),
+        total: Number(existing.total) || 0,
+        cost: Number(existing.cost) || 0,
+        cash: Number(existing.cash) || 0,
+        positions: preservedSupplemental,
+      };
+    }
+  });
+  return next;
+}
+
+function mergeSupplementalFuturesAccounts(existingAccounts = {}, parsedAccounts = {}) {
+  const next = {};
+  const accountNames = [...new Set([...Object.keys(existingAccounts || {}), ...Object.keys(parsedAccounts || {})])];
+  accountNames.forEach((accountName) => {
+    const existing = existingAccounts?.[accountName] || buildEmptyAccountData();
+    const incoming = parsedAccounts?.[accountName];
+    const retainedPositions = (existing.positions || []).filter((position) => position?.source !== POSITION_SOURCE_FUTURES);
+    const mergedPositions = [...retainedPositions, ...(incoming?.positions || [])];
+    if (!mergedPositions.length && !incoming && !(Number(existing.total) || Number(existing.cost) || Number(existing.cash))) {
+      return;
+    }
+    next[accountName] = {
+      ...buildEmptyAccountData(),
+      total: Number(incoming?.total ?? existing.total) || 0,
+      cost: Number(incoming?.cost ?? existing.cost) || 0,
+      cash: Number(incoming?.cash ?? existing.cash) || 0,
+      positions: mergedPositions,
+    };
+  });
+  return next;
+}
+
 function parsePositionsCSV(text) {
   const lines = text.split('\n');
   const accounts = {};
@@ -548,6 +749,7 @@ function parsePositionsCSV(text) {
         costBasis,
         gainPct,
         assetType,
+        source: POSITION_SOURCE_STANDARD,
         sector: mainSector || UNCLASSIFIED_SECTOR,
         mainSector,
         isSectorETF: !isOption && mainSector ? cleanSym === SECTOR_TO_ETF[mainSector] : false,
@@ -555,6 +757,198 @@ function parsePositionsCSV(text) {
     }
   }
   return accounts;
+}
+
+function parseFuturesStatementCSV(text, {
+  accountHint = '',
+  preferredAccount = FUTURES_STATEMENT_ACCOUNT_AUTO,
+  existingAccountNames = [],
+  selectedAccount = 'ALL',
+} = {}) {
+  const rows = parseCSVRows(text);
+  const accountName = chooseFuturesStatementAccount(text, accountHint, preferredAccount, existingAccountNames, selectedAccount);
+  const accounts = { [accountName]: buildEmptyAccountData() };
+  if (!rows.length) return { accounts, accountName, importedCount: 0 };
+
+  const isSectionHeader = (row = []) => {
+    if (!row.length) return false;
+    const first = String(row[0] || '').trim();
+    if (!first) return false;
+    return row.length === 1 || !row.slice(1).some((cell) => String(cell || '').trim());
+  };
+  const findSectionIndex = (name) => rows.findIndex((row) => isSectionHeader(row) && normalizeHeader(row[0]) === normalizeHeader(name));
+
+  const readSectionRows = (name) => {
+    const sectionIndex = findSectionIndex(name);
+    if (sectionIndex < 0 || !rows[sectionIndex + 1]) return { header: [], rows: [] };
+    const header = rows[sectionIndex + 1].map((cell) => normalizeHeader(cell));
+    const dataRows = [];
+    for (let i = sectionIndex + 2; i < rows.length; i += 1) {
+      const row = rows[i];
+      if (!row) break;
+      if (isSectionHeader(row)) break;
+      const rowText = row.map((cell) => String(cell || '').trim()).join(' ');
+      if (!rowText) break;
+      if (/overall totals/i.test(rowText) || /subtotal/i.test(rowText)) break;
+      dataRows.push(row);
+    }
+    return { header, rows: dataRows };
+  };
+
+  const profitsSection = readSectionRows('Profits and Losses');
+  const profitsLookup = new Map();
+  if (profitsSection.header.length) {
+    const symbolIdx = profitsSection.header.indexOf('symbol');
+    const pnlOpenIdx = profitsSection.header.indexOf('p_l_open');
+    const pnlPctIdx = profitsSection.header.indexOf('p_l');
+    const pnlDayIdx = profitsSection.header.indexOf('p_l_day');
+    const marginReqIdx = profitsSection.header.indexOf('margin_req');
+    const markValueIdx = profitsSection.header.indexOf('mark_value');
+    profitsSection.rows.forEach((row) => {
+      const symbol = String(row[symbolIdx] || '').trim();
+      if (!symbol) return;
+      profitsLookup.set(symbol, {
+        pnlOpen: parseStatementNumber(row[pnlOpenIdx]),
+        gainPct: parseStatementNumber(row[pnlPctIdx]),
+        pnlDay: parseStatementNumber(row[pnlDayIdx]),
+        marginReq: parseStatementNumber(row[marginReqIdx]),
+        markValue: parseStatementNumber(row[markValueIdx]),
+      });
+    });
+  }
+
+  const pushPosition = (position) => {
+    if (!position || !position.symbol || !Number.isFinite(position.qty) || position.qty === 0) return;
+    accounts[accountName].positions.push(position);
+  };
+
+  const futuresSection = readSectionRows('Futures');
+  if (futuresSection.header.length) {
+    const symbolIdx = futuresSection.header.indexOf('symbol');
+    const descIdx = futuresSection.header.indexOf('description');
+    const spcIdx = futuresSection.header.indexOf('spc');
+    const expIdx = futuresSection.header.indexOf('exp');
+    const qtyIdx = futuresSection.header.indexOf('qty');
+    const tradeIdx = futuresSection.header.indexOf('trade_price');
+    const markIdx = futuresSection.header.indexOf('mark');
+
+    futuresSection.rows.forEach((row) => {
+      const rawSymbol = String(row[symbolIdx] || '').trim().toUpperCase();
+      if (!rawSymbol) return;
+      const qty = parseStatementNumber(row[qtyIdx]);
+      if (!Number.isFinite(qty) || qty === 0) return;
+      const description = String(row[descIdx] || '').replace(/"/g, '').trim();
+      const multiplier = parseStatementMultiplier(row[spcIdx]);
+      const tradePrice = parseStatementNumber(row[tradeIdx]);
+      const mark = parseStatementNumber(row[markIdx]);
+      const profitRow = profitsLookup.get(rawSymbol) || {};
+      const pnlOpen = Number.isFinite(profitRow.pnlOpen)
+        ? profitRow.pnlOpen
+        : (Number.isFinite(mark) && Number.isFinite(tradePrice) ? qty * (mark - tradePrice) * multiplier : 0);
+      const gainPct = Number.isFinite(profitRow.gainPct)
+        ? profitRow.gainPct
+        : 0;
+      const mainSector = resolveStatementFutureSector(rawSymbol, description);
+      const expiryText = String(row[expIdx] || '').replace(/"/g, '').trim();
+
+      pushPosition({
+        account: accountName,
+        symbol: rawSymbol,
+        normalizedSymbol: rawSymbol,
+        baseSymbol: rawSymbol,
+        overrideSymbol: rawSymbol,
+        historySymbol: null,
+        cleanSym: rawSymbol.replace(/[\/.\- ]/g, '_'),
+        description: expiryText ? `${description} · ${expiryText}` : description,
+        qty,
+        price: Number.isFinite(mark) ? mark : (Number.isFinite(tradePrice) ? tradePrice : 0),
+        tradePrice: Number.isFinite(tradePrice) ? tradePrice : null,
+        markPrice: Number.isFinite(mark) ? mark : null,
+        multiplier,
+        mktVal: Number.isFinite(pnlOpen) ? pnlOpen : 0,
+        costBasis: 0,
+        gainPct,
+        assetType: 'Future',
+        source: POSITION_SOURCE_FUTURES,
+        sector: mainSector || UNCLASSIFIED_SECTOR,
+        mainSector,
+        isSectorETF: false,
+        marginReq: Number.isFinite(profitRow.marginReq) ? profitRow.marginReq : null,
+        pnlDay: Number.isFinite(profitRow.pnlDay) ? profitRow.pnlDay : null,
+      });
+    });
+  }
+
+  const futuresOptionsSection = readSectionRows('Futures Options');
+  if (futuresOptionsSection.header.length) {
+    const symbolIdx = futuresOptionsSection.header.indexOf('symbol');
+    const optionCodeIdx = futuresOptionsSection.header.indexOf('option_code');
+    const expIdx = futuresOptionsSection.header.indexOf('exp');
+    const strikeIdx = futuresOptionsSection.header.indexOf('strike');
+    const typeIdx = futuresOptionsSection.header.indexOf('type');
+    const qtyIdx = futuresOptionsSection.header.indexOf('qty');
+    const tradeIdx = futuresOptionsSection.header.indexOf('trade_price');
+    const markIdx = futuresOptionsSection.header.indexOf('mark');
+    const markValueIdx = futuresOptionsSection.header.indexOf('mark_value');
+
+    futuresOptionsSection.rows.forEach((row) => {
+      const contractDescription = String(row[symbolIdx] || '').replace(/"/g, '').trim();
+      const optionCode = String(row[optionCodeIdx] || '').replace(/"/g, '').trim().toUpperCase();
+      const rawUnderlying = contractDescription.split(/\s+/)[0]?.toUpperCase() || '';
+      const qty = parseStatementNumber(row[qtyIdx]);
+      if (!optionCode || !Number.isFinite(qty) || qty === 0) return;
+      const multiplier = parseStatementMultiplier(contractDescription.match(/\d+\s*\/\s*\d+/)?.[0] || '');
+      const tradePrice = parseStatementNumber(row[tradeIdx]);
+      const mark = parseStatementNumber(row[markIdx]);
+      const explicitMarkValue = parseStatementNumber(row[markValueIdx]);
+      const mktVal = Number.isFinite(explicitMarkValue)
+        ? explicitMarkValue
+        : (Number.isFinite(mark) ? qty * mark * multiplier : 0);
+      const costBasis = Number.isFinite(tradePrice) ? qty * tradePrice * multiplier : 0;
+      const gainPct = costBasis
+        ? ((mktVal - costBasis) / Math.abs(costBasis)) * 100
+        : 0;
+      const description = [
+        contractDescription,
+        String(row[typeIdx] || '').trim().toUpperCase(),
+        String(row[strikeIdx] || '').trim(),
+      ].filter(Boolean).join(' · ');
+      const mainSector = resolveStatementFutureSector(rawUnderlying, contractDescription);
+
+      pushPosition({
+        account: accountName,
+        symbol: optionCode,
+        normalizedSymbol: optionCode,
+        baseSymbol: rawUnderlying || optionCode,
+        overrideSymbol: rawUnderlying || optionCode,
+        historySymbol: null,
+        cleanSym: optionCode.replace(/[\/.\- ]/g, '_'),
+        description,
+        qty,
+        price: Number.isFinite(mark) ? mark : (Number.isFinite(tradePrice) ? tradePrice : 0),
+        tradePrice: Number.isFinite(tradePrice) ? tradePrice : null,
+        markPrice: Number.isFinite(mark) ? mark : null,
+        mktVal,
+        costBasis,
+        gainPct,
+        assetType: 'Futures Option',
+        source: POSITION_SOURCE_FUTURES,
+        sector: mainSector || UNCLASSIFIED_SECTOR,
+        mainSector,
+        isSectorETF: false,
+        expiry: String(row[expIdx] || '').replace(/"/g, '').trim() || null,
+        strike: parseStatementNumber(row[strikeIdx]),
+        optionType: String(row[typeIdx] || '').replace(/"/g, '').trim().toUpperCase() || null,
+        multiplier,
+      });
+    });
+  }
+
+  return {
+    accounts,
+    accountName,
+    importedCount: accounts[accountName].positions.length,
+  };
 }
 
 function parseBalancesCSV(text, accountHint) {
@@ -1008,6 +1402,10 @@ function isOptionPosition(position) {
   return String(position?.assetType || '').toLowerCase().includes('option');
 }
 
+function isFuturePosition(position) {
+  return String(position?.assetType || '').toLowerCase().includes('future');
+}
+
 function isEtfPosition(position) {
   const assetType = String(position?.assetType || '').toLowerCase();
   return assetType.includes('etf') || Boolean(position?.isSectorETF);
@@ -1069,11 +1467,13 @@ function getPositionOverrideValue(position, sectorOverrides = {}) {
 }
 
 function summarizeGroupedPositionTypes(rows) {
-  const equityCount = rows.filter((row) => !isOptionPosition(row) && !isEtfPosition(row)).length;
+  const futureCount = rows.filter((row) => isFuturePosition(row) && !isOptionPosition(row)).length;
+  const equityCount = rows.filter((row) => !isOptionPosition(row) && !isEtfPosition(row) && !isFuturePosition(row)).length;
   const etfCount = rows.filter((row) => isEtfPosition(row)).length;
   const optionCount = rows.filter((row) => isOptionPosition(row)).length;
   return [
     equityCount ? `${equityCount} ${equityCount === 1 ? 'Stock' : 'Stocks'}` : null,
+    futureCount ? `${futureCount} ${futureCount === 1 ? 'Future' : 'Futures'}` : null,
     etfCount ? `${etfCount} ${etfCount === 1 ? 'ETF' : 'ETFs'}` : null,
     optionCount ? `${optionCount} ${optionCount === 1 ? 'Option Leg' : 'Option Legs'}` : null,
   ].filter(Boolean).join(' · ');
@@ -1586,6 +1986,7 @@ export default function App() {
   const [positionAttributionOverrides, setPositionAttributionOverrides] = useState(sharedSeedRef.current.positionAttributionOverrides);
   const [performanceAccountingMode, setPerformanceAccountingMode] = useState(persisted.performanceAccountingMode || 'desk');
   const [performanceChartMode, setPerformanceChartMode] = useState(persisted.performanceChartMode || 'line');
+  const [futuresStatementImportAccount, setFuturesStatementImportAccount] = useState(FUTURES_STATEMENT_ACCOUNT_AUTO);
   const [performanceChartSelection, setPerformanceChartSelection] = useState(() =>
     normalizePerformanceChartSelection(persisted.performanceChartSelection, [], persisted.showBenchmark ?? true),
   );
@@ -1965,13 +2366,47 @@ export default function App() {
       try {
         const parsed = parsePositionsCSV(e.target.result);
         markSharedWorkspaceDirty('Positions upload pending sync');
-        setAccounts(parsed);
+        setAccounts((prev) => mergeStandardPositionAccounts(prev, parsed));
         setUploadStatus(s => ({ ...s, positions: `✓ ${Object.keys(parsed).length} accounts, ${Object.values(parsed).reduce((a,acc)=>a+acc.positions.length,0)} positions` }));
         loadBenchmarks({ forceRefresh: true, spxOnly: true });
       } catch(err) { setUploadStatus(s => ({ ...s, positions: `✗ Parse error: ${err.message}` })); }
     };
     reader.readAsText(file);
   }, [loadBenchmarks, markSharedWorkspaceDirty]);
+
+  const handleFuturesStatementUpload = useCallback((file) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const knownAccounts = [...new Set([
+          ...Object.keys(accounts || {}),
+          ...Object.keys(balanceHistory || {}),
+        ])].filter((name) => name && name !== 'ALL');
+        const parsed = parseFuturesStatementCSV(e.target.result, {
+          accountHint: file?.name,
+          preferredAccount: futuresStatementImportAccount,
+          existingAccountNames: knownAccounts,
+          selectedAccount,
+        });
+        if (!parsed.importedCount) {
+          setUploadStatus((s) => ({
+            ...s,
+            futures: '✗ No futures rows found. Use a Schwab account statement CSV that includes the Futures / Futures Options sections.',
+          }));
+          return;
+        }
+        markSharedWorkspaceDirty('Futures statement upload pending sync');
+        setAccounts((prev) => mergeSupplementalFuturesAccounts(prev, parsed.accounts));
+        setUploadStatus((s) => ({
+          ...s,
+          futures: `✓ ${parsed.importedCount} futures lines imported to ${formatShortAccountName(parsed.accountName)}`,
+        }));
+      } catch (err) {
+        setUploadStatus((s) => ({ ...s, futures: `✗ Parse error: ${err.message}` }));
+      }
+    };
+    reader.readAsText(file);
+  }, [accounts, balanceHistory, futuresStatementImportAccount, markSharedWorkspaceDirty, selectedAccount]);
 
   const handleBalancesUpload = useCallback(async (fileInput) => {
     const files = Array.isArray(fileInput) ? fileInput : [fileInput].filter(Boolean);
@@ -3023,8 +3458,9 @@ export default function App() {
         const orderedRows = [...rows].sort((a, b) => {
           const rank = (row) => {
             if (isEtfPosition(row)) return 0;
-            if (!isOptionPosition(row)) return 1;
-            return 2;
+            if (isFuturePosition(row) && !isOptionPosition(row)) return 1;
+            if (!isOptionPosition(row)) return 2;
+            return 3;
           };
           const rankDiff = rank(a) - rank(b);
           if (rankDiff !== 0) return rankDiff;
@@ -3745,6 +4181,8 @@ export default function App() {
                       ? PALETTE.accentMuted
                       : isOptionPosition(row)
                         ? PALETTE.warning
+                        : isFuturePosition(row)
+                          ? PALETTE.brass
                         : isEtfPosition(row)
                           ? PALETTE.steel
                           : PALETTE.info;
@@ -3752,6 +4190,8 @@ export default function App() {
                       ? 'GROUP'
                       : isOptionPosition(row)
                         ? 'OPT'
+                        : isFuturePosition(row)
+                          ? 'FUT'
                         : isEtfPosition(row)
                           ? 'ETF'
                           : 'EQ';
@@ -3769,7 +4209,7 @@ export default function App() {
                                 : 'rgba(13,15,18,0.98)',
                         }}
                       >
-                        <td style={{ ...S.td, fontWeight:700, color: isGroup ? PALETTE.textStrong : (isOptionPosition(row) ? PALETTE.warning : PALETTE.portfolio) }}>
+                        <td style={{ ...S.td, fontWeight:700, color: isGroup ? PALETTE.textStrong : (isOptionPosition(row) ? PALETTE.warning : isFuturePosition(row) ? PALETTE.brass : PALETTE.portfolio) }}>
                           <div style={{ display:'flex', alignItems:'center', gap:'8px', paddingLeft: entry.child ? '20px' : 0 }}>
                             {isGroup && (
                               <button
@@ -4527,13 +4967,47 @@ export default function App() {
             </button>
           </div>
 
-          <div style={S.grid(3)}>
+          <div style={{ ...S.card, marginBottom:'16px', display:'flex', justifyContent:'space-between', gap:'16px', alignItems:'flex-start', flexWrap:'wrap' }}>
+            <div style={{ maxWidth:'760px' }}>
+              <div style={{ ...S.cardTitle, color:PALETTE.accentBright, marginBottom:'6px' }}>FUTURES STATEMENT ROUTING</div>
+              <div style={{ color:PALETTE.textMuted, fontSize:'11px', lineHeight:'1.6' }}>
+                Schwab account statements do not always identify a masked account suffix when they include futures. Choose the legal held account for the futures statement here.
+                If the statement is ambiguous, you can leave it on auto-detect or route it to the clearing bucket, then reassign the desk owner in the Positions tab without rewriting custody.
+              </div>
+            </div>
+            <div style={{ minWidth:'260px' }}>
+              <div style={{ color:PALETTE.textDim, fontSize:'10px', textTransform:'uppercase', letterSpacing:'1.2px', marginBottom:'6px' }}>Statement Held Account</div>
+              <select
+                value={futuresStatementImportAccount}
+                onChange={(e) => setFuturesStatementImportAccount(e.target.value)}
+                style={{ ...S.input, width:'100%', minWidth:'240px' }}
+              >
+                <option value={FUTURES_STATEMENT_ACCOUNT_AUTO}>
+                  Auto-detect ({selectedAccount !== 'ALL' ? `defaults to ${formatShortAccountName(selectedAccount)}` : 'uses file/account context'})
+                </option>
+                <option value={FUTURES_CLEARING_ACCOUNT}>Futures Clearing Bucket</option>
+                {accountList.map((accountName) => (
+                  <option key={accountName} value={accountName}>
+                    {formatShortAccountName(accountName)}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div style={S.grid(4)}>
             {[
               {
                 key: 'positions', label: 'POSITIONS FILE', hint: 'All-Accounts-Positions-*.csv',
                 desc: 'Export from Schwab: Accounts → All Accounts → Positions → Export. Contains current holdings, prices, and market values for all accounts.',
                 handler: handlePositionsUpload, accept: '.csv,.CSV',
                 fields: ['Symbol', 'Description', 'Qty', 'Price', 'Market Value', 'Cost Basis', 'Asset Type'],
+              },
+              {
+                key: 'futures', label: 'FUTURES STATEMENT FILE', hint: 'AccountStatement_*.csv',
+                desc: 'Export from Schwab account statement CSV. Imports the Futures and Futures Options sections as supplemental live positions so they persist alongside the normal positions file.',
+                handler: handleFuturesStatementUpload, accept: '.csv,.CSV',
+                fields: ['Futures: Symbol', 'SPC', 'Qty', 'Trade Price', 'Mark', 'P/L Day'],
               },
               {
                 key: 'balances', label: 'BALANCE HISTORY FILES', hint: 'Account_XXXX###_Balances_*.CSV',
