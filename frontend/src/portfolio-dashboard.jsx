@@ -33,6 +33,7 @@ const SECTOR_OVERRIDE_AUTO = "__AUTO__";
 const POSITION_ATTRIBUTION_HELD = "__HELD_ACCOUNT__";
 const FUTURES_STATEMENT_ACCOUNT_AUTO = "__AUTO_FUTURES_ACCOUNT__";
 const FUTURES_CLEARING_ACCOUNT = "Futures_Clearing ...FUT";
+const DEFAULT_FUTURES_HELD_ACCOUNT_SUFFIX = "145";
 const POSITION_SOURCE_STANDARD = "positions_csv";
 const POSITION_SOURCE_FUTURES = "futures_statement";
 
@@ -614,6 +615,13 @@ function buildEmptyAccountData() {
   return { positions: [], total: 0, cost: 0, cash: 0 };
 }
 
+function findDefaultFuturesHeldAccount(knownAccounts = []) {
+  const uniqueAccounts = [...new Set((knownAccounts || []).filter(Boolean))];
+  const exact = uniqueAccounts.find((accountName) => accountName.endsWith(`...${DEFAULT_FUTURES_HELD_ACCOUNT_SUFFIX}`));
+  if (exact) return exact;
+  return normalizeAccountName(`Limit Liability Company ...${DEFAULT_FUTURES_HELD_ACCOUNT_SUFFIX}`);
+}
+
 function chooseFuturesStatementAccount(text, accountHint, preferredAccount, knownAccounts = [], selectedAccount = 'ALL') {
   if (preferredAccount && preferredAccount !== FUTURES_STATEMENT_ACCOUNT_AUTO) return preferredAccount;
 
@@ -632,6 +640,9 @@ function chooseFuturesStatementAccount(text, accountHint, preferredAccount, know
     const exact = [...new Set(knownAccounts.filter(Boolean))].find((accountName) => accountName.endsWith(`...${filenameMatch[1]}`));
     if (exact) return exact;
   }
+
+  const defaultHeldAccount = findDefaultFuturesHeldAccount(knownAccounts);
+  if (defaultHeldAccount) return defaultHeldAccount;
 
   if (selectedAccount && selectedAccount !== 'ALL') return selectedAccount;
   if (knownAccounts.length === 1) return knownAccounts[0];
@@ -686,6 +697,91 @@ function mergeSupplementalFuturesAccounts(existingAccounts = {}, parsedAccounts 
     };
   });
   return next;
+}
+
+function migrateLegacyFuturesClearingAccount(accounts = {}, sectorOverrides = {}, positionAttributionOverrides = {}) {
+  const clearingAccount = accounts?.[FUTURES_CLEARING_ACCOUNT];
+  const futuresRows = (clearingAccount?.positions || []).filter((position) => position?.source === POSITION_SOURCE_FUTURES);
+  if (!futuresRows.length) {
+    return {
+      accounts,
+      sectorOverrides,
+      positionAttributionOverrides,
+      migrated: false,
+    };
+  }
+
+  const targetAccount = findDefaultFuturesHeldAccount([
+    ...Object.keys(accounts || {}).filter((name) => name && name !== FUTURES_CLEARING_ACCOUNT),
+  ]);
+  if (!targetAccount || targetAccount === FUTURES_CLEARING_ACCOUNT) {
+    return {
+      accounts,
+      sectorOverrides,
+      positionAttributionOverrides,
+      migrated: false,
+    };
+  }
+
+  const nextAccounts = { ...(accounts || {}) };
+  const targetData = nextAccounts[targetAccount] || buildEmptyAccountData();
+  const clearingNonFutures = (clearingAccount?.positions || []).filter((position) => position?.source !== POSITION_SOURCE_FUTURES);
+  const movedRows = futuresRows.map((position) => ({ ...position, account: targetAccount }));
+
+  nextAccounts[targetAccount] = {
+    ...buildEmptyAccountData(),
+    ...targetData,
+    positions: [...(targetData.positions || []), ...movedRows],
+  };
+
+  if (clearingNonFutures.length || Number(clearingAccount?.total) || Number(clearingAccount?.cost) || Number(clearingAccount?.cash)) {
+    nextAccounts[FUTURES_CLEARING_ACCOUNT] = {
+      ...buildEmptyAccountData(),
+      ...clearingAccount,
+      positions: clearingNonFutures,
+    };
+  } else {
+    delete nextAccounts[FUTURES_CLEARING_ACCOUNT];
+  }
+
+  const symbolsToMove = new Set(
+    futuresRows.flatMap((position) => [
+      position?.symbol,
+      position?.normalizedSymbol,
+      position?.overrideSymbol,
+      position?.baseSymbol,
+    ].filter(Boolean)),
+  );
+
+  const nextSectorOverrides = { ...(sectorOverrides || {}) };
+  symbolsToMove.forEach((symbol) => {
+    const sourceKey = getSectorOverrideKey(FUTURES_CLEARING_ACCOUNT, symbol);
+    const targetKey = getSectorOverrideKey(targetAccount, symbol);
+    if (sourceKey in nextSectorOverrides) {
+      if (!(targetKey in nextSectorOverrides)) nextSectorOverrides[targetKey] = nextSectorOverrides[sourceKey];
+      delete nextSectorOverrides[sourceKey];
+    }
+  });
+
+  const nextPositionAttributionOverrides = { ...(positionAttributionOverrides || {}) };
+  futuresRows.forEach((position) => {
+    const underlying = getPositionUnderlying(position);
+    if (!underlying) return;
+    const sourceKey = `${FUTURES_CLEARING_ACCOUNT}::${underlying}`;
+    const targetKey = `${targetAccount}::${underlying}`;
+    if (sourceKey in nextPositionAttributionOverrides) {
+      if (!(targetKey in nextPositionAttributionOverrides)) nextPositionAttributionOverrides[targetKey] = nextPositionAttributionOverrides[sourceKey];
+      delete nextPositionAttributionOverrides[sourceKey];
+    }
+  });
+
+  return {
+    accounts: nextAccounts,
+    sectorOverrides: nextSectorOverrides,
+    positionAttributionOverrides: nextPositionAttributionOverrides,
+    migrated: true,
+    targetAccount,
+  };
 }
 
 function parsePositionsCSV(text) {
@@ -2598,6 +2694,17 @@ export default function App() {
   useEffect(() => {
     if (selectedAccount !== 'ALL' && !accountList.includes(selectedAccount)) setSelectedAccount('ALL');
   }, [accountList, selectedAccount]);
+
+  useEffect(() => {
+    if (!sharedStateReady) return;
+    const migration = migrateLegacyFuturesClearingAccount(accounts, sectorOverrides, positionAttributionOverrides);
+    if (!migration.migrated) return;
+    markSharedWorkspaceDirty(`Migrating futures held account to ${formatShortAccountName(migration.targetAccount)}`);
+    setAccounts(migration.accounts);
+    setSectorOverrides(migration.sectorOverrides);
+    setPositionAttributionOverrides(migration.positionAttributionOverrides);
+    if (selectedAccount === FUTURES_CLEARING_ACCOUNT) setSelectedAccount(migration.targetAccount || 'ALL');
+  }, [accounts, markSharedWorkspaceDirty, positionAttributionOverrides, sectorOverrides, selectedAccount, sharedStateReady]);
 
   useEffect(() => {
     let cancelled = false;
@@ -5202,7 +5309,7 @@ export default function App() {
                 style={{ ...S.input, width:'100%', minWidth:'240px' }}
               >
                 <option value={FUTURES_STATEMENT_ACCOUNT_AUTO}>
-                  Auto-detect ({selectedAccount !== 'ALL' ? `defaults to ${formatShortAccountName(selectedAccount)}` : 'uses file/account context'})
+                  Auto-detect (defaults to ...145 when available)
                 </option>
                 <option value={FUTURES_CLEARING_ACCOUNT}>Futures Clearing Bucket</option>
                 {accountList.map((accountName) => (
