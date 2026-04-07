@@ -218,6 +218,14 @@ const SHARED_DASHBOARD_POLL_MS = 60000;
 const SHARED_DASHBOARD_POLL_JITTER_MS = 15000;
 const SHARED_DASHBOARD_SAVE_DEBOUNCE_MS = 900;
 
+function todayIsoLocal() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 function loadJSONStorage(key, fallback) {
   if (typeof window === "undefined") return fallback;
   try {
@@ -395,6 +403,29 @@ function asPlainObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
 
+function normalizeDateMap(rawMap) {
+  const normalized = {};
+  Object.entries(asPlainObject(rawMap)).forEach(([key, value]) => {
+    const iso = normalizeDateInput(value);
+    if (key && iso) normalized[key] = iso;
+  });
+  return normalized;
+}
+
+function normalizeFuturesPnlSnapshots(rawSnapshots) {
+  const normalized = {};
+  Object.entries(asPlainObject(rawSnapshots)).forEach(([key, snapshotMap]) => {
+    const nextMap = {};
+    Object.entries(asPlainObject(snapshotMap)).forEach(([date, pnl]) => {
+      const iso = normalizeDateInput(date);
+      const numeric = Number(pnl);
+      if (iso && Number.isFinite(numeric)) nextMap[iso] = numeric;
+    });
+    if (Object.keys(nextMap).length) normalized[key] = nextMap;
+  });
+  return normalized;
+}
+
 function normalizeSharedDashboardState(rawState) {
   const accounts = asPlainObject(rawState?.accounts);
   const balanceHistory = asPlainObject(rawState?.balanceHistory);
@@ -408,6 +439,8 @@ function normalizeSharedDashboardState(rawState) {
     sectorOverrides: asPlainObject(rawState?.sectorOverrides),
     positionAttributionOverrides: asPlainObject(rawState?.positionAttributionOverrides),
     realizedTradeAttributionOverrides: asPlainObject(rawState?.realizedTradeAttributionOverrides),
+    positionTransferEffectiveDates: normalizeDateMap(rawState?.positionTransferEffectiveDates),
+    futuresPnlSnapshots: normalizeFuturesPnlSnapshots(rawState?.futuresPnlSnapshots),
   };
 }
 
@@ -421,6 +454,8 @@ function buildSharedDashboardStatePayload(rawState) {
     sectorOverrides: normalized.sectorOverrides,
     positionAttributionOverrides: normalized.positionAttributionOverrides,
     realizedTradeAttributionOverrides: normalized.realizedTradeAttributionOverrides,
+    positionTransferEffectiveDates: normalized.positionTransferEffectiveDates,
+    futuresPnlSnapshots: normalized.futuresPnlSnapshots,
   };
 }
 
@@ -442,6 +477,8 @@ function hasSharedDashboardStateContent(rawState) {
     || Object.keys(normalized.sectorOverrides || {}).length
     || Object.keys(normalized.positionAttributionOverrides || {}).length
     || Object.keys(normalized.realizedTradeAttributionOverrides || {}).length
+    || Object.keys(normalized.positionTransferEffectiveDates || {}).length
+    || Object.keys(normalized.futuresPnlSnapshots || {}).length
   );
 }
 
@@ -578,6 +615,23 @@ function parseStatementMultiplier(value) {
   return Number.isFinite(parsed) && parsed !== 0 ? Math.abs(parsed) : 1;
 }
 
+function extractStatementDate(text, accountHint = '') {
+  const candidates = [String(accountHint || ''), String(text || '')];
+  for (const candidate of candidates) {
+    const isoMatch = candidate.match(/\b(20\d{2})[-_/](\d{1,2})[-_/](\d{1,2})\b/);
+    if (isoMatch) {
+      const [, year, month, day] = isoMatch;
+      return normalizeDateInput(`${year}-${month}-${day}`);
+    }
+    const usMatch = candidate.match(/\b(\d{1,2})[-/](\d{1,2})[-/](20\d{2})\b/);
+    if (usMatch) {
+      const [, month, day, year] = usMatch;
+      return normalizeDateInput(`${month}/${day}/${year}`);
+    }
+  }
+  return todayIsoLocal();
+}
+
 function getFutureRootSymbol(symbol) {
   const raw = String(symbol || '').trim().toUpperCase();
   if (!raw) return '';
@@ -694,6 +748,17 @@ function mergeSupplementalFuturesAccounts(existingAccounts = {}, parsedAccounts 
       cost: Number(incoming?.cost ?? existing.cost) || 0,
       cash: Number(incoming?.cash ?? existing.cash) || 0,
       positions: mergedPositions,
+    };
+  });
+  return next;
+}
+
+function mergeFuturesPnlSnapshots(existingSnapshots = {}, incomingSnapshots = {}) {
+  const next = normalizeFuturesPnlSnapshots(existingSnapshots);
+  Object.entries(normalizeFuturesPnlSnapshots(incomingSnapshots)).forEach(([key, snapshotMap]) => {
+    next[key] = {
+      ...(next[key] || {}),
+      ...snapshotMap,
     };
   });
   return next;
@@ -865,9 +930,11 @@ function parseFuturesStatementCSV(text, {
   selectedAccount = 'ALL',
 } = {}) {
   const rows = parseCSVRows(text);
+  const statementDate = extractStatementDate(text, accountHint);
   const accountName = chooseFuturesStatementAccount(text, accountHint, preferredAccount, existingAccountNames, selectedAccount);
   const accounts = { [accountName]: buildEmptyAccountData() };
-  if (!rows.length) return { accounts, accountName, importedCount: 0 };
+  const futuresPnlSnapshots = {};
+  if (!rows.length) return { accounts, accountName, importedCount: 0, statementDate, futuresPnlSnapshots };
 
   const isSectionHeader = (row = []) => {
     if (!row.length) return false;
@@ -918,9 +985,18 @@ function parseFuturesStatementCSV(text, {
     });
   }
 
-  const pushPosition = (position) => {
+  const pushPosition = (position, snapshotPnl = null) => {
     if (!position || !position.symbol || !Number.isFinite(position.qty) || position.qty === 0) return;
     accounts[accountName].positions.push(position);
+    if (position?.source === POSITION_SOURCE_FUTURES && Number.isFinite(Number(snapshotPnl))) {
+      const snapshotKey = getPositionSnapshotKey(position);
+      if (snapshotKey) {
+        futuresPnlSnapshots[snapshotKey] = {
+          ...(futuresPnlSnapshots[snapshotKey] || {}),
+          [statementDate]: Number(snapshotPnl) + Number(futuresPnlSnapshots[snapshotKey]?.[statementDate] || 0),
+        };
+      }
+    }
   };
 
   const futuresSection = readSectionRows('Futures');
@@ -952,7 +1028,7 @@ function parseFuturesStatementCSV(text, {
       const mainSector = resolveStatementFutureSector(rawSymbol, description);
       const expiryText = String(row[expIdx] || '').replace(/"/g, '').trim();
 
-      pushPosition({
+      const position = {
         account: accountName,
         symbol: rawSymbol,
         normalizedSymbol: rawSymbol,
@@ -977,7 +1053,8 @@ function parseFuturesStatementCSV(text, {
         marginReq: Number.isFinite(profitRow.marginReq) ? profitRow.marginReq : null,
         pnlDay: Number.isFinite(profitRow.pnlDay) ? profitRow.pnlDay : null,
         pnlYtd: Number.isFinite(profitRow.pnlYtd) ? profitRow.pnlYtd : null,
-      });
+      };
+      pushPosition(position, pnlOpen);
     });
   }
 
@@ -1017,7 +1094,7 @@ function parseFuturesStatementCSV(text, {
       ].filter(Boolean).join(' · ');
       const mainSector = resolveStatementFutureSector(rawUnderlying, contractDescription);
 
-      pushPosition({
+      const position = {
         account: accountName,
         symbol: optionCode,
         normalizedSymbol: optionCode,
@@ -1042,7 +1119,8 @@ function parseFuturesStatementCSV(text, {
         strike: parseStatementNumber(row[strikeIdx]),
         optionType: String(row[typeIdx] || '').replace(/"/g, '').trim().toUpperCase() || null,
         multiplier,
-      });
+      };
+      pushPosition(position, mktVal - costBasis);
     });
   }
 
@@ -1050,6 +1128,8 @@ function parseFuturesStatementCSV(text, {
     accounts,
     accountName,
     importedCount: accounts[accountName].positions.length,
+    statementDate,
+    futuresPnlSnapshots,
   };
 }
 
@@ -1338,7 +1418,7 @@ function getPositionPnlValue(position) {
   const marketValue = Number(position?.mktVal);
   const costBasis = Number(position?.costBasis);
   if (!Number.isFinite(marketValue)) return NaN;
-  if (isFuturePosition(position)) return marketValue;
+  if (isFuturePosition(position) && !isOptionPosition(position)) return marketValue;
   return marketValue - (Number.isFinite(costBasis) ? costBasis : 0);
 }
 
@@ -1414,6 +1494,29 @@ function buildMonotonicCarrySeries(dates, finalValue, {
   return series;
 }
 
+function buildTransferDeltaSeries(rawSeries, dates, effectiveDate, finalValue = null) {
+  const orderedDates = Array.isArray(dates) ? dates : [];
+  const points = Array.isArray(rawSeries)
+    ? rawSeries.filter(([date, value]) => date && Number.isFinite(value))
+    : [];
+  if (!orderedDates.length) return [];
+  if (!effectiveDate) return points;
+
+  const baseline = getValueOnOrBefore(points, effectiveDate) ?? getFirstValueOnOrAfter(points, effectiveDate)?.[1] ?? 0;
+  const targetFinal = Number.isFinite(finalValue)
+    ? (finalValue - baseline)
+    : (((points[points.length - 1]?.[1]) ?? 0) - baseline);
+
+  return orderedDates.map((date) => {
+    if (date <= effectiveDate) return [date, 0];
+    const value = getValueOnOrBefore(points, date);
+    if (!Number.isFinite(value)) return [date, 0];
+    return [date, value - baseline];
+  }).map(([date, value], index, arr) => (
+    index === arr.length - 1 ? [date, targetFinal] : [date, value]
+  ));
+}
+
 function normalizePriceBackedCarrySeries(series, finalValue) {
   const points = Array.isArray(series)
     ? series.filter(([date, value]) => date && Number.isFinite(value))
@@ -1433,9 +1536,18 @@ function normalizePriceBackedCarrySeries(series, finalValue) {
   ));
 }
 
-function estimateAttributedPositionPnlSeries(position, dates, sourceHistory, priceSeries) {
+function estimateAttributedPositionPnlSeries(position, dates, sourceHistory, priceSeries, {
+  effectiveDate = null,
+  futuresSnapshotSeries = [],
+} = {}) {
   const currentPnl = getPositionPnlValue(position);
   if (!Number.isFinite(currentPnl) || !dates?.length || Math.abs(currentPnl) < 0.0001) return { series: [], method: 'none' };
+
+  if (futuresSnapshotSeries?.length) {
+    const rawSeries = expandHistoryToDates(futuresSnapshotSeries, dates);
+    const series = buildTransferDeltaSeries(rawSeries, dates, effectiveDate, currentPnl);
+    if (series.length) return { series, method: 'snapshot' };
+  }
 
   const latestPriceFromSeries = priceSeries?.[priceSeries.length - 1]?.[1];
   const referencePrice = Number(position?.price);
@@ -1459,13 +1571,14 @@ function estimateAttributedPositionPnlSeries(position, dates, sourceHistory, pri
           return [date, signedExposure * (price - entryPrice)];
         })
         .filter(Boolean);
-      const series = normalizePriceBackedCarrySeries(rawSeries, currentPnl);
+      const normalizedSeries = normalizePriceBackedCarrySeries(rawSeries, currentPnl);
+      const series = buildTransferDeltaSeries(normalizedSeries, dates, effectiveDate, currentPnl);
       if (series.length) return { series, method: 'price' };
     }
   }
 
   if (sourceHistory?.length) {
-    const series = buildMonotonicCarrySeries(
+    const rawSeries = buildMonotonicCarrySeries(
       dates,
       currentPnl,
       {
@@ -1473,11 +1586,12 @@ function estimateAttributedPositionPnlSeries(position, dates, sourceHistory, pri
         lastStepDelta: Number(position?.pnlDay),
       },
     );
+    const series = buildTransferDeltaSeries(rawSeries, dates, effectiveDate, currentPnl);
     if (series.length) return { series, method: 'account' };
   }
 
   return {
-    series: buildMonotonicCarrySeries(dates, currentPnl),
+    series: buildTransferDeltaSeries(buildMonotonicCarrySeries(dates, currentPnl), dates, effectiveDate, currentPnl),
     method: 'linear',
   };
 }
@@ -1695,6 +1809,13 @@ function getPositionUnderlying(position) {
     .toUpperCase();
 }
 
+function getPositionSnapshotKey(position) {
+  const heldAccount = getPositionHeldAccount(position);
+  const symbol = String(position?.symbol || position?.normalizedSymbol || '').trim().toUpperCase();
+  const assetType = String(position?.assetType || '').trim().toUpperCase();
+  return heldAccount && symbol ? `${heldAccount}::${symbol}::${assetType}` : '';
+}
+
 function getPositionHeldAccount(position) {
   return String(position?.custodyAccount || position?.account || '').trim();
 }
@@ -1727,6 +1848,25 @@ function getPositionAttributionKey(position) {
   const heldAccount = getPositionHeldAccount(position);
   const underlying = getPositionUnderlying(position);
   return heldAccount && underlying ? `${heldAccount}::${underlying}` : '';
+}
+
+function getFuturesSnapshotSeries(position, futuresPnlSnapshots = {}) {
+  const snapshotKey = getPositionSnapshotKey(position);
+  const snapshotMap = snapshotKey ? futuresPnlSnapshots?.[snapshotKey] : null;
+  if (!snapshotMap) return [];
+  return Object.entries(snapshotMap)
+    .map(([date, pnl]) => [normalizeDateInput(date), Number(pnl)])
+    .filter(([date, pnl]) => date && Number.isFinite(pnl))
+    .sort((a, b) => a[0].localeCompare(b[0]));
+}
+
+function getPositionTransferEffectiveDate(position, positionTransferEffectiveDates = {}, futuresPnlSnapshots = {}) {
+  const key = getPositionAttributionKey(position);
+  const explicitDate = key ? normalizeDateInput(positionTransferEffectiveDates?.[key]) : null;
+  if (explicitDate) return explicitDate;
+  if (!isFuturePosition(position) && position?.source !== POSITION_SOURCE_FUTURES) return null;
+  const snapshotSeries = getFuturesSnapshotSeries(position, futuresPnlSnapshots);
+  return snapshotSeries[0]?.[0] || null;
 }
 
 function getPositionGroupKey(position, accountScope = 'ALL') {
@@ -2273,6 +2413,8 @@ export default function App() {
     sectorOverrides: persisted.sectorOverrides,
     positionAttributionOverrides: persisted.positionAttributionOverrides,
     realizedTradeAttributionOverrides: persisted.realizedTradeAttributionOverrides,
+    positionTransferEffectiveDates: persisted.positionTransferEffectiveDates,
+    futuresPnlSnapshots: persisted.futuresPnlSnapshots,
   }));
   const sharedStateSnapshotRef = useRef(buildSharedDashboardStatePayload({}));
   const workspaceStateRef = useRef(sharedSeedRef.current);
@@ -2305,6 +2447,8 @@ export default function App() {
   const [sectorOverrides, setSectorOverrides] = useState(sharedSeedRef.current.sectorOverrides);
   const [positionAttributionOverrides, setPositionAttributionOverrides] = useState(sharedSeedRef.current.positionAttributionOverrides);
   const [realizedTradeAttributionOverrides, setRealizedTradeAttributionOverrides] = useState(sharedSeedRef.current.realizedTradeAttributionOverrides);
+  const [positionTransferEffectiveDates, setPositionTransferEffectiveDates] = useState(sharedSeedRef.current.positionTransferEffectiveDates);
+  const [futuresPnlSnapshots, setFuturesPnlSnapshots] = useState(sharedSeedRef.current.futuresPnlSnapshots);
   const [performanceAccountingMode, setPerformanceAccountingMode] = useState(persisted.performanceAccountingMode || 'desk');
   const [performanceChartMode, setPerformanceChartMode] = useState(persisted.performanceChartMode || 'line');
   const [futuresStatementImportAccount, setFuturesStatementImportAccount] = useState(FUTURES_STATEMENT_ACCOUNT_AUTO);
@@ -2326,6 +2470,8 @@ export default function App() {
     setSectorOverrides(normalized.sectorOverrides);
     setPositionAttributionOverrides(normalized.positionAttributionOverrides);
     setRealizedTradeAttributionOverrides(normalized.realizedTradeAttributionOverrides);
+    setPositionTransferEffectiveDates(normalized.positionTransferEffectiveDates);
+    setFuturesPnlSnapshots(normalized.futuresPnlSnapshots);
     return normalized;
   }, []);
 
@@ -2367,8 +2513,10 @@ export default function App() {
       sectorOverrides,
       positionAttributionOverrides,
       realizedTradeAttributionOverrides,
+      positionTransferEffectiveDates,
+      futuresPnlSnapshots,
     });
-  }, [accounts, balanceHistory, positionAttributionOverrides, realizedTradeAttributionOverrides, realizedTrades, sectorOverrides, sectorTargetsByAccount]);
+  }, [accounts, balanceHistory, futuresPnlSnapshots, positionAttributionOverrides, positionTransferEffectiveDates, realizedTradeAttributionOverrides, realizedTrades, sectorOverrides, sectorTargetsByAccount]);
 
   // Load SPX and sector ETF benchmarks using the proxied Stooq daily history feed.
   const loadBenchmarks = useCallback(async ({ forceRefresh = false, spxOnly = false } = {}) => {
@@ -2623,7 +2771,7 @@ export default function App() {
     }, SHARED_DASHBOARD_SAVE_DEBOUNCE_MS);
 
     return () => window.clearTimeout(timeoutId);
-  }, [accounts, balanceHistory, positionAttributionOverrides, realizedTradeAttributionOverrides, realizedTrades, saveSharedDashboardState, sectorOverrides, sectorTargetsByAccount, sharedStateReady]);
+  }, [accounts, balanceHistory, futuresPnlSnapshots, positionAttributionOverrides, positionTransferEffectiveDates, realizedTradeAttributionOverrides, realizedTrades, saveSharedDashboardState, sectorOverrides, sectorTargetsByAccount, sharedStateReady]);
 
   useEffect(() => {
     saveJSONStorage(APP_STATE_STORAGE_KEY, {
@@ -2641,11 +2789,13 @@ export default function App() {
       sectorOverrides,
       positionAttributionOverrides,
       realizedTradeAttributionOverrides,
+      positionTransferEffectiveDates,
+      futuresPnlSnapshots,
       performanceAccountingMode,
       performanceChartMode,
       performanceChartSelection,
     });
-  }, [timeframe, sectorTimeframe, realizedTimeframe, accounts, balanceHistory, realizedTrades, selectedAccount, showBenchmark, selectedSector, riskMatrixMode, sectorTargetsByAccount, sectorOverrides, positionAttributionOverrides, realizedTradeAttributionOverrides, performanceAccountingMode, performanceChartMode, performanceChartSelection]);
+  }, [timeframe, sectorTimeframe, realizedTimeframe, accounts, balanceHistory, futuresPnlSnapshots, realizedTrades, selectedAccount, showBenchmark, selectedSector, riskMatrixMode, sectorTargetsByAccount, sectorOverrides, positionAttributionOverrides, positionTransferEffectiveDates, realizedTradeAttributionOverrides, performanceAccountingMode, performanceChartMode, performanceChartSelection]);
 
   useEffect(() => {
     saveJSONStorage(SECURITY_HISTORY_STORAGE_KEY, securityHistoryData);
@@ -2667,6 +2817,8 @@ export default function App() {
     setSectorOverrides({});
     setPositionAttributionOverrides({});
     setRealizedTradeAttributionOverrides({});
+    setPositionTransferEffectiveDates({});
+    setFuturesPnlSnapshots({});
     setSpxData([]);
     setSectorBenchmarkData({});
     setSecurityHistoryData({});
@@ -2722,9 +2874,10 @@ export default function App() {
         }
         markSharedWorkspaceDirty('Futures statement upload pending sync');
         setAccounts((prev) => mergeSupplementalFuturesAccounts(prev, parsed.accounts));
+        setFuturesPnlSnapshots((prev) => mergeFuturesPnlSnapshots(prev, parsed.futuresPnlSnapshots));
         setUploadStatus((s) => ({
           ...s,
-          futures: `✓ ${parsed.importedCount} futures lines imported to ${formatShortAccountName(parsed.accountName)}`,
+          futures: `✓ ${parsed.importedCount} futures lines imported to ${formatShortAccountName(parsed.accountName)} (${parsed.statementDate})`,
         }));
       } catch (err) {
         setUploadStatus((s) => ({ ...s, futures: `✗ Parse error: ${err.message}` }));
@@ -2800,6 +2953,10 @@ export default function App() {
     const all = [...new Set([...fromPositions, ...fromBalances])].filter(k=>k!=='ALL');
     return all;
   }, [accounts, balanceHistory]);
+  const latestBalanceSnapshotDate = useMemo(
+    () => getLatestSeriesDate(Object.values(balanceHistory || {})),
+    [balanceHistory],
+  );
 
   useEffect(() => {
     setPerformanceChartSelection((prev) => {
@@ -3000,6 +3157,17 @@ export default function App() {
     return balanceHistory[selectedAccount] || [];
   }, [selectedAccount, balanceHistory]);
 
+  const getSuggestedPositionTransferDate = useCallback((positionInput) => {
+    const positions = Array.isArray(positionInput) ? positionInput : [positionInput];
+    let latestSnapshotDate = null;
+    positions.forEach((position) => {
+      const snapshotSeries = getFuturesSnapshotSeries(position, futuresPnlSnapshots);
+      const candidate = snapshotSeries[snapshotSeries.length - 1]?.[0] || null;
+      if (candidate && (!latestSnapshotDate || candidate > latestSnapshotDate)) latestSnapshotDate = candidate;
+    });
+    return latestSnapshotDate || latestBalanceSnapshotDate || todayIsoLocal();
+  }, [futuresPnlSnapshots, latestBalanceSnapshotDate]);
+
   const selectedPerformanceAccounts = useMemo(
     () => accountList.filter((accountName) => performanceChartSelection.accounts?.[accountName]),
     [accountList, performanceChartSelection],
@@ -3175,6 +3343,7 @@ export default function App() {
         transferCount: transferredPositions.length + transferredRealizedTrades.length,
         openTransferCount: transferredPositions.length,
         closedTransferCount: transferredRealizedTrades.length,
+        snapshotBackedCount: 0,
         priceBackedCount: 0,
         accountBackedCount: 0,
         linearCount: 0,
@@ -3205,6 +3374,7 @@ export default function App() {
       ]),
     );
 
+    let snapshotBackedCount = 0;
     let priceBackedCount = 0;
     let accountBackedCount = 0;
     let linearCount = 0;
@@ -3216,15 +3386,21 @@ export default function App() {
       if (!heldAccount || !targetAccount || heldAccount === targetAccount) return;
 
       const sourceHistory = expandedBaseByAccount[heldAccount] || [];
+      const effectiveDate = getPositionTransferEffectiveDate(position, positionTransferEffectiveDates, futuresPnlSnapshots);
       const { series, method } = estimateAttributedPositionPnlSeries(
         position,
         globalDates,
         sourceHistory,
         getPositionHistorySeries(position),
+        {
+          effectiveDate,
+          futuresSnapshotSeries: getFuturesSnapshotSeries(position, futuresPnlSnapshots),
+        },
       );
 
       if (!series.length) return;
-      if (method === 'price') priceBackedCount += 1;
+      if (method === 'snapshot') snapshotBackedCount += 1;
+      else if (method === 'price') priceBackedCount += 1;
       else if (method === 'account') accountBackedCount += 1;
       else if (method === 'linear') linearCount += 1;
       else flatCount += 1;
@@ -3301,12 +3477,13 @@ export default function App() {
       transferCount: transferredPositions.length + transferredRealizedTrades.length,
       openTransferCount: transferredPositions.length,
       closedTransferCount: transferredRealizedTrades.length,
+      snapshotBackedCount,
       priceBackedCount,
       accountBackedCount,
       linearCount,
       flatCount,
     };
-  }, [accountList, getPositionHistorySeries, getRealizedTradeHistorySeries, legalActivePerformanceModel, legalAggregatePerformanceModel, legalPerformanceModelsByAccount, selectedAccount, selectedPerformanceAccounts, transferredPositions, transferredRealizedTrades]);
+  }, [accountList, futuresPnlSnapshots, getPositionHistorySeries, getRealizedTradeHistorySeries, legalActivePerformanceModel, legalAggregatePerformanceModel, legalPerformanceModelsByAccount, positionTransferEffectiveDates, selectedAccount, selectedPerformanceAccounts, transferredPositions, transferredRealizedTrades]);
 
   const performanceModelSource = useMemo(
     () => (performanceAccountingMode === 'desk'
@@ -3986,6 +4163,7 @@ export default function App() {
   const updatePositionAttributionOverride = useCallback((positionInput, nextAccount) => {
     const positions = Array.isArray(positionInput) ? positionInput : [positionInput];
     markSharedWorkspaceDirty('Desk attribution pending sync');
+    const defaultEffectiveDate = nextAccount ? getSuggestedPositionTransferDate(positions) : '';
     setPositionAttributionOverrides((prev) => {
       const next = { ...prev };
       positions.forEach((position) => {
@@ -3997,6 +4175,39 @@ export default function App() {
           return;
         }
         next[key] = nextAccount;
+      });
+      return next;
+    });
+    setPositionTransferEffectiveDates((prev) => {
+      const next = { ...prev };
+      positions.forEach((position) => {
+        const key = getPositionAttributionKey(position);
+        const heldAccount = getPositionHeldAccount(position);
+        if (!key || !heldAccount) return;
+        if (!nextAccount || nextAccount === heldAccount) {
+          if (key in next) delete next[key];
+          return;
+        }
+        if (!next[key] && defaultEffectiveDate) next[key] = defaultEffectiveDate;
+      });
+      return next;
+    });
+  }, [getSuggestedPositionTransferDate, markSharedWorkspaceDirty]);
+
+  const updatePositionTransferEffectiveDate = useCallback((positionInput, nextDate) => {
+    const positions = Array.isArray(positionInput) ? positionInput : [positionInput];
+    const normalizedDate = normalizeDateInput(nextDate);
+    markSharedWorkspaceDirty('Transfer effective date pending sync');
+    setPositionTransferEffectiveDates((prev) => {
+      const next = { ...prev };
+      positions.forEach((position) => {
+        const key = getPositionAttributionKey(position);
+        if (!key) return;
+        if (!normalizedDate) {
+          if (key in next) delete next[key];
+          return;
+        }
+        next[key] = normalizedDate;
       });
       return next;
     });
@@ -4434,7 +4645,7 @@ export default function App() {
               <div style={{ color:PALETTE.textDim, fontSize:'10px', marginBottom:'10px' }}>
                 Desk NAV reallocates routed P/L from {deskPerformanceModel.transferCount} routed holdings
                 {' '}({deskPerformanceModel.openTransferCount || 0} open · {deskPerformanceModel.closedTransferCount || 0} closed).
-                {' '}Direct price history: {deskPerformanceModel.priceBackedCount} · account-return fallback: {deskPerformanceModel.accountBackedCount} · linear carry fallback: {deskPerformanceModel.linearCount || 0} · flat fallback: {deskPerformanceModel.flatCount}
+                {' '}Futures snapshot carry: {deskPerformanceModel.snapshotBackedCount || 0} · direct price history: {deskPerformanceModel.priceBackedCount} · account-return fallback: {deskPerformanceModel.accountBackedCount} · linear carry fallback: {deskPerformanceModel.linearCount || 0} · flat fallback: {deskPerformanceModel.flatCount}
               </div>
             )}
             <div style={{ display:'flex', gap:'8px', flexWrap:'wrap' }}>
@@ -4610,6 +4821,10 @@ export default function App() {
                     const attributionChanged = isGroup
                       ? entry.attributionChanged
                       : getPositionDisplayAccount(row) !== getPositionHeldAccount(row);
+                    const transferReferencePosition = isGroup ? entry.rows?.[0] : row;
+                    const transferEffectiveDate = attributionChanged
+                      ? getPositionTransferEffectiveDate(transferReferencePosition, positionTransferEffectiveDates, futuresPnlSnapshots)
+                      : '';
                     const attributionValue = attributionChanged ? attributedAccountName : POSITION_ATTRIBUTION_HELD;
                     const badgeColor = isGroup
                       ? PALETTE.accentMuted
@@ -4684,23 +4899,36 @@ export default function App() {
                               </span>
                             </div>
                             {!entry.child ? (
-                              <select
-                                value={attributionValue || POSITION_ATTRIBUTION_HELD}
-                                onChange={(e) => updatePositionAttributionOverride(
-                                  isGroup ? entry.rows : row,
-                                  e.target.value === POSITION_ATTRIBUTION_HELD ? '' : e.target.value,
-                                )}
-                                style={{ ...S.input, padding:'4px 6px', fontSize:'10px', minWidth:'176px' }}
-                              >
-                                <option value={POSITION_ATTRIBUTION_HELD}>
-                                  {isGroup ? 'Held Accounts (reset each line)' : `Held Account (${heldAccountLabel})`}
-                                </option>
-                                {accountList.map((accountName) => (
-                                  <option key={accountName} value={accountName}>
-                                    {formatShortAccountName(accountName)}
+                              <>
+                                <select
+                                  value={attributionValue || POSITION_ATTRIBUTION_HELD}
+                                  onChange={(e) => updatePositionAttributionOverride(
+                                    isGroup ? entry.rows : row,
+                                    e.target.value === POSITION_ATTRIBUTION_HELD ? '' : e.target.value,
+                                  )}
+                                  style={{ ...S.input, padding:'4px 6px', fontSize:'10px', minWidth:'176px' }}
+                                >
+                                  <option value={POSITION_ATTRIBUTION_HELD}>
+                                    {isGroup ? 'Held Accounts (reset each line)' : `Held Account (${heldAccountLabel})`}
                                   </option>
-                                ))}
-                              </select>
+                                  {accountList.map((accountName) => (
+                                    <option key={accountName} value={accountName}>
+                                      {formatShortAccountName(accountName)}
+                                    </option>
+                                  ))}
+                                </select>
+                                {attributionChanged && (
+                                  <div style={{ display:'flex', flexDirection:'column', gap:'3px' }}>
+                                    <span style={{ color:PALETTE.textDim, fontSize:'10px' }}>Transfer effective</span>
+                                    <input
+                                      type="date"
+                                      value={transferEffectiveDate || ''}
+                                      onChange={(e) => updatePositionTransferEffectiveDate(isGroup ? entry.rows : row, e.target.value)}
+                                      style={{ ...S.input, padding:'4px 6px', fontSize:'10px', minWidth:'176px' }}
+                                    />
+                                  </div>
+                                )}
+                              </>
                             ) : (
                               <span style={{ color: attributionChanged ? PALETTE.accentBright : PALETTE.textDim, fontSize:'10px' }}>
                                 {attributionChanged ? 'Attributed away from held account' : 'Held in legal account'}
