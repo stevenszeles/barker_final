@@ -901,6 +901,7 @@ function parseFuturesStatementCSV(text, {
     const pnlOpenIdx = profitsSection.header.indexOf('p_l_open');
     const pnlPctIdx = profitsSection.header.indexOf('p_l');
     const pnlDayIdx = profitsSection.header.indexOf('p_l_day');
+    const pnlYtdIdx = profitsSection.header.indexOf('p_l_ytd');
     const marginReqIdx = profitsSection.header.indexOf('margin_req');
     const markValueIdx = profitsSection.header.indexOf('mark_value');
     profitsSection.rows.forEach((row) => {
@@ -910,6 +911,7 @@ function parseFuturesStatementCSV(text, {
         pnlOpen: parseStatementNumber(row[pnlOpenIdx]),
         gainPct: parseStatementNumber(row[pnlPctIdx]),
         pnlDay: parseStatementNumber(row[pnlDayIdx]),
+        pnlYtd: parseStatementNumber(row[pnlYtdIdx]),
         marginReq: parseStatementNumber(row[marginReqIdx]),
         markValue: parseStatementNumber(row[markValueIdx]),
       });
@@ -974,6 +976,7 @@ function parseFuturesStatementCSV(text, {
         isSectorETF: false,
         marginReq: Number.isFinite(profitRow.marginReq) ? profitRow.marginReq : null,
         pnlDay: Number.isFinite(profitRow.pnlDay) ? profitRow.pnlDay : null,
+        pnlYtd: Number.isFinite(profitRow.pnlYtd) ? profitRow.pnlYtd : null,
       });
     });
   }
@@ -1352,6 +1355,84 @@ function getPositionEffectiveMultiplier(position) {
   return Number.isFinite(inferred) && inferred > 0 ? inferred : 1;
 }
 
+function clampAttributedCarryValue(value, finalValue) {
+  if (!Number.isFinite(value) || !Number.isFinite(finalValue)) return NaN;
+  if (Math.abs(finalValue) < 0.0001) return 0;
+  if (finalValue > 0) return Math.min(finalValue, Math.max(0, value));
+  return Math.max(finalValue, Math.min(0, value));
+}
+
+function buildCarryWeightsFromSourceHistory(dates, sourceHistory) {
+  if (!Array.isArray(dates) || dates.length < 2 || !sourceHistory?.length) return [];
+  return dates.slice(1).map((date, index) => {
+    const currentValue = getValueOnOrBefore(sourceHistory, date);
+    const previousValue = getValueOnOrBefore(sourceHistory, dates[index]);
+    const delta = (Number.isFinite(currentValue) ? currentValue : 0) - (Number.isFinite(previousValue) ? previousValue : 0);
+    return Math.abs(delta);
+  });
+}
+
+function buildMonotonicCarrySeries(dates, finalValue, {
+  startValue = 0,
+  weights = [],
+  lastStepDelta = null,
+} = {}) {
+  const orderedDates = Array.isArray(dates) ? dates : [];
+  if (!orderedDates.length || !Number.isFinite(finalValue)) return [];
+  if (orderedDates.length === 1) return [[orderedDates[0], finalValue]];
+
+  const series = [];
+  const penultimateTarget = Number.isFinite(lastStepDelta)
+    ? (finalValue - lastStepDelta)
+    : finalValue;
+  const clampedStart = clampAttributedCarryValue(startValue, finalValue);
+  const headDates = orderedDates.slice(0, -1);
+
+  if (headDates.length === 1) {
+    series.push([headDates[0], clampedStart]);
+  } else {
+    const normalizedWeights = headDates.slice(1).map((_, index) => {
+      const candidate = Number(weights[index]);
+      return Number.isFinite(candidate) && candidate > 0 ? candidate : 1;
+    });
+    const totalWeight = normalizedWeights.reduce((sum, value) => sum + value, 0) || normalizedWeights.length || 1;
+    let cumulativeWeight = 0;
+
+    headDates.forEach((date, index) => {
+      if (index === 0) {
+        series.push([date, clampedStart]);
+        return;
+      }
+      cumulativeWeight += normalizedWeights[index - 1] || 1;
+      const progress = totalWeight ? (cumulativeWeight / totalWeight) : (index / Math.max(1, headDates.length - 1));
+      const interpolated = clampedStart + ((penultimateTarget - clampedStart) * progress);
+      series.push([date, clampAttributedCarryValue(interpolated, finalValue)]);
+    });
+  }
+
+  series.push([orderedDates[orderedDates.length - 1], finalValue]);
+  return series;
+}
+
+function normalizePriceBackedCarrySeries(series, finalValue) {
+  const points = Array.isArray(series)
+    ? series.filter(([date, value]) => date && Number.isFinite(value))
+    : [];
+  if (!points.length || !Number.isFinite(finalValue)) return [];
+
+  const signalIndex = points.findIndex(([, value]) => (
+    finalValue > 0 ? value > 0.0001 : value < -0.0001
+  ));
+  const firstSignalIndex = signalIndex >= 0 ? signalIndex : Math.max(0, points.length - 1);
+
+  return points.map(([date, value], index) => {
+    if (index < firstSignalIndex) return [date, 0];
+    return [date, clampAttributedCarryValue(value, finalValue)];
+  }).map(([date, value], index, arr) => (
+    index === arr.length - 1 ? [date, finalValue] : [date, value]
+  ));
+}
+
 function estimateAttributedPositionPnlSeries(position, dates, sourceHistory, priceSeries) {
   const currentPnl = getPositionPnlValue(position);
   if (!Number.isFinite(currentPnl) || !dates?.length || Math.abs(currentPnl) < 0.0001) return { series: [], method: 'none' };
@@ -1365,44 +1446,38 @@ function estimateAttributedPositionPnlSeries(position, dates, sourceHistory, pri
   const multiplier = getPositionEffectiveMultiplier(position);
 
   if (priceSeries?.length && Number.isFinite(scalePrice) && scalePrice !== 0 && Number.isFinite(qty) && qty !== 0 && Number.isFinite(multiplier) && multiplier !== 0) {
-    const entryPrice = scalePrice - (currentPnl / (qty * multiplier));
+    const signedExposure = qty * multiplier;
+    const explicitCostBasis = Number(position?.costBasis);
+    const entryPrice = Number.isFinite(explicitCostBasis) && signedExposure !== 0
+      ? (explicitCostBasis / signedExposure)
+      : (scalePrice - (currentPnl / signedExposure));
     if (Number.isFinite(entryPrice)) {
-      const series = dates
+      const rawSeries = dates
         .map((date) => {
           const price = getValueOnOrBefore(priceSeries, date);
           if (!Number.isFinite(price)) return null;
-          return [date, qty * multiplier * (price - entryPrice)];
+          return [date, signedExposure * (price - entryPrice)];
         })
         .filter(Boolean);
+      const series = normalizePriceBackedCarrySeries(rawSeries, currentPnl);
       if (series.length) return { series, method: 'price' };
     }
   }
 
-  const sourceFirst = sourceHistory?.[0]?.[1];
-  const sourceLast = sourceHistory?.[sourceHistory.length - 1]?.[1];
-  if (sourceHistory?.length && Number.isFinite(sourceFirst) && Number.isFinite(sourceLast) && sourceLast !== sourceFirst) {
-    const series = dates
-      .map((date) => {
-        const sourceValue = getValueOnOrBefore(sourceHistory, date);
-        if (!Number.isFinite(sourceValue)) return null;
-        const progress = (sourceValue - sourceFirst) / (sourceLast - sourceFirst);
-        return [date, currentPnl * progress];
-      })
-      .filter(Boolean);
+  if (sourceHistory?.length) {
+    const series = buildMonotonicCarrySeries(
+      dates,
+      currentPnl,
+      {
+        weights: buildCarryWeightsFromSourceHistory(dates, sourceHistory),
+        lastStepDelta: Number(position?.pnlDay),
+      },
+    );
     if (series.length) return { series, method: 'account' };
   }
 
-  const firstDate = dates[0];
-  const lastDate = dates[dates.length - 1];
-  const firstTime = new Date(`${firstDate}T00:00:00Z`).getTime();
-  const lastTime = new Date(`${lastDate}T00:00:00Z`).getTime();
-  const span = Math.max(lastTime - firstTime, 86400000);
   return {
-    series: dates.map((date) => {
-      const pointTime = new Date(`${date}T00:00:00Z`).getTime();
-      const progress = Math.min(1, Math.max(0, (pointTime - firstTime) / span));
-      return [date, currentPnl * progress];
-    }),
+    series: buildMonotonicCarrySeries(dates, currentPnl),
     method: 'linear',
   };
 }
