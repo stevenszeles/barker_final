@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import csv
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from html import unescape
 from io import StringIO
 import re
@@ -23,6 +23,17 @@ def _to_stooq_symbol(symbol: str) -> str:
     if base.endswith(".us"):
         return base
     return f"{base}.us"
+
+
+def _to_yahoo_symbol(symbol: str) -> str:
+    raw = (symbol or "").strip().upper()
+    if not raw:
+        return raw
+    if raw in {"^GSPC", "^SPX", "SPX", "$SPX"}:
+        return "^GSPC"
+    if raw.endswith(".US"):
+        return raw[:-3]
+    return raw
 
 
 _RATE_LIMIT_UNTIL = 0.0
@@ -237,3 +248,70 @@ def get_history(symbol: str, start_date: Optional[str] = None) -> List[Dict[str,
 
     rows.sort(key=lambda row: row["date"])
     return rows
+
+
+def get_history_yahoo(symbol: str, start_date: Optional[str] = None, timeout: float = 10.0) -> List[Dict[str, Any]]:
+    yahoo_symbol = _to_yahoo_symbol(symbol)
+    if not yahoo_symbol:
+        return []
+
+    try:
+      start_dt = datetime.strptime(start_date, "%Y-%m-%d").date() if start_date else (datetime.utcnow().date() - timedelta(days=3650))
+    except Exception:
+      start_dt = datetime.utcnow().date() - timedelta(days=3650)
+
+    period1 = int(datetime.combine(start_dt, datetime.min.time(), tzinfo=timezone.utc).timestamp())
+    period2 = int(datetime.combine(datetime.utcnow().date() + timedelta(days=1), datetime.min.time(), tzinfo=timezone.utc).timestamp())
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{quote(yahoo_symbol)}"
+    params = {
+        "interval": "1d",
+        "period1": str(period1),
+        "period2": str(period2),
+        "includePrePost": "false",
+        "events": "div,splits",
+    }
+
+    try:
+        with httpx.Client(timeout=timeout, headers=_DEFAULT_HEADERS, follow_redirects=True) as client:
+            resp = client.get(url, params=params)
+            if resp.status_code in {403, 429}:
+                return []
+            resp.raise_for_status()
+            payload = resp.json()
+    except Exception:
+        return []
+
+    chart = ((payload or {}).get("chart") or {})
+    results = chart.get("result") or []
+    if not results:
+        return []
+
+    result = results[0] or {}
+    timestamps = result.get("timestamp") or []
+    quote_rows = (((result.get("indicators") or {}).get("quote") or [{}])[0] or {})
+    adj_rows = (((result.get("indicators") or {}).get("adjclose") or [{}])[0] or {})
+    closes = adj_rows.get("adjclose") or quote_rows.get("close") or []
+
+    out: List[Dict[str, Any]] = []
+    for idx, ts in enumerate(timestamps):
+        try:
+            close = closes[idx]
+        except Exception:
+            close = None
+        if close is None:
+            continue
+        try:
+            close_val = float(close)
+        except Exception:
+            continue
+        if close_val <= 0:
+            continue
+        try:
+            point_date = datetime.fromtimestamp(int(ts), tz=timezone.utc).date().isoformat()
+        except Exception:
+            continue
+        if start_date and point_date < start_date:
+            continue
+        out.append({"date": point_date, "close": close_val})
+
+    return out

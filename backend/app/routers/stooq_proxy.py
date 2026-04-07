@@ -3,7 +3,7 @@ import logging
 import threading
 import time
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 
 from ..db import with_conn
@@ -68,15 +68,26 @@ def _load_cached_history(symbols: list[str], start_iso: str) -> tuple[list[dict]
 
 
 def _direct_history_fallback(raw_symbol: str, normalized_symbol: str, start_iso: str) -> list[dict]:
+    yahoo_attempts = [normalized_symbol, raw_symbol]
+    seen_yahoo = set()
+    for attempt in yahoo_attempts:
+        normalized = stooq._to_yahoo_symbol(attempt or "")
+        if not normalized or normalized in seen_yahoo:
+            continue
+        seen_yahoo.add(normalized)
+        history = stooq.get_history_yahoo(attempt, start_iso)
+        if history:
+            return history
+
     attempts = [raw_symbol, normalized_symbol]
     if normalized_symbol and normalized_symbol not in BENCHMARK_SYMBOLS:
         attempts.append(f"{normalized_symbol}.US")
     seen = set()
     for attempt in attempts:
-        key = (attempt or "").strip().upper()
-        if not key or key in seen:
+        normalized = stooq._to_stooq_symbol(attempt or "").upper()
+        if not normalized or normalized in seen:
             continue
-        seen.add(key)
+        seen.add(normalized)
         history = stooq.get_history(attempt, start_iso)
         if history:
             return history
@@ -85,6 +96,7 @@ def _direct_history_fallback(raw_symbol: str, normalized_symbol: str, start_iso:
 
 @router.get("/q/d/l/", response_class=PlainTextResponse)
 def stooq_daily_history(
+    request: Request,
     s: str = Query(..., min_length=1, description="Stooq-compatible symbol, e.g. xlk.us or ^spx"),
     i: str = Query("d", description="Interval. Only daily history is supported."),
     refresh: bool = Query(False, description="Force a benchmark cache refresh before returning history."),
@@ -97,7 +109,14 @@ def stooq_daily_history(
         raise HTTPException(status_code=400, detail="Symbol is required")
 
     start_iso = (date.today() - timedelta(days=3650)).isoformat()
-    history, cache_available = _load_cached_history(_history_candidates(normalized_symbol, is_benchmark), start_iso)
+    app_state = getattr(request, "app", None)
+    startup_ready = bool(getattr(getattr(app_state, "state", None), "startup_ready", False))
+    startup_degraded = bool(getattr(getattr(app_state, "state", None), "startup_degraded", False))
+
+    history = []
+    cache_available = False
+    if startup_ready and not startup_degraded:
+        history, cache_available = _load_cached_history(_history_candidates(normalized_symbol, is_benchmark), start_iso)
     latest_cached_date = history[-1].get("date") if history else None
     needs_cache_warm = not latest_cached_date or latest_cached_date < date.today().isoformat()
 
