@@ -2,6 +2,8 @@ import sqlite3
 import threading
 import re
 import os
+import time
+import logging
 from datetime import datetime
 
 try:
@@ -12,6 +14,7 @@ except Exception:  # pragma: no cover - optional dependency
 from .config import settings
 
 _LOCK = threading.RLock()
+logger = logging.getLogger(__name__)
 
 
 def _is_postgres() -> bool:
@@ -776,8 +779,25 @@ def connect():
     if _is_postgres():
         if psycopg2 is None:
             raise RuntimeError("psycopg2 is required for Postgres. Install backend requirements.")
-        conn = psycopg2.connect(settings.db_url, cursor_factory=psycopg2.extras.RealDictCursor)
-        return _DBConn(conn)
+        max_attempts = max(1, int(os.getenv("WS_DB_CONNECT_ATTEMPTS", "5")))
+        base_delay = max(0.1, float(os.getenv("WS_DB_CONNECT_DELAY_SECONDS", "1.0")))
+        last_error = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                conn = psycopg2.connect(settings.db_url, cursor_factory=psycopg2.extras.RealDictCursor)
+                return _DBConn(conn)
+            except psycopg2.OperationalError as exc:
+                last_error = exc
+                if attempt >= max_attempts:
+                    break
+                logger.warning(
+                    "Postgres connection attempt %s/%s failed: %s",
+                    attempt,
+                    max_attempts,
+                    exc,
+                )
+                time.sleep(base_delay * attempt)
+        raise last_error
     db_path = settings.db_path
     db_dir = os.path.dirname(os.path.abspath(db_path))
     if db_dir:

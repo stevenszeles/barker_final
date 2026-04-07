@@ -26,6 +26,9 @@ except Exception:
     logging.getLogger(__name__).warning("Failed to initialize file logging at %s.", _log_path)
 
 app = FastAPI(title="Workstation", docs_url=None, redoc_url=None)
+app.state.startup_ready = False
+app.state.startup_degraded = False
+app.state.startup_error = None
 
 def _is_local_origin(origin: str) -> bool:
     lowered = (origin or "").lower()
@@ -85,7 +88,12 @@ STATIC_DIR = os.path.abspath(
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    status = "degraded" if app.state.startup_degraded else "ok"
+    return {
+        "status": status,
+        "db": "ready" if app.state.startup_ready else "unavailable",
+        "startup_error": app.state.startup_error,
+    }
 
 
 @app.get("/version")
@@ -95,16 +103,27 @@ def version():
         "build_id": os.getenv("RENDER_GIT_COMMIT", os.getenv("GIT_COMMIT", "local")),
         "build_time": os.getenv("BUILD_TIMESTAMP", "unknown"),
         "environment": os.getenv("ENVIRONMENT", "development"),
+        "db": "ready" if app.state.startup_ready else "unavailable",
+        "startup_error": app.state.startup_error,
     }
 
 
 @app.on_event("startup")
 def _startup():
-    ensure_schema()
-    # Demo seed can be expensive; keep disabled by default in deployed envs.
-    if os.getenv("WS_SEED_DEMO", "0") == "1":
-        seed_demo_portfolio_if_empty()
-    start_workers()
+    try:
+        ensure_schema()
+        app.state.startup_ready = True
+        app.state.startup_degraded = False
+        app.state.startup_error = None
+        # Demo seed can be expensive; keep disabled by default in deployed envs.
+        if os.getenv("WS_SEED_DEMO", "0") == "1":
+            seed_demo_portfolio_if_empty()
+        start_workers()
+    except Exception as exc:  # pragma: no cover - startup hardening path
+        app.state.startup_ready = False
+        app.state.startup_degraded = True
+        app.state.startup_error = str(exc)
+        logging.getLogger(__name__).exception("Startup degraded: database initialization failed.")
 
 
 if os.path.isdir(STATIC_DIR):
