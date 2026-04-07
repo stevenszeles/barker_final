@@ -1,4 +1,5 @@
 from datetime import date, timedelta
+import logging
 import threading
 import time
 
@@ -9,6 +10,7 @@ from ..db import with_conn
 from ..services import legacy_engine, stooq
 
 router = APIRouter(prefix="/stooq", tags=["stooq"])
+logger = logging.getLogger(__name__)
 
 
 BENCHMARK_SYMBOLS = {"^SPX", "SPX", "$SPX", "^GSPC"}
@@ -45,7 +47,7 @@ def _claim_refresh_slot(symbol: str, cooldown_seconds: float = _REFRESH_COOLDOWN
         return True
 
 
-def _load_cached_history(symbols: list[str], start_iso: str) -> list[dict]:
+def _load_cached_history(symbols: list[str], start_iso: str) -> tuple[list[dict], bool]:
     def _run(conn):
         cur = conn.cursor()
         for symbol in symbols:
@@ -58,7 +60,11 @@ def _load_cached_history(symbols: list[str], start_iso: str) -> list[dict]:
                 return [dict(row) if isinstance(row, dict) else {"date": row[0], "close": row[1]} for row in rows]
         return []
 
-    return with_conn(_run)
+    try:
+        return with_conn(_run), True
+    except Exception as exc:
+        logger.warning("Price cache unavailable for %s: %s", ",".join(symbols), exc)
+        return [], False
 
 
 def _direct_history_fallback(raw_symbol: str, normalized_symbol: str, start_iso: str) -> list[dict]:
@@ -91,11 +97,11 @@ def stooq_daily_history(
         raise HTTPException(status_code=400, detail="Symbol is required")
 
     start_iso = (date.today() - timedelta(days=3650)).isoformat()
-    history = _load_cached_history(_history_candidates(normalized_symbol, is_benchmark), start_iso)
+    history, cache_available = _load_cached_history(_history_candidates(normalized_symbol, is_benchmark), start_iso)
     latest_cached_date = history[-1].get("date") if history else None
     needs_cache_warm = not latest_cached_date or latest_cached_date < date.today().isoformat()
 
-    if (refresh or (is_benchmark and needs_cache_warm)) and _claim_refresh_slot(normalized_symbol):
+    if cache_available and (refresh or (is_benchmark and needs_cache_warm)) and _claim_refresh_slot(normalized_symbol):
         try:
             if is_benchmark:
                 legacy_engine.ensure_benchmark_cache_current(normalized_symbol, start_iso)
@@ -104,22 +110,23 @@ def stooq_daily_history(
         except Exception:
             pass
 
-    history = _load_cached_history(_history_candidates(normalized_symbol, is_benchmark), start_iso)
+    if cache_available:
+        history, cache_available = _load_cached_history(_history_candidates(normalized_symbol, is_benchmark), start_iso)
     latest_cached_date = history[-1].get("date") if history else None
-    if not latest_cached_date or latest_cached_date < date.today().isoformat():
+    if cache_available and (not latest_cached_date or latest_cached_date < date.today().isoformat()):
         if _claim_refresh_slot(f"{normalized_symbol}:incremental", cooldown_seconds=20.0):
             try:
                 legacy_engine.fetch_prices_incremental(normalized_symbol, start_iso, is_bench=is_benchmark)
             except Exception:
                 pass
-        history = _load_cached_history(_history_candidates(normalized_symbol, is_benchmark), start_iso)
-    if len(history) < 2:
+        history, cache_available = _load_cached_history(_history_candidates(normalized_symbol, is_benchmark), start_iso)
+    if cache_available and len(history) < 2:
         if _claim_refresh_slot(f"{normalized_symbol}:history", cooldown_seconds=60.0):
             try:
                 legacy_engine.ensure_symbol_history(normalized_symbol, start_iso, is_bench=is_benchmark)
             except Exception:
                 pass
-        history = _load_cached_history(_history_candidates(normalized_symbol, is_benchmark), start_iso)
+        history, cache_available = _load_cached_history(_history_candidates(normalized_symbol, is_benchmark), start_iso)
     if len(history) < 2:
         history = _direct_history_fallback(s, normalized_symbol, start_iso)
     if not history:
