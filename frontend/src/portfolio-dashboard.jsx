@@ -1792,6 +1792,24 @@ function parseStooqHistory(text, days = 3650) {
     .filter(([date]) => date >= cutoff);
 }
 
+function isRenderHibernateWakeResponse(response, text = '') {
+  if (!response) return false;
+  const routing = response.headers?.get?.('x-render-routing') || '';
+  const body = String(text || '').toLowerCase();
+  return response.status === 503 && (
+    routing.toLowerCase().includes('hibernate-wake-error')
+    || body.includes('hibernate-wake-error')
+  );
+}
+
+async function warmBenchmarkService() {
+  try {
+    await fetch('/health', { cache: 'no-store' });
+  } catch {
+    // Ignore wake-up probe failures; the caller will retry the real request.
+  }
+}
+
 async function loadBenchmarkHistorySeries(symbol, { days = 3650, retries = 1, forceRefresh = false } = {}) {
   const stooqSymbol = toStooqSymbol(symbol);
   if (!stooqSymbol) throw new Error(`No benchmark data for ${symbol}`);
@@ -1806,15 +1824,24 @@ async function loadBenchmarkHistorySeries(symbol, { days = 3650, retries = 1, fo
   }
   const url = `/api/stooq/q/d/l/?${params.toString()}`;
   let lastError = null;
-  for (let attempt = 0; attempt <= retries; attempt += 1) {
+  const renderWakeRetries = symbol === '^GSPC' ? 12 : 6;
+  const maxAttempts = Math.max(retries, renderWakeRetries);
+  for (let attempt = 0; attempt <= maxAttempts; attempt += 1) {
     try {
       const res = await fetch(url, { cache: shouldRefresh ? 'no-store' : 'default' });
       const text = await res.text();
+      if (isRenderHibernateWakeResponse(res, text)) {
+        await warmBenchmarkService();
+        throw new Error(`Render wake in progress for ${symbol}`);
+      }
       if (!res.ok || !text.startsWith("Date,")) throw new Error(`No benchmark data for ${symbol}`);
       return parseStooqHistory(text, days);
     } catch (error) {
       lastError = error;
-      if (attempt < retries) await new Promise((resolve) => setTimeout(resolve, 180));
+      if (attempt < maxAttempts) {
+        const pauseMs = attempt < 2 ? 1200 : Math.min(8000, 2000 + (attempt * 800));
+        await new Promise((resolve) => setTimeout(resolve, pauseMs));
+      }
     }
   }
   throw lastError || new Error(`No benchmark data for ${symbol}`);
