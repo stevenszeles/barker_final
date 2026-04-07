@@ -1331,42 +1331,79 @@ function expandHistoryToDates(series, dates) {
   });
 }
 
-function estimateAttributedPositionValueSeries(position, dates, sourceHistory, priceSeries) {
-  const currentValue = Number(position?.mktVal);
-  if (!Number.isFinite(currentValue) || !dates?.length) return { series: [], method: 'none' };
+function getPositionPnlValue(position) {
+  const marketValue = Number(position?.mktVal);
+  const costBasis = Number(position?.costBasis);
+  if (!Number.isFinite(marketValue)) return NaN;
+  if (isFuturePosition(position)) return marketValue;
+  return marketValue - (Number.isFinite(costBasis) ? costBasis : 0);
+}
+
+function getPositionEffectiveMultiplier(position) {
+  const explicit = Math.abs(Number(position?.multiplier));
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+  const qty = Number(position?.qty);
+  const price = Number(position?.price);
+  const marketValue = Number(position?.mktVal);
+  if (!Number.isFinite(qty) || qty === 0 || !Number.isFinite(price) || price === 0 || !Number.isFinite(marketValue) || marketValue === 0) {
+    return 1;
+  }
+  const inferred = Math.abs(marketValue / (qty * price));
+  return Number.isFinite(inferred) && inferred > 0 ? inferred : 1;
+}
+
+function estimateAttributedPositionPnlSeries(position, dates, sourceHistory, priceSeries) {
+  const currentPnl = getPositionPnlValue(position);
+  if (!Number.isFinite(currentPnl) || !dates?.length || Math.abs(currentPnl) < 0.0001) return { series: [], method: 'none' };
 
   const latestPriceFromSeries = priceSeries?.[priceSeries.length - 1]?.[1];
   const referencePrice = Number(position?.price);
   const scalePrice = Number.isFinite(referencePrice) && referencePrice !== 0
     ? referencePrice
     : (Number.isFinite(latestPriceFromSeries) && latestPriceFromSeries !== 0 ? latestPriceFromSeries : null);
+  const qty = Number(position?.qty);
+  const multiplier = getPositionEffectiveMultiplier(position);
 
-  if (priceSeries?.length && Number.isFinite(scalePrice) && scalePrice !== 0) {
-    const series = dates
-      .map((date) => {
-        const price = getValueOnOrBefore(priceSeries, date);
-        if (!Number.isFinite(price)) return null;
-        return [date, currentValue * (price / scalePrice)];
-      })
-      .filter(Boolean);
-    if (series.length) return { series, method: 'price' };
+  if (priceSeries?.length && Number.isFinite(scalePrice) && scalePrice !== 0 && Number.isFinite(qty) && qty !== 0 && Number.isFinite(multiplier) && multiplier !== 0) {
+    const entryPrice = scalePrice - (currentPnl / (qty * multiplier));
+    if (Number.isFinite(entryPrice)) {
+      const series = dates
+        .map((date) => {
+          const price = getValueOnOrBefore(priceSeries, date);
+          if (!Number.isFinite(price)) return null;
+          return [date, qty * multiplier * (price - entryPrice)];
+        })
+        .filter(Boolean);
+      if (series.length) return { series, method: 'price' };
+    }
   }
 
+  const sourceFirst = sourceHistory?.[0]?.[1];
   const sourceLast = sourceHistory?.[sourceHistory.length - 1]?.[1];
-  if (Number.isFinite(sourceLast) && sourceLast !== 0 && sourceHistory?.length) {
+  if (sourceHistory?.length && Number.isFinite(sourceFirst) && Number.isFinite(sourceLast) && sourceLast !== sourceFirst) {
     const series = dates
       .map((date) => {
         const sourceValue = getValueOnOrBefore(sourceHistory, date);
         if (!Number.isFinite(sourceValue)) return null;
-        return [date, currentValue * (sourceValue / sourceLast)];
+        const progress = (sourceValue - sourceFirst) / (sourceLast - sourceFirst);
+        return [date, currentPnl * progress];
       })
       .filter(Boolean);
     if (series.length) return { series, method: 'account' };
   }
 
+  const firstDate = dates[0];
+  const lastDate = dates[dates.length - 1];
+  const firstTime = new Date(`${firstDate}T00:00:00Z`).getTime();
+  const lastTime = new Date(`${lastDate}T00:00:00Z`).getTime();
+  const span = Math.max(lastTime - firstTime, 86400000);
   return {
-    series: dates.map((date) => [date, currentValue]),
-    method: 'flat',
+    series: dates.map((date) => {
+      const pointTime = new Date(`${date}T00:00:00Z`).getTime();
+      const progress = Math.min(1, Math.max(0, (pointTime - firstTime) / span));
+      return [date, currentPnl * progress];
+    }),
+    method: 'linear',
   };
 }
 
@@ -1376,21 +1413,8 @@ function estimateAttributedRealizedTradeCarrySeries(trade, dates, sourceHistory,
   const openedDate = normalizeDateInput(trade.openedDate) || normalizeDateInput(trade.closedDate) || dates[0];
   const closedDate = normalizeDateInput(trade.closedDate) || openedDate;
   const futureLike = Boolean(FUTURES_ROOT_TO_SECTOR[getFutureRootSymbol(trade.baseSym || trade.symbol)]);
-  const gain = Number(trade.gain);
-  const closeValueCandidates = [
-    Math.abs(Number(trade.proceeds)),
-    Number.isFinite(gain) ? Math.abs(Number(trade.cost) + gain) : NaN,
-    Math.abs(Number(trade.cost)),
-  ];
-  const closeValue = closeValueCandidates.find((value) => Number.isFinite(value) && value > 0) || 0;
-  if (!Number.isFinite(closeValue) || closeValue <= 0) return { series: [], method: 'none' };
-
-  const openValueCandidates = [
-    Math.abs(Number(trade.cost)),
-    Number.isFinite(gain) ? Math.abs(closeValue - gain) : NaN,
-    closeValue,
-  ];
-  const openValue = openValueCandidates.find((value) => Number.isFinite(value) && value > 0) || closeValue;
+  const finalPnl = Number(trade.gain);
+  if (!Number.isFinite(finalPnl) || Math.abs(finalPnl) < 0.0001) return { series: [], method: 'none' };
 
   const buildSeries = (resolveValue) => {
     const series = [];
@@ -1400,32 +1424,41 @@ function estimateAttributedRealizedTradeCarrySeries(trade, dates, sourceHistory,
         continue;
       }
       if (date >= closedDate) {
-        series.push([date, closeValue]);
+        series.push([date, finalPnl]);
         continue;
       }
       const value = resolveValue(date);
       if (!Number.isFinite(value)) return [];
-      series.push([date, Math.max(0, value)]);
+      series.push([date, value]);
     }
     return series;
   };
 
-  const closePrice = getValueOnOrBefore(priceSeries, closedDate) ?? priceSeries?.[priceSeries.length - 1]?.[1];
-  if (priceSeries?.length && Number.isFinite(closePrice) && closePrice !== 0) {
-    const series = buildSeries((date) => {
-      const price = getValueOnOrBefore(priceSeries, date);
-      return Number.isFinite(price) ? closeValue * (price / closePrice) : NaN;
-    });
-    if (series.length) return { series, method: 'price' };
-  }
-
+  const sourceFirst = sourceHistory?.[0]?.[1];
   const sourceClose = getValueOnOrBefore(sourceHistory, closedDate) ?? sourceHistory?.[sourceHistory.length - 1]?.[1];
-  if (!futureLike && sourceHistory?.length && Number.isFinite(sourceClose) && sourceClose !== 0) {
+  if (!futureLike && sourceHistory?.length && Number.isFinite(sourceFirst) && Number.isFinite(sourceClose) && sourceClose !== sourceFirst) {
     const series = buildSeries((date) => {
       const sourceValue = getValueOnOrBefore(sourceHistory, date);
-      return Number.isFinite(sourceValue) ? closeValue * (sourceValue / sourceClose) : NaN;
+      if (!Number.isFinite(sourceValue)) return NaN;
+      const progress = (sourceValue - sourceFirst) / (sourceClose - sourceFirst);
+      return finalPnl * progress;
     });
     if (series.length) return { series, method: 'account' };
+  }
+
+  const qty = Number(trade.qty);
+  const closePrice = Number.isFinite(Number(trade.proceeds)) && Number.isFinite(qty) && qty !== 0
+    ? Math.abs(Number(trade.proceeds) / qty)
+    : (getValueOnOrBefore(priceSeries, closedDate) ?? priceSeries?.[priceSeries.length - 1]?.[1]);
+  if (priceSeries?.length && Number.isFinite(closePrice) && closePrice !== 0 && Number.isFinite(qty) && qty !== 0) {
+    const entryPrice = closePrice - (finalPnl / qty);
+    if (Number.isFinite(entryPrice)) {
+      const series = buildSeries((date) => {
+        const price = getValueOnOrBefore(priceSeries, date);
+        return Number.isFinite(price) ? qty * (price - entryPrice) : NaN;
+      });
+      if (series.length) return { series, method: 'price' };
+    }
   }
 
   const openedTime = new Date(`${openedDate}T00:00:00Z`).getTime();
@@ -1435,7 +1468,7 @@ function estimateAttributedRealizedTradeCarrySeries(trade, dates, sourceHistory,
     series: buildSeries((date) => {
       const currentTime = new Date(`${date}T00:00:00Z`).getTime();
       const progress = Math.min(1, Math.max(0, (currentTime - openedTime) / span));
-      return openValue + ((closeValue - openValue) * progress);
+      return finalPnl * progress;
     }),
     method: 'linear',
   };
@@ -3081,7 +3114,7 @@ export default function App() {
       if (!heldAccount || !targetAccount || heldAccount === targetAccount) return;
 
       const sourceHistory = expandedBaseByAccount[heldAccount] || [];
-      const { series, method } = estimateAttributedPositionValueSeries(
+      const { series, method } = estimateAttributedPositionPnlSeries(
         position,
         globalDates,
         sourceHistory,
@@ -3091,6 +3124,7 @@ export default function App() {
       if (!series.length) return;
       if (method === 'price') priceBackedCount += 1;
       else if (method === 'account') accountBackedCount += 1;
+      else if (method === 'linear') linearCount += 1;
       else flatCount += 1;
 
       series.forEach(([date, value]) => {
@@ -4296,7 +4330,7 @@ export default function App() {
             </div>
             {performanceAccountingMode === 'desk' && deskPerformanceModel.transferCount > 0 && (
               <div style={{ color:PALETTE.textDim, fontSize:'10px', marginBottom:'10px' }}>
-                Desk NAV is reallocated from {deskPerformanceModel.transferCount} routed holdings
+                Desk NAV reallocates routed P/L from {deskPerformanceModel.transferCount} routed holdings
                 {' '}({deskPerformanceModel.openTransferCount || 0} open · {deskPerformanceModel.closedTransferCount || 0} closed).
                 {' '}Direct price history: {deskPerformanceModel.priceBackedCount} · account-return fallback: {deskPerformanceModel.accountBackedCount} · linear carry fallback: {deskPerformanceModel.linearCount || 0} · flat fallback: {deskPerformanceModel.flatCount}
               </div>
