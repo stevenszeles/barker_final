@@ -406,6 +406,7 @@ function normalizeSharedDashboardState(rawState) {
     sectorTargetsByAccount: normalizeSectorTargetsByAccount(rawState?.sectorTargetsByAccount || rawState?.sectorTargets, accountNames),
     sectorOverrides: asPlainObject(rawState?.sectorOverrides),
     positionAttributionOverrides: asPlainObject(rawState?.positionAttributionOverrides),
+    realizedTradeAttributionOverrides: asPlainObject(rawState?.realizedTradeAttributionOverrides),
   };
 }
 
@@ -418,6 +419,7 @@ function buildSharedDashboardStatePayload(rawState) {
     sectorTargetsByAccount: normalized.sectorTargetsByAccount,
     sectorOverrides: normalized.sectorOverrides,
     positionAttributionOverrides: normalized.positionAttributionOverrides,
+    realizedTradeAttributionOverrides: normalized.realizedTradeAttributionOverrides,
   };
 }
 
@@ -438,6 +440,7 @@ function hasSharedDashboardStateContent(rawState) {
     || Object.keys(normalized.sectorTargetsByAccount || {}).length
     || Object.keys(normalized.sectorOverrides || {}).length
     || Object.keys(normalized.positionAttributionOverrides || {}).length
+    || Object.keys(normalized.realizedTradeAttributionOverrides || {}).length
   );
 }
 
@@ -1271,6 +1274,77 @@ function estimateAttributedPositionValueSeries(position, dates, sourceHistory, p
   };
 }
 
+function estimateAttributedRealizedTradeCarrySeries(trade, dates, sourceHistory, priceSeries) {
+  if (!trade || !dates?.length) return { series: [], method: 'none' };
+
+  const openedDate = normalizeDateInput(trade.openedDate) || normalizeDateInput(trade.closedDate) || dates[0];
+  const closedDate = normalizeDateInput(trade.closedDate) || openedDate;
+  const futureLike = Boolean(FUTURES_ROOT_TO_SECTOR[getFutureRootSymbol(trade.baseSym || trade.symbol)]);
+  const gain = Number(trade.gain);
+  const closeValueCandidates = [
+    Math.abs(Number(trade.proceeds)),
+    Number.isFinite(gain) ? Math.abs(Number(trade.cost) + gain) : NaN,
+    Math.abs(Number(trade.cost)),
+  ];
+  const closeValue = closeValueCandidates.find((value) => Number.isFinite(value) && value > 0) || 0;
+  if (!Number.isFinite(closeValue) || closeValue <= 0) return { series: [], method: 'none' };
+
+  const openValueCandidates = [
+    Math.abs(Number(trade.cost)),
+    Number.isFinite(gain) ? Math.abs(closeValue - gain) : NaN,
+    closeValue,
+  ];
+  const openValue = openValueCandidates.find((value) => Number.isFinite(value) && value > 0) || closeValue;
+
+  const buildSeries = (resolveValue) => {
+    const series = [];
+    for (const date of dates) {
+      if (date < openedDate) {
+        series.push([date, 0]);
+        continue;
+      }
+      if (date >= closedDate) {
+        series.push([date, closeValue]);
+        continue;
+      }
+      const value = resolveValue(date);
+      if (!Number.isFinite(value)) return [];
+      series.push([date, Math.max(0, value)]);
+    }
+    return series;
+  };
+
+  const closePrice = getValueOnOrBefore(priceSeries, closedDate) ?? priceSeries?.[priceSeries.length - 1]?.[1];
+  if (priceSeries?.length && Number.isFinite(closePrice) && closePrice !== 0) {
+    const series = buildSeries((date) => {
+      const price = getValueOnOrBefore(priceSeries, date);
+      return Number.isFinite(price) ? closeValue * (price / closePrice) : NaN;
+    });
+    if (series.length) return { series, method: 'price' };
+  }
+
+  const sourceClose = getValueOnOrBefore(sourceHistory, closedDate) ?? sourceHistory?.[sourceHistory.length - 1]?.[1];
+  if (!futureLike && sourceHistory?.length && Number.isFinite(sourceClose) && sourceClose !== 0) {
+    const series = buildSeries((date) => {
+      const sourceValue = getValueOnOrBefore(sourceHistory, date);
+      return Number.isFinite(sourceValue) ? closeValue * (sourceValue / sourceClose) : NaN;
+    });
+    if (series.length) return { series, method: 'account' };
+  }
+
+  const openedTime = new Date(`${openedDate}T00:00:00Z`).getTime();
+  const closedTime = new Date(`${closedDate}T00:00:00Z`).getTime();
+  const span = Math.max(closedTime - openedTime, 86400000);
+  return {
+    series: buildSeries((date) => {
+      const currentTime = new Date(`${date}T00:00:00Z`).getTime();
+      const progress = Math.min(1, Math.max(0, (currentTime - openedTime) / span));
+      return openValue + ((closeValue - openValue) * progress);
+    }),
+    method: 'linear',
+  };
+}
+
 function buildPortfolioBenchmarkChartData(portfolioSeries, benchmarkSeries) {
   if (!portfolioSeries?.length) return [];
 
@@ -1427,8 +1501,22 @@ function getPositionAttributedAccount(position, positionAttributionOverrides = {
   return key ? (positionAttributionOverrides[key] || heldAccount) : heldAccount;
 }
 
+function getRealizedTradeAttributedAccount(trade, realizedTradeAttributionOverrides = {}) {
+  const heldAccount = normalizeAccountName(trade?.account);
+  const keys = getRealizedTradeOverrideKeys(trade);
+  for (const key of keys) {
+    const value = realizedTradeAttributionOverrides[key];
+    if (value) return value;
+  }
+  return heldAccount;
+}
+
 function getPositionDisplayAccount(position) {
   return String(position?.attributedAccount || getPositionHeldAccount(position) || '').trim();
+}
+
+function getRealizedTradeDisplayAccount(trade) {
+  return String(trade?.attributedAccount || normalizeAccountName(trade?.account) || '').trim();
 }
 
 function getPositionAttributionKey(position) {
@@ -1953,6 +2041,7 @@ export default function App() {
     sectorTargetsByAccount: persisted.sectorTargetsByAccount || persisted.sectorTargets,
     sectorOverrides: persisted.sectorOverrides,
     positionAttributionOverrides: persisted.positionAttributionOverrides,
+    realizedTradeAttributionOverrides: persisted.realizedTradeAttributionOverrides,
   }));
   const sharedStateSnapshotRef = useRef(buildSharedDashboardStatePayload({}));
   const workspaceStateRef = useRef(sharedSeedRef.current);
@@ -1984,6 +2073,7 @@ export default function App() {
   const [sectorTargetsByAccount, setSectorTargetsByAccount] = useState(sharedSeedRef.current.sectorTargetsByAccount);
   const [sectorOverrides, setSectorOverrides] = useState(sharedSeedRef.current.sectorOverrides);
   const [positionAttributionOverrides, setPositionAttributionOverrides] = useState(sharedSeedRef.current.positionAttributionOverrides);
+  const [realizedTradeAttributionOverrides, setRealizedTradeAttributionOverrides] = useState(sharedSeedRef.current.realizedTradeAttributionOverrides);
   const [performanceAccountingMode, setPerformanceAccountingMode] = useState(persisted.performanceAccountingMode || 'desk');
   const [performanceChartMode, setPerformanceChartMode] = useState(persisted.performanceChartMode || 'line');
   const [futuresStatementImportAccount, setFuturesStatementImportAccount] = useState(FUTURES_STATEMENT_ACCOUNT_AUTO);
@@ -2004,6 +2094,7 @@ export default function App() {
     setSectorTargetsByAccount(normalized.sectorTargetsByAccount);
     setSectorOverrides(normalized.sectorOverrides);
     setPositionAttributionOverrides(normalized.positionAttributionOverrides);
+    setRealizedTradeAttributionOverrides(normalized.realizedTradeAttributionOverrides);
     return normalized;
   }, []);
 
@@ -2044,8 +2135,9 @@ export default function App() {
       sectorTargetsByAccount,
       sectorOverrides,
       positionAttributionOverrides,
+      realizedTradeAttributionOverrides,
     });
-  }, [accounts, balanceHistory, positionAttributionOverrides, realizedTrades, sectorOverrides, sectorTargetsByAccount]);
+  }, [accounts, balanceHistory, positionAttributionOverrides, realizedTradeAttributionOverrides, realizedTrades, sectorOverrides, sectorTargetsByAccount]);
 
   // Load SPX and sector ETF benchmarks using the proxied Stooq daily history feed.
   const loadBenchmarks = useCallback(async ({ forceRefresh = false, spxOnly = false } = {}) => {
@@ -2300,7 +2392,7 @@ export default function App() {
     }, SHARED_DASHBOARD_SAVE_DEBOUNCE_MS);
 
     return () => window.clearTimeout(timeoutId);
-  }, [accounts, balanceHistory, positionAttributionOverrides, realizedTrades, saveSharedDashboardState, sectorOverrides, sectorTargetsByAccount, sharedStateReady]);
+  }, [accounts, balanceHistory, positionAttributionOverrides, realizedTradeAttributionOverrides, realizedTrades, saveSharedDashboardState, sectorOverrides, sectorTargetsByAccount, sharedStateReady]);
 
   useEffect(() => {
     saveJSONStorage(APP_STATE_STORAGE_KEY, {
@@ -2317,11 +2409,12 @@ export default function App() {
       sectorTargetsByAccount,
       sectorOverrides,
       positionAttributionOverrides,
+      realizedTradeAttributionOverrides,
       performanceAccountingMode,
       performanceChartMode,
       performanceChartSelection,
     });
-  }, [timeframe, sectorTimeframe, realizedTimeframe, accounts, balanceHistory, realizedTrades, selectedAccount, showBenchmark, selectedSector, riskMatrixMode, sectorTargetsByAccount, sectorOverrides, positionAttributionOverrides, performanceAccountingMode, performanceChartMode, performanceChartSelection]);
+  }, [timeframe, sectorTimeframe, realizedTimeframe, accounts, balanceHistory, realizedTrades, selectedAccount, showBenchmark, selectedSector, riskMatrixMode, sectorTargetsByAccount, sectorOverrides, positionAttributionOverrides, realizedTradeAttributionOverrides, performanceAccountingMode, performanceChartMode, performanceChartSelection]);
 
   useEffect(() => {
     saveJSONStorage(SECURITY_HISTORY_STORAGE_KEY, securityHistoryData);
@@ -2342,6 +2435,7 @@ export default function App() {
     setSectorTargetsByAccount({});
     setSectorOverrides({});
     setPositionAttributionOverrides({});
+    setRealizedTradeAttributionOverrides({});
     setSpxData([]);
     setSectorBenchmarkData({});
     setSecurityHistoryData({});
@@ -2593,29 +2687,60 @@ export default function App() {
     [allPositions, positionAttributionOverrides],
   );
 
+  const transferredRealizedTrades = useMemo(
+    () => realizedTrades
+      .map((trade) => {
+        const custodyAccount = normalizeAccountName(trade.account);
+        const attributedAccount = getRealizedTradeAttributedAccount(trade, realizedTradeAttributionOverrides);
+        return {
+          ...trade,
+          custodyAccount,
+          attributedAccount,
+        };
+      })
+      .filter((trade) => {
+        const heldAccount = normalizeAccountName(trade.account);
+        return heldAccount && trade.attributedAccount && heldAccount !== trade.attributedAccount;
+      }),
+    [realizedTradeAttributionOverrides, realizedTrades],
+  );
+
   const selectedRealizedTrades = useMemo(
-    () => (selectedAccount === 'ALL' ? realizedTrades : realizedTrades.filter(t => t.account === selectedAccount)).map((trade) => {
-      const { key: tradeOverrideKey, value: tradeSectorOverride, keys: tradeOverrideKeys } = getRealizedTradeOverrideMatch(trade, sectorOverrides);
-      const override = tradeSectorOverride
-        || sectorOverrides[getSectorOverrideKey(trade.account, trade.baseSym)]
-        || sectorOverrides[getSectorOverrideKey(trade.account, trade.symbol)];
-      const assignedSector = override && override !== SECTOR_OVERRIDE_AUTO
-        ? override
-        : (trade.mainSector || UNCLASSIFIED_SECTOR);
-      return {
-        ...trade,
-        tradeOverrideKeys,
-        tradeOverrideKey,
-        tradeSectorOverride,
-        sector: assignedSector,
-        mainSector: ALL_SECTOR_SET.has(assignedSector) ? assignedSector : null,
-      };
-    }),
-    [realizedTrades, selectedAccount, sectorOverrides],
+    () => realizedTrades
+      .map((trade) => {
+        const custodyAccount = normalizeAccountName(trade.account);
+        const attributedAccount = getRealizedTradeAttributedAccount(trade, realizedTradeAttributionOverrides);
+        if (selectedAccount !== 'ALL' && attributedAccount !== selectedAccount) return null;
+        const { key: tradeOverrideKey, value: tradeSectorOverride, keys: tradeOverrideKeys } = getRealizedTradeOverrideMatch(trade, sectorOverrides);
+        const override = tradeSectorOverride
+          || sectorOverrides[getSectorOverrideKey(attributedAccount, trade.baseSym)]
+          || sectorOverrides[getSectorOverrideKey(attributedAccount, trade.symbol)]
+          || sectorOverrides[getSectorOverrideKey(custodyAccount, trade.baseSym)]
+          || sectorOverrides[getSectorOverrideKey(custodyAccount, trade.symbol)];
+        const assignedSector = override && override !== SECTOR_OVERRIDE_AUTO
+          ? override
+          : (trade.mainSector || UNCLASSIFIED_SECTOR);
+        return {
+          ...trade,
+          custodyAccount,
+          attributedAccount,
+          tradeOverrideKeys,
+          tradeOverrideKey,
+          tradeSectorOverride,
+          sector: assignedSector,
+          mainSector: ALL_SECTOR_SET.has(assignedSector) ? assignedSector : null,
+        };
+      })
+      .filter(Boolean),
+    [realizedTradeAttributionOverrides, realizedTrades, selectedAccount, sectorOverrides],
   );
 
   const selectedRealizedTradesWithDates = useMemo(
-    () => selectedRealizedTrades.map((trade) => ({ ...trade, closedDateISO: normalizeDateInput(trade.closedDate) })),
+    () => selectedRealizedTrades.map((trade) => ({
+      ...trade,
+      openedDateISO: normalizeDateInput(trade.openedDate),
+      closedDateISO: normalizeDateInput(trade.closedDate),
+    })),
     [selectedRealizedTrades],
   );
   const realizedDateBounds = useMemo(
@@ -2715,8 +2840,15 @@ export default function App() {
       if (!key || symbolMap.has(key)) continue;
       symbolMap.set(key, position.historySymbol);
     }
+    for (const trade of transferredRealizedTrades) {
+      const historySymbol = trade.baseSym || trade.symbol;
+      if (!historySymbol || FUTURES_ROOT_TO_SECTOR[getFutureRootSymbol(historySymbol)]) continue;
+      const key = getSecurityHistoryCacheKey(historySymbol);
+      if (!key || symbolMap.has(key)) continue;
+      symbolMap.set(key, historySymbol);
+    }
     return [...symbolMap.entries()].map(([key, symbol]) => ({ key, symbol }));
-  }, [selectedPositions, transferredPositions]);
+  }, [selectedPositions, transferredPositions, transferredRealizedTrades]);
 
   useEffect(() => {
     const missingSymbols = trackedSecuritySymbols.filter(({ key }) => !securityHistoryData[key]?.length);
@@ -2758,6 +2890,12 @@ export default function App() {
     return cacheKey ? (securityHistoryData[cacheKey] || []) : [];
   }, [sectorBenchmarkData, securityHistoryData]);
 
+  const getRealizedTradeHistorySeries = useCallback((trade) => {
+    const historySymbol = trade?.baseSym || trade?.symbol;
+    const cacheKey = getSecurityHistoryCacheKey(historySymbol);
+    return cacheKey ? (securityHistoryData[cacheKey] || []) : [];
+  }, [securityHistoryData]);
+
   const legalPerformanceModelsByAccount = useMemo(
     () => Object.fromEntries(
       accountList.map((accountName) => [
@@ -2787,14 +2925,17 @@ export default function App() {
     const globalDates = [...new Set(
       Object.values(legalPerformanceModelsByAccount || {}).flatMap((model) => model?.navSeries?.map(([date]) => date) || []),
     )].sort();
-    if (!globalDates.length || !transferredPositions.length) {
+    if (!globalDates.length || (!transferredPositions.length && !transferredRealizedTrades.length)) {
       return {
         accountModels: legalPerformanceModelsByAccount,
         aggregateModel: legalAggregatePerformanceModel,
         activeModel: legalActivePerformanceModel,
-        transferCount: transferredPositions.length,
+        transferCount: transferredPositions.length + transferredRealizedTrades.length,
+        openTransferCount: transferredPositions.length,
+        closedTransferCount: transferredRealizedTrades.length,
         priceBackedCount: 0,
         accountBackedCount: 0,
+        linearCount: 0,
         flatCount: 0,
       };
     }
@@ -2803,6 +2944,7 @@ export default function App() {
       ...accountList,
       ...Object.keys(legalPerformanceModelsByAccount || {}),
       ...transferredPositions.flatMap((position) => [getPositionHeldAccount(position), getPositionDisplayAccount(position)]),
+      ...transferredRealizedTrades.flatMap((trade) => [normalizeAccountName(trade.account), getRealizedTradeDisplayAccount(trade)]),
     ])].filter(Boolean);
 
     const expandedBaseByAccount = Object.fromEntries(
@@ -2823,6 +2965,7 @@ export default function App() {
 
     let priceBackedCount = 0;
     let accountBackedCount = 0;
+    let linearCount = 0;
     let flatCount = 0;
 
     transferredPositions.forEach((position) => {
@@ -2841,6 +2984,32 @@ export default function App() {
       if (!series.length) return;
       if (method === 'price') priceBackedCount += 1;
       else if (method === 'account') accountBackedCount += 1;
+      else flatCount += 1;
+
+      series.forEach(([date, value]) => {
+        valueMaps[heldAccount].set(date, (valueMaps[heldAccount].get(date) || 0) - value);
+        if (!valueMaps[targetAccount]) valueMaps[targetAccount] = new Map(globalDates.map((historyDate) => [historyDate, 0]));
+        valueMaps[targetAccount].set(date, (valueMaps[targetAccount].get(date) || 0) + value);
+      });
+    });
+
+    transferredRealizedTrades.forEach((trade) => {
+      const heldAccount = normalizeAccountName(trade.account);
+      const targetAccount = getRealizedTradeDisplayAccount(trade);
+      if (!heldAccount || !targetAccount || heldAccount === targetAccount) return;
+
+      const sourceHistory = expandedBaseByAccount[heldAccount] || [];
+      const { series, method } = estimateAttributedRealizedTradeCarrySeries(
+        trade,
+        globalDates,
+        sourceHistory,
+        getRealizedTradeHistorySeries(trade),
+      );
+
+      if (!series.length) return;
+      if (method === 'price') priceBackedCount += 1;
+      else if (method === 'account') accountBackedCount += 1;
+      else if (method === 'linear') linearCount += 1;
       else flatCount += 1;
 
       series.forEach(([date, value]) => {
@@ -2886,12 +3055,15 @@ export default function App() {
       activeModel: selectedAccount === 'ALL'
         ? buildAggregatePerformanceModel(accountModels, accountList)
         : (accountModels[selectedAccount] || { navSeries: [], twrSeries: [], flowSeries: [], hasFlowAdjustedReturns: false }),
-      transferCount: transferredPositions.length,
+      transferCount: transferredPositions.length + transferredRealizedTrades.length,
+      openTransferCount: transferredPositions.length,
+      closedTransferCount: transferredRealizedTrades.length,
       priceBackedCount,
       accountBackedCount,
+      linearCount,
       flatCount,
     };
-  }, [accountList, getPositionHistorySeries, legalActivePerformanceModel, legalAggregatePerformanceModel, legalPerformanceModelsByAccount, selectedAccount, selectedPerformanceAccounts, transferredPositions]);
+  }, [accountList, getPositionHistorySeries, getRealizedTradeHistorySeries, legalActivePerformanceModel, legalAggregatePerformanceModel, legalPerformanceModelsByAccount, selectedAccount, selectedPerformanceAccounts, transferredPositions, transferredRealizedTrades]);
 
   const performanceModelSource = useMemo(
     () => (performanceAccountingMode === 'desk'
@@ -3587,6 +3759,24 @@ export default function App() {
     });
   }, [markSharedWorkspaceDirty]);
 
+  const updateRealizedTradeAttributionOverride = useCallback((trade, nextAccount) => {
+    const keys = getRealizedTradeOverrideKeys(trade);
+    const heldAccount = normalizeAccountName(trade?.account);
+    if (!keys.length || !heldAccount) return;
+    markSharedWorkspaceDirty('Closed-trade desk attribution pending sync');
+    setRealizedTradeAttributionOverrides((prev) => {
+      const next = { ...prev };
+      keys.forEach((key) => {
+        if (key in next) delete next[key];
+      });
+      if (!nextAccount || nextAccount === heldAccount) {
+        return next;
+      }
+      next[keys[0]] = nextAccount;
+      return next;
+    });
+  }, [markSharedWorkspaceDirty]);
+
   const updateRealizedTradeSectorOverride = useCallback((trade, nextSector) => {
     const keys = getRealizedTradeOverrideKeys(trade);
     if (!keys.length) return;
@@ -3999,8 +4189,9 @@ export default function App() {
             </div>
             {performanceAccountingMode === 'desk' && deskPerformanceModel.transferCount > 0 && (
               <div style={{ color:PALETTE.textDim, fontSize:'10px', marginBottom:'10px' }}>
-                Desk NAV is reallocated from {deskPerformanceModel.transferCount} transferred positions.
-                {' '}Direct price history: {deskPerformanceModel.priceBackedCount} · account-return fallback: {deskPerformanceModel.accountBackedCount} · flat fallback: {deskPerformanceModel.flatCount}
+                Desk NAV is reallocated from {deskPerformanceModel.transferCount} routed holdings
+                {' '}({deskPerformanceModel.openTransferCount || 0} open · {deskPerformanceModel.closedTransferCount || 0} closed).
+                {' '}Direct price history: {deskPerformanceModel.priceBackedCount} · account-return fallback: {deskPerformanceModel.accountBackedCount} · linear carry fallback: {deskPerformanceModel.linearCount || 0} · flat fallback: {deskPerformanceModel.flatCount}
               </div>
             )}
             <div style={{ display:'flex', gap:'8px', flexWrap:'wrap' }}>
@@ -4711,13 +4902,41 @@ export default function App() {
             <div style={S.tableWrapper}>
               <table style={S.table}>
                 <thead>
-                  <tr>{['Symbol','Account','Type','Sector Assignment','Closed Date','Qty','Proceeds','Cost','Gain $','Gain %','Term'].map(h => <th key={h} style={S.th}>{h}</th>)}</tr>
+                  <tr>{['Symbol','Account Routing','Type','Sector Assignment','Closed Date','Qty','Proceeds','Cost','Gain $','Gain %','Term'].map(h => <th key={h} style={S.th}>{h}</th>)}</tr>
                 </thead>
                 <tbody>
                   {filteredRealizedTrades.slice(0, 100).map((t, i) => (
                     <tr key={i}>
                       <td style={{ ...S.td, fontWeight:700, color: t.isOption ? '#ffd600' : '#00d4ff' }}>{t.symbol.length > 30 ? t.symbol.slice(0,28)+'…' : t.symbol}</td>
-                      <td style={{ ...S.td, fontSize:'10px', color:'#666' }}>{t.account.split('...')[1]}</td>
+                      <td style={{ ...S.td, minWidth:'210px' }}>
+                        <div style={{ display:'flex', flexDirection:'column', gap:'6px' }}>
+                          <div style={{ display:'flex', flexDirection:'column', gap:'2px' }}>
+                            <span style={{ color: t.attributedAccount !== t.custodyAccount ? PALETTE.accentBright : PALETTE.textStrong, fontSize:'11px', fontWeight:600 }}>
+                              Desk {formatShortAccountName(t.attributedAccount)}
+                            </span>
+                            <span style={{ color:PALETTE.textDim, fontSize:'10px' }}>
+                              Held {formatShortAccountName(t.custodyAccount)}
+                            </span>
+                          </div>
+                          <select
+                            value={t.attributedAccount !== t.custodyAccount ? t.attributedAccount : POSITION_ATTRIBUTION_HELD}
+                            onChange={(e) => updateRealizedTradeAttributionOverride(
+                              t,
+                              e.target.value === POSITION_ATTRIBUTION_HELD ? '' : e.target.value,
+                            )}
+                            style={{ ...S.input, padding:'4px 6px', fontSize:'10px', minWidth:'176px' }}
+                          >
+                            <option value={POSITION_ATTRIBUTION_HELD}>
+                              Held Account ({formatShortAccountName(t.custodyAccount)})
+                            </option>
+                            {accountList.map((accountName) => (
+                              <option key={accountName} value={accountName}>
+                                {formatShortAccountName(accountName)}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </td>
                       <td style={S.td}><span style={S.badge(t.isOption ? '#ffd600' : '#00d4ff')}>{t.isOption ? 'OPT' : 'EQ'}</span></td>
                       <td style={S.td}>
                         <div style={{ display:'flex', flexDirection:'column', gap:'6px', minWidth:'180px' }}>

@@ -23,9 +23,14 @@ logger = logging.getLogger(__name__)
 _NAV_REBUILD_LOCK = threading.Lock()
 _NAV_REBUILD_INFLIGHT: set[tuple[str, int]] = set()
 _NAV_REBUILD_SEMAPHORE = threading.Semaphore(1)
+_SHARED_DASHBOARD_FALLBACK_LOCK = threading.RLock()
 SHARED_DASHBOARD_STATE_KEY = "shared_dashboard_state"
 SHARED_DASHBOARD_STATE_UPDATED_AT_KEY = "shared_dashboard_state_updated_at"
 SHARED_DASHBOARD_STATE_VERSION_KEY = "shared_dashboard_state_version"
+SHARED_DASHBOARD_STATE_FALLBACK_PATH = os.getenv(
+    "WS_SHARED_DASHBOARD_STATE_FALLBACK_PATH",
+    os.path.join(os.path.expanduser("~"), ".barker_shared_dashboard_state.json"),
+)
 
 
 class ResetPayload(BaseModel):
@@ -110,6 +115,77 @@ def _coerce_shared_dashboard_state_version(raw_version: Optional[str]) -> int:
     except Exception:
         return 0
     return max(value, 0)
+
+
+def _read_shared_dashboard_state_fallback() -> Dict[str, Any]:
+    with _SHARED_DASHBOARD_FALLBACK_LOCK:
+        try:
+            with open(SHARED_DASHBOARD_STATE_FALLBACK_PATH, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except FileNotFoundError:
+            return {"state": None, "updated_at": None, "version": 0}
+        except Exception as exc:
+            logger.warning("Shared dashboard fallback read failed: %s", exc)
+            return {"state": None, "updated_at": None, "version": 0}
+
+    return {
+        "state": payload.get("state") if isinstance(payload, dict) else None,
+        "updated_at": payload.get("updated_at") if isinstance(payload, dict) else None,
+        "version": _coerce_shared_dashboard_state_version(payload.get("version") if isinstance(payload, dict) else 0),
+    }
+
+
+def _write_shared_dashboard_state_fallback(state: Dict[str, Any], base_version: Optional[int]) -> Dict[str, Any]:
+    with _SHARED_DASHBOARD_FALLBACK_LOCK:
+        current = _read_shared_dashboard_state_fallback()
+        current_state = current.get("state")
+        current_updated_at = current.get("updated_at")
+        current_version = _coerce_shared_dashboard_state_version(current.get("version"))
+        requested_version = base_version
+        if requested_version is None:
+            requested_version = 0 if current_state is None and current_version == 0 else None
+
+        if requested_version is None or int(requested_version) != current_version:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "Shared dashboard state is stale. Refresh before saving.",
+                    "version": current_version,
+                    "updated_at": current_updated_at,
+                },
+            )
+
+        updated_at = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+        next_version = current_version + 1
+        payload = {
+            "state": state,
+            "updated_at": updated_at,
+            "version": next_version,
+        }
+        directory = os.path.dirname(os.path.abspath(SHARED_DASHBOARD_STATE_FALLBACK_PATH))
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+        temp_path = f"{SHARED_DASHBOARD_STATE_FALLBACK_PATH}.tmp"
+        with open(temp_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, separators=(",", ":"), sort_keys=True)
+        os.replace(temp_path, SHARED_DASHBOARD_STATE_FALLBACK_PATH)
+        return payload
+
+
+def _mirror_shared_dashboard_state_fallback(state: Dict[str, Any], updated_at: Optional[str], version: int) -> None:
+    with _SHARED_DASHBOARD_FALLBACK_LOCK:
+        directory = os.path.dirname(os.path.abspath(SHARED_DASHBOARD_STATE_FALLBACK_PATH))
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+        payload = {
+            "state": state,
+            "updated_at": updated_at,
+            "version": _coerce_shared_dashboard_state_version(version),
+        }
+        temp_path = f"{SHARED_DASHBOARD_STATE_FALLBACK_PATH}.tmp"
+        with open(temp_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, separators=(",", ":"), sort_keys=True)
+        os.replace(temp_path, SHARED_DASHBOARD_STATE_FALLBACK_PATH)
 
 
 def _balance_history_mode() -> str:
@@ -200,11 +276,29 @@ def get_shared_dashboard_state(response: Response):
             values[key] = row[1]
         return values
 
-    stored = with_conn(_run)
-    raw_state = stored.get(SHARED_DASHBOARD_STATE_KEY)
-    updated_at = stored.get(SHARED_DASHBOARD_STATE_UPDATED_AT_KEY)
-    version = _coerce_shared_dashboard_state_version(stored.get(SHARED_DASHBOARD_STATE_VERSION_KEY))
-    decoded = _decode_shared_dashboard_state(raw_state)
+    try:
+        stored = with_conn(_run)
+        raw_state = stored.get(SHARED_DASHBOARD_STATE_KEY)
+        updated_at = stored.get(SHARED_DASHBOARD_STATE_UPDATED_AT_KEY)
+        version = _coerce_shared_dashboard_state_version(stored.get(SHARED_DASHBOARD_STATE_VERSION_KEY))
+        decoded = _decode_shared_dashboard_state(raw_state)
+        fallback = _read_shared_dashboard_state_fallback()
+        fallback_state = fallback.get("state") if isinstance(fallback.get("state"), dict) else None
+        fallback_version = _coerce_shared_dashboard_state_version(fallback.get("version"))
+        if fallback_state and fallback_version > version:
+            decoded = fallback_state
+            updated_at = fallback.get("updated_at")
+            version = fallback_version
+            response.headers["X-Shared-State-Backend"] = "fallback"
+        else:
+            response.headers["X-Shared-State-Backend"] = "database"
+    except Exception as exc:
+        logger.warning("Shared dashboard state DB read failed; using fallback file: %s", exc)
+        fallback = _read_shared_dashboard_state_fallback()
+        decoded = fallback.get("state") if isinstance(fallback.get("state"), dict) else None
+        updated_at = fallback.get("updated_at")
+        version = _coerce_shared_dashboard_state_version(fallback.get("version"))
+        response.headers["X-Shared-State-Backend"] = "fallback"
     return SharedDashboardStateResponse(state=decoded, updated_at=updated_at, version=version)
 
 
@@ -213,10 +307,10 @@ def save_shared_dashboard_state(payload: SharedDashboardStatePayload, response: 
     response.headers["Cache-Control"] = "no-store, max-age=0"
     response.headers["Pragma"] = "no-cache"
     state = payload.state or {}
-    serialized = json.dumps(state, separators=(",", ":"), sort_keys=True)
-    updated_at = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
 
     def _run(conn):
+        serialized = json.dumps(state, separators=(",", ":"), sort_keys=True)
+        updated_at = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
         cur = conn.cursor()
         cur.execute(
             "SELECT key, value FROM settings WHERE key IN (?, ?, ?)",
@@ -267,10 +361,28 @@ def save_shared_dashboard_state(payload: SharedDashboardStatePayload, response: 
             (SHARED_DASHBOARD_STATE_VERSION_KEY, str(next_version)),
         )
         conn.commit()
-        return next_version
+        return {"updated_at": updated_at, "version": next_version}
 
-    version = with_conn(_run)
-    return SharedDashboardStateResponse(state=state, updated_at=updated_at, version=version)
+    try:
+        stored = with_conn(_run)
+        _mirror_shared_dashboard_state_fallback(state, stored.get("updated_at"), _coerce_shared_dashboard_state_version(stored.get("version")))
+        response.headers["X-Shared-State-Backend"] = "database"
+        return SharedDashboardStateResponse(
+            state=state,
+            updated_at=stored.get("updated_at"),
+            version=_coerce_shared_dashboard_state_version(stored.get("version")),
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("Shared dashboard state DB write failed; using fallback file: %s", exc)
+        stored = _write_shared_dashboard_state_fallback(state, payload.base_version)
+        response.headers["X-Shared-State-Backend"] = "fallback"
+        return SharedDashboardStateResponse(
+            state=state,
+            updated_at=stored.get("updated_at"),
+            version=_coerce_shared_dashboard_state_version(stored.get("version")),
+        )
 
 
 @router.post("/reset")
