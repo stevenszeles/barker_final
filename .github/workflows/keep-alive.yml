@@ -1,0 +1,124 @@
+name: Keep Render Warm + Verify APIs
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+    - cron: "0 * * * *"
+  workflow_dispatch:
+    inputs:
+      site_url:
+        description: "Optional override for the deployed site URL"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: render-keep-alive
+  cancel-in-progress: false
+
+env:
+  DEFAULT_SITE_URL: https://barker-dashboard.onrender.com
+  INPUT_SITE_URL: ${{ github.event.inputs.site_url }}
+  RENDER_SERVICE_URL: ${{ vars.RENDER_SERVICE_URL }}
+
+jobs:
+  ping:
+    name: Ping Render Health Endpoint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve site URL
+        run: |
+          SITE_URL="${INPUT_SITE_URL:-${RENDER_SERVICE_URL:-$DEFAULT_SITE_URL}}"
+          echo "SITE_URL=${SITE_URL%/}" >> "$GITHUB_ENV"
+          echo "Using site URL: ${SITE_URL%/}"
+
+      - name: Ping /health
+        run: |
+          STATUS=$(curl -L --retry 2 --retry-all-errors --max-time 30 \
+            -o /tmp/health.json \
+            -s -w "%{http_code}" \
+            "$SITE_URL/health")
+
+          echo "Health status code: $STATUS"
+
+          if [ "$STATUS" -lt 200 ] || [ "$STATUS" -ge 400 ]; then
+            echo "Health endpoint request failed"
+            cat /tmp/health.json || true
+            exit 1
+          fi
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path("/tmp/health.json").read_text())
+          status = payload.get("status")
+          if status not in {"ok", "degraded"}:
+            raise SystemExit(f"Unexpected health payload: {payload}")
+          print(f"Validated /health with status={status} db={payload.get('db')}")
+          PY
+
+  verify-apis:
+    name: Verify Version And API Endpoints
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && startsWith(github.event.schedule, '0 '))
+    steps:
+      - name: Resolve site URL
+        run: |
+          SITE_URL="${INPUT_SITE_URL:-${RENDER_SERVICE_URL:-$DEFAULT_SITE_URL}}"
+          echo "SITE_URL=${SITE_URL%/}" >> "$GITHUB_ENV"
+          echo "Using site URL: ${SITE_URL%/}"
+
+      - name: Verify /version
+        run: |
+          STATUS=$(curl -L --retry 2 --retry-all-errors --max-time 30 \
+            -o /tmp/version.json \
+            -s -w "%{http_code}" \
+            "$SITE_URL/version")
+
+          echo "Version status code: $STATUS"
+
+          if [ "$STATUS" -lt 200 ] || [ "$STATUS" -ge 400 ]; then
+            echo "Version endpoint request failed"
+            cat /tmp/version.json || true
+            exit 1
+          fi
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path("/tmp/version.json").read_text())
+          required = {"build_id", "build_time", "environment", "db"}
+          missing = required.difference(payload)
+          if missing:
+            raise SystemExit(f"Missing fields from /version: {sorted(missing)}")
+          print(f"Validated /version build_id={payload['build_id']} environment={payload['environment']}")
+          PY
+
+      - name: Verify /api/market/status
+        run: |
+          STATUS=$(curl -L --retry 2 --retry-all-errors --max-time 30 \
+            -o /tmp/market-status.json \
+            -s -w "%{http_code}" \
+            "$SITE_URL/api/market/status")
+
+          echo "Market status code: $STATUS"
+
+          if [ "$STATUS" -lt 200 ] || [ "$STATUS" -ge 400 ]; then
+            echo "Market status request failed"
+            cat /tmp/market-status.json || true
+            exit 1
+          fi
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path("/tmp/market-status.json").read_text())
+          if "source" not in payload or "market" not in payload:
+            raise SystemExit(f"Unexpected market status payload: {payload}")
+          print(f"Validated /api/market/status source={payload['source']} market={payload['market']}")
+          PY
