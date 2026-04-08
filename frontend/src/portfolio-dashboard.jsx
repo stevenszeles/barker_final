@@ -2084,11 +2084,12 @@ const S = {
     color:PALETTE.text,
     fontFamily:"'IBM Plex Sans', 'IBM Plex Sans Condensed', 'Helvetica Neue', sans-serif",
     minHeight:'100vh',
-    fontSize:'12px',
-    padding:'14px',
+    fontSize:'13px',
+    padding:'22px',
     backgroundImage:[
-      `radial-gradient(circle at top left, ${hexToRgba(PALETTE.accent, 0.08)}, transparent 24%)`,
-      `radial-gradient(circle at top right, ${hexToRgba(PALETTE.steel, 0.06)}, transparent 30%)`,
+      `radial-gradient(circle at top left, ${hexToRgba(PALETTE.accent, 0.11)}, transparent 26%)`,
+      `radial-gradient(circle at top right, ${hexToRgba(PALETTE.steel, 0.08)}, transparent 32%)`,
+      `radial-gradient(circle at bottom center, ${hexToRgba(PALETTE.brass, 0.05)}, transparent 28%)`,
       'linear-gradient(180deg, rgba(18, 21, 26, 0.98), rgba(6, 7, 9, 1))',
       'repeating-linear-gradient(0deg, rgba(255,255,255,0.012) 0, rgba(255,255,255,0.012) 1px, transparent 1px, transparent 30px)',
       'repeating-linear-gradient(90deg, rgba(255,255,255,0.01) 0, rgba(255,255,255,0.01) 1px, transparent 1px, transparent 30px)',
@@ -2097,81 +2098,83 @@ const S = {
   screen: {
     maxWidth:'1680px',
     margin:'0 auto',
-    background:'linear-gradient(180deg, rgba(17,19,23,0.99), rgba(6,7,9,1))',
+    background:'linear-gradient(180deg, rgba(20,23,28,0.99), rgba(8,10,12,1))',
     border:`1px solid ${PALETTE.border}`,
-    boxShadow:'0 18px 48px rgba(0,0,0,0.48)',
+    borderRadius:'28px',
+    boxShadow:'0 26px 72px rgba(0,0,0,0.52)',
     overflow:'hidden',
   },
   headerShell: {
-    background:'linear-gradient(180deg, rgba(26,29,34,0.98), rgba(10,11,14,0.98))',
+    background:'linear-gradient(180deg, rgba(28,32,38,0.98), rgba(11,13,16,0.99))',
     borderBottom:`1px solid ${PALETTE.borderStrong}`,
   },
   header: {
-    padding:'10px 18px',
+    padding:'20px 24px 16px',
     display:'flex',
     alignItems:'center',
     justifyContent:'space-between',
-    gap:'18px',
+    gap:'20px',
+    flexWrap:'wrap',
     borderBottom:`1px solid ${PALETTE.borderSubtle}`,
   },
   logo: {
     color:PALETTE.accentBright,
     fontWeight:700,
-    fontSize:'16px',
-    letterSpacing:'2.8px',
+    fontSize:'19px',
+    letterSpacing:'2.2px',
     textTransform:'uppercase',
     fontFamily:"'IBM Plex Sans Condensed', 'IBM Plex Sans', sans-serif",
   },
-  headerMeta: { color:PALETTE.textMuted, fontSize:'10px', letterSpacing:'1.5px', textTransform:'uppercase' },
+  headerMeta: { color:PALETTE.textMuted, fontSize:'11px', letterSpacing:'1.3px', textTransform:'uppercase' },
   statusPill: {
     background:'linear-gradient(180deg, rgba(44,49,56,0.96), rgba(15,17,20,0.96))',
     border:`1px solid ${PALETTE.border}`,
     color:PALETTE.text,
-    padding:'6px 10px',
-    borderRadius:'2px',
-    fontSize:'10px',
-    letterSpacing:'1.1px',
+    padding:'8px 12px',
+    borderRadius:'999px',
+    fontSize:'10.5px',
+    letterSpacing:'1px',
     textTransform:'uppercase',
-    boxShadow:'none',
+    boxShadow:`0 10px 20px ${hexToRgba('#000000', 0.14)}`,
     fontFamily:"'IBM Plex Sans Condensed', 'IBM Plex Sans', sans-serif",
   },
   marketRibbon: {
     display:'grid',
-    gridTemplateColumns:'repeat(auto-fit, minmax(132px, 1fr))',
-    gap:'8px',
-    padding:'10px 18px 14px',
+    gridTemplateColumns:'repeat(auto-fit, minmax(144px, 1fr))',
+    gap:'10px',
+    padding:'14px 24px 20px',
   },
   marketTile: {
     background:'linear-gradient(180deg, rgba(31,35,40,0.96), rgba(10,12,14,0.96))',
     border:`1px solid ${PALETTE.borderSubtle}`,
     borderTop:`1px solid ${PALETTE.borderStrong}`,
-    borderRadius:'2px',
-    padding:'8px 10px',
-    boxShadow:'none',
+    borderRadius:'18px',
+    padding:'12px 14px',
+    boxShadow:`inset 0 1px 0 ${hexToRgba('#ffffff', 0.03)}, 0 12px 24px rgba(0,0,0,0.16)`,
   },
   tabs: {
     display:'flex',
-    gap:'1px',
-    background:PALETTE.bg,
+    gap:'10px',
+    background:'linear-gradient(180deg, rgba(13,16,20,0.98), rgba(8,10,13,0.98))',
     borderBottom:`1px solid ${PALETTE.border}`,
-    padding:'0 12px',
+    padding:'12px 22px 0',
     overflowX:'auto',
   },
   tab: {
-    padding:'11px 14px',
+    padding:'12px 16px',
     cursor:'pointer',
     color:PALETTE.textMuted,
     transition:'all .15s',
     fontWeight:700,
-    fontSize:'10px',
-    letterSpacing:'1.6px',
+    fontSize:'10.5px',
+    letterSpacing:'1.4px',
     textTransform:'uppercase',
     background:'linear-gradient(180deg, rgba(30,34,38,0.96), rgba(10,12,14,0.96))',
     border:`1px solid ${PALETTE.borderSubtle}`,
     borderBottom:'1px solid transparent',
-    borderTopLeftRadius:'2px',
-    borderTopRightRadius:'2px',
-    marginTop:'8px',
+    borderTopLeftRadius:'16px',
+    borderTopRightRadius:'16px',
+    marginTop:'0',
     minWidth:'fit-content',
     fontFamily:"'IBM Plex Sans Condensed', 'IBM Plex Sans', sans-serif",
   },
@@ -2180,31 +2183,31 @@ const S = {
     borderColor:PALETTE.borderStrong,
     borderBottomColor:PALETTE.bg,
     background:'linear-gradient(180deg, rgba(52,37,17,0.96), rgba(17,15,12,0.98))',
-    boxShadow:'none',
+    boxShadow:`0 14px 28px ${hexToRgba('#000000', 0.18)}`,
   },
   selectorBar: {
     background:'linear-gradient(180deg, rgba(16,19,22,0.98), rgba(5,7,9,0.98))',
     borderBottom:`1px solid ${PALETTE.borderSubtle}`,
-    padding:'10px 18px',
+    padding:'14px 24px',
     display:'flex',
-    gap:'8px',
+    gap:'10px',
     alignItems:'center',
     overflowX:'auto',
   },
-  selectorLabel: { color:PALETTE.textDim, fontSize:'10px', letterSpacing:'1.5px', textTransform:'uppercase', marginRight:'6px', fontFamily:"'IBM Plex Sans Condensed', 'IBM Plex Sans', sans-serif" },
+  selectorLabel: { color:PALETTE.textDim, fontSize:'10.5px', letterSpacing:'1.3px', textTransform:'uppercase', marginRight:'8px', fontFamily:"'IBM Plex Sans Condensed', 'IBM Plex Sans', sans-serif" },
   card: {
     background:'linear-gradient(180deg, rgba(22,26,30,0.98), rgba(7,9,11,0.99))',
     border:`1px solid ${PALETTE.borderSubtle}`,
-    borderRadius:'2px',
-    padding:'14px 16px',
-    boxShadow:'0 8px 20px rgba(0,0,0,0.16)',
+    borderRadius:'20px',
+    padding:'18px 20px',
+    boxShadow:'0 16px 36px rgba(0,0,0,0.22)',
   },
   cardTitle: {
     color:PALETTE.accentBright,
-    fontSize:'10px',
-    letterSpacing:'1.8px',
+    fontSize:'10.5px',
+    letterSpacing:'1.6px',
     textTransform:'uppercase',
-    marginBottom:'8px',
+    marginBottom:'10px',
     fontWeight:700,
     fontFamily:"'IBM Plex Sans Condensed', 'IBM Plex Sans', sans-serif",
   },
@@ -2213,31 +2216,32 @@ const S = {
   neutral: { color:PALETTE.textStrong },
   grid: (cols) => {
     const minWidth = Math.min(280, Math.max(180, Math.floor(1120 / Math.max(cols, 1))));
-    return { display:'grid', gridTemplateColumns:`repeat(auto-fit, minmax(${minWidth}px, 1fr))`, gap:'12px' };
+    return { display:'grid', gridTemplateColumns:`repeat(auto-fit, minmax(${minWidth}px, 1fr))`, gap:'14px' };
   },
-  section: { padding:'18px 18px 28px' },
+  section: { padding:'24px 24px 34px' },
   tableWrapper: {
     overflowX:'auto',
     overflowY:'hidden',
     border:`1px solid ${PALETTE.borderSubtle}`,
     background:'rgba(0,0,0,0.16)',
+    borderRadius:'16px',
   },
   table: { width:'100%', borderCollapse:'collapse', fontSize:'11px' },
   th: {
-    padding:'8px 12px',
+    padding:'11px 14px',
     textAlign:'left',
     color:PALETTE.accentBright,
     fontWeight:700,
     borderBottom:`1px solid ${PALETTE.borderStrong}`,
-    fontSize:'9px',
-    letterSpacing:'1.4px',
+    fontSize:'9.5px',
+    letterSpacing:'1.2px',
     textTransform:'uppercase',
     background:'linear-gradient(180deg, rgba(45,31,15,0.62), rgba(15,16,18,0.98))',
     whiteSpace:'nowrap',
     fontFamily:"'IBM Plex Sans Condensed', 'IBM Plex Sans', sans-serif",
   },
   td: {
-    padding:'8px 12px',
+    padding:'11px 14px',
     borderBottom:`1px solid ${PALETTE.borderSubtle}`,
     color:PALETTE.text,
     whiteSpace:'nowrap',
@@ -2256,13 +2260,13 @@ const S = {
     background:'linear-gradient(180deg, rgba(36,41,46,0.96), rgba(10,12,15,0.96))',
     border:`1px solid ${PALETTE.border}`,
     color:PALETTE.text,
-    padding:'6px 14px',
-    borderRadius:'2px',
+    padding:'8px 14px',
+    borderRadius:'12px',
     cursor:'pointer',
     fontSize:'11px',
     fontWeight:700,
     letterSpacing:'1px',
-    boxShadow:'none',
+    boxShadow:`0 8px 18px ${hexToRgba('#000000', 0.16)}`,
     fontFamily:"'IBM Plex Sans Condensed', 'IBM Plex Sans', sans-serif",
   },
   btnActive: {
@@ -2274,18 +2278,18 @@ const S = {
     background:'linear-gradient(180deg, rgba(14,17,20,0.96), rgba(7,9,11,0.98))',
     border:`1px solid ${PALETTE.border}`,
     color:PALETTE.textStrong,
-    padding:'8px 12px',
-    borderRadius:'2px',
+    padding:'10px 12px',
+    borderRadius:'12px',
     fontSize:'12px',
     width:'100%',
     boxSizing:'border-box',
-    boxShadow:'none',
+    boxShadow:`inset 0 1px 0 ${hexToRgba('#ffffff', 0.03)}`,
     fontFamily:"'IBM Plex Sans', sans-serif",
   },
   uploadBox: {
     border:`1px dashed ${PALETTE.borderStrong}`,
-    borderRadius:'2px',
-    padding:'24px',
+    borderRadius:'18px',
+    padding:'28px',
     textAlign:'center',
     cursor:'pointer',
     transition:'all .2s',
@@ -4393,6 +4397,21 @@ export default function App() {
       : /saving|loading|publishing|refreshing|clearing|pending|detected|merging/i.test(sharedSyncStatus)
         ? 'Syncing'
         : 'Shared';
+  const workspaceBadgeLabel = !sharedStateReady
+    ? 'Workspace Booting'
+    : sharedSyncValue === 'Error'
+      ? 'Workspace Attention'
+      : sharedSyncValue === 'Syncing'
+        ? 'Workspace Syncing'
+        : 'Workspace Live';
+  const workspaceBadgeTone = !sharedStateReady
+    ? PALETTE.warning
+    : sharedSyncValue === 'Error'
+      ? PALETTE.negative
+      : sharedSyncValue === 'Syncing'
+        ? PALETTE.warning
+        : PALETTE.accentBright;
+  const benchmarkFeedLabel = spxLoading ? 'Benchmarks Syncing' : spxData.length > 0 ? 'Benchmarks Live' : 'Benchmarks Pending';
   const terminalStatusTiles = [
     { label:'Scope', value: selectedAccount === 'ALL' ? 'All Accounts' : selectedAccount.split('...')[1] ? `Acct ${selectedAccount.split('...')[1]}` : selectedAccount, tone:PALETTE.info },
     { label:'Accounts', value: String(accountList.length), tone:PALETTE.accentBright },
@@ -4423,13 +4442,14 @@ export default function App() {
             <div style={{ display:'flex', alignItems:'center', gap:'18px', flexWrap:'wrap' }}>
               <div style={S.logo}>Barker Capital Desk</div>
               <div style={S.headerMeta}>Multi-Account Portfolio Command Center</div>
-              <div style={{ ...S.statusPill, borderColor:PALETTE.borderStrong, color:PALETTE.accentBright }}>Client View Ready</div>
+              <div style={{ ...S.statusPill, borderColor:hexToRgba(workspaceBadgeTone, 0.34), color:workspaceBadgeTone }}>{workspaceBadgeLabel}</div>
             </div>
             <div style={{ display:'flex', alignItems:'center', gap:'10px', flexWrap:'wrap', justifyContent:'flex-end' }}>
               <div style={{ ...S.statusPill, color:PALETTE.textMuted }}>{new Date().toLocaleDateString('en-US',{weekday:'short',year:'numeric',month:'short',day:'numeric'})}</div>
               <div style={{ ...S.statusPill, borderColor:PALETTE.border, color:PALETTE.textMuted }}>Build {APP_BUILD_VERSION}</div>
               <div style={{ ...S.statusPill, borderColor:PALETTE.border, color:PALETTE.info }}>{selectedAccountLabel}</div>
-              <div style={{ ...S.statusPill, borderColor:PALETTE.border, color: totalPortfolioValue > 0 ? PALETTE.textStrong : PALETTE.textDim, minWidth:'132px', textAlign:'right' }}>{fmt$(totalPortfolioValue)}</div>
+              <div style={{ ...S.statusPill, borderColor:hexToRgba(spxData.length > 0 ? PALETTE.positive : PALETTE.warning, 0.28), color: spxData.length > 0 ? PALETTE.positive : PALETTE.warning }}>{benchmarkFeedLabel}</div>
+              <div style={{ ...S.statusPill, borderColor:PALETTE.border, color: totalPortfolioValue > 0 ? PALETTE.textStrong : PALETTE.textDim, minWidth:'148px', textAlign:'right' }}>{fmt$(totalPortfolioValue)}</div>
             </div>
           </div>
           <div style={S.marketRibbon}>
@@ -4475,7 +4495,7 @@ export default function App() {
             <div style={{ marginLeft:'auto', display:'flex', gap:'8px', flexWrap:'wrap' }}>
               <div style={{ ...S.statusPill, color:PALETTE.textMuted }}>Chart TF {timeframe}</div>
               <div style={{ ...S.statusPill, color:PALETTE.textMuted }}>{selectedPositions.length} Live Positions</div>
-              <div style={{ ...S.statusPill, color: spxData.length > 0 ? PALETTE.positive : PALETTE.negative }}>{spxData.length > 0 ? 'SPX Feed OK' : 'SPX Feed Pending'}</div>
+              <div style={{ ...S.statusPill, color: spxData.length > 0 ? PALETTE.positive : PALETTE.warning }}>{benchmarkFeedLabel}</div>
             </div>
           </div>
         )}

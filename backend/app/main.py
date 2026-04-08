@@ -8,7 +8,7 @@ from .config import settings
 from .routers import portfolio, risk, trades, status
 from .routers import auth, broker, market, positions, admin, stooq_proxy
 from .workers import start_workers
-from .db import ensure_schema
+from .db import ensure_schema, storage_diagnostics
 from .bootstrap_seed import seed_demo_portfolio_if_empty
 
 _log_path = settings.log_path
@@ -88,23 +88,29 @@ STATIC_DIR = os.path.abspath(
 
 @app.get("/health")
 def health():
-    status = "degraded" if app.state.startup_degraded else "ok"
+    storage = storage_diagnostics()
+    status = "degraded" if app.state.startup_degraded or storage.get("fallback_active") else "ok"
     return {
         "status": status,
         "db": "ready" if app.state.startup_ready else "unavailable",
         "startup_error": app.state.startup_error,
+        "db_backend": storage.get("active_backend"),
+        "db_fallback_active": storage.get("fallback_active"),
     }
 
 
 @app.get("/version")
 def version():
     # Lightweight deploy verification endpoint.
+    storage = storage_diagnostics()
     return {
         "build_id": os.getenv("RENDER_GIT_COMMIT", os.getenv("GIT_COMMIT", "local")),
         "build_time": os.getenv("BUILD_TIMESTAMP", "unknown"),
         "environment": os.getenv("ENVIRONMENT", "development"),
         "db": "ready" if app.state.startup_ready else "unavailable",
         "startup_error": app.state.startup_error,
+        "db_backend": storage.get("active_backend"),
+        "db_fallback_active": storage.get("fallback_active"),
     }
 
 

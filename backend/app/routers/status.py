@@ -10,6 +10,13 @@ from ..services import schwab, token_store
 router = APIRouter(prefix="/status", tags=["status"])
 
 
+def _safe_schwab_token():
+    try:
+        return token_store.get_token("schwab")
+    except Exception as exc:
+        return {"_error": str(exc)}
+
+
 @router.get("/components", response_model=list[DataStatus])
 def components():
     return get_status()
@@ -28,7 +35,19 @@ def schwab_status():
             "configured": False,
         }
 
-    token = token_store.get_token("schwab")
+    token = _safe_schwab_token()
+    if token and token.get("_error"):
+        return {
+            "connected": False,
+            "status": "degraded",
+            "message": "Token storage unavailable; running without Schwab session state.",
+            "reason": token["_error"],
+            "can_trade": False,
+            "can_fetch_data": False,
+            "configured": True,
+            "auth_url": "/api/auth/schwab/start",
+        }
+
     if not token or not token.get("access_token"):
         return {
             "connected": False,
@@ -55,8 +74,24 @@ def schwab_status():
             "expires_in_seconds": expires_in_seconds,
             "auth_url": "/api/auth/schwab/start",
         }
-    can_use = schwab.can_use_marketdata()
-    in_cooldown = schwab._in_refresh_cooldown()
+    try:
+        can_use = schwab.can_use_marketdata()
+        in_cooldown = schwab._in_refresh_cooldown()
+    except Exception as exc:
+        return {
+            "connected": False,
+            "status": "degraded",
+            "message": "Schwab status unavailable; local portfolio mode is still active.",
+            "reason": str(exc),
+            "can_trade": False,
+            "can_fetch_data": False,
+            "configured": True,
+            "expires_in_seconds": expires_in_seconds,
+            "expires_at": datetime.fromtimestamp(expires_at).isoformat(),
+            "token_valid": expires_in_seconds > 0,
+            "in_cooldown": False,
+            "auth_url": "/api/auth/schwab/start",
+        }
     if in_cooldown:
         return {
             "connected": True,
