@@ -26,7 +26,10 @@ def _in_refresh_cooldown() -> bool:
 def can_use_marketdata() -> bool:
     if not settings.schwab.client_id:
         return False
-    token = get_token(PROVIDER)
+    try:
+        token = get_token(PROVIDER)
+    except Exception:
+        return False
     if not token:
         return False
     if _in_refresh_cooldown():

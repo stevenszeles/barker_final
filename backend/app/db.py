@@ -15,10 +15,24 @@ from .config import settings
 
 _LOCK = threading.RLock()
 logger = logging.getLogger(__name__)
+_SQLITE_FALLBACK_ACTIVE = False
+_LAST_CONNECTION_ERROR = None
 
 
 def _is_postgres() -> bool:
     return bool(settings.db_url)
+
+
+def storage_diagnostics() -> dict:
+    backend = "postgres" if _is_postgres() and not _SQLITE_FALLBACK_ACTIVE else "sqlite"
+    return {
+        "configured_backend": "postgres" if _is_postgres() else "sqlite",
+        "active_backend": backend,
+        "fallback_active": bool(_SQLITE_FALLBACK_ACTIVE),
+        "fallback_enabled": bool(getattr(settings, "db_fallback_to_sqlite", False)),
+        "last_error": _LAST_CONNECTION_ERROR,
+        "db_path": settings.db_path if backend == "sqlite" else None,
+    }
 
 
 def _table_columns(conn, table_name: str) -> list[str]:
@@ -776,28 +790,42 @@ def ensure_schema() -> None:
 
 
 def connect():
+    global _SQLITE_FALLBACK_ACTIVE, _LAST_CONNECTION_ERROR
     if _is_postgres():
         if psycopg2 is None:
             raise RuntimeError("psycopg2 is required for Postgres. Install backend requirements.")
-        max_attempts = max(1, int(os.getenv("WS_DB_CONNECT_ATTEMPTS", "5")))
-        base_delay = max(0.1, float(os.getenv("WS_DB_CONNECT_DELAY_SECONDS", "1.0")))
-        last_error = None
-        for attempt in range(1, max_attempts + 1):
-            try:
-                conn = psycopg2.connect(settings.db_url, cursor_factory=psycopg2.extras.RealDictCursor)
-                return _DBConn(conn)
-            except psycopg2.OperationalError as exc:
-                last_error = exc
-                if attempt >= max_attempts:
-                    break
-                logger.warning(
-                    "Postgres connection attempt %s/%s failed: %s",
-                    attempt,
+        if not _SQLITE_FALLBACK_ACTIVE:
+            default_attempts = "2" if getattr(settings, "db_fallback_to_sqlite", False) else "5"
+            max_attempts = max(1, int(os.getenv("WS_DB_CONNECT_ATTEMPTS", default_attempts)))
+            base_delay = max(0.1, float(os.getenv("WS_DB_CONNECT_DELAY_SECONDS", "1.0")))
+            last_error = None
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    conn = psycopg2.connect(settings.db_url, cursor_factory=psycopg2.extras.RealDictCursor)
+                    _LAST_CONNECTION_ERROR = None
+                    return _DBConn(conn)
+                except psycopg2.OperationalError as exc:
+                    last_error = exc
+                    if attempt >= max_attempts:
+                        break
+                    logger.warning(
+                        "Postgres connection attempt %s/%s failed: %s",
+                        attempt,
+                        max_attempts,
+                        exc,
+                    )
+                    time.sleep(base_delay * attempt)
+            if last_error is not None:
+                _LAST_CONNECTION_ERROR = str(last_error)
+                if not getattr(settings, "db_fallback_to_sqlite", False):
+                    raise last_error
+                _SQLITE_FALLBACK_ACTIVE = True
+                logger.error(
+                    "Postgres unavailable after %s attempts; falling back to SQLite at %s. Last error: %s",
                     max_attempts,
-                    exc,
+                    settings.db_path,
+                    last_error,
                 )
-                time.sleep(base_delay * attempt)
-        raise last_error
     db_path = settings.db_path
     db_dir = os.path.dirname(os.path.abspath(db_path))
     if db_dir:

@@ -64,12 +64,24 @@ class Settings:
                 return ""
             return raw
 
+        def _env_bool(name: str, default: bool = False) -> bool:
+            raw = os.environ.get(name)
+            if raw is None:
+                return default
+            return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+        render_runtime = any(
+            bool((os.environ.get(name) or "").strip())
+            for name in ("RENDER", "RENDER_SERVICE_ID", "RENDER_EXTERNAL_URL", "RENDER_EXTERNAL_HOSTNAME")
+        )
+
         # API prefix
         self.api_prefix = os.environ.get("WS_API_PREFIX", "/api")
 
         # Database configuration
         self.db_url = _clean_optional(os.environ.get("DATABASE_URL") or os.environ.get("WS_DATABASE_URL"))
         self.db_path = os.environ.get("WS_DB_PATH", str(Path.home() / "workstation.db"))
+        self.db_fallback_to_sqlite = _env_bool("WS_DB_FALLBACK_TO_SQLITE", default=render_runtime)
 
         # Mode configuration
         self.demo_mode = os.environ.get("WS_DEMO_MODE", "0") == "1"
