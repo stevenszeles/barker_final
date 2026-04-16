@@ -204,7 +204,7 @@ const ACCOUNT_COLORS = [
   '#756f7f',
   '#8f8a6f',
 ];
-const APP_BUILD_VERSION = "2026.04.02.4";
+const APP_BUILD_VERSION = "2026.04.16.1";
 const APP_STATE_STORAGE_KEY = `portfolio-dashboard.app-state.${APP_BUILD_VERSION}`;
 const LEGACY_APP_STATE_STORAGE_KEYS = [
   "portfolio-dashboard.app-state.2026.04.02.1",
@@ -756,6 +756,13 @@ function resolveStatementFutureSector(symbol, description = '') {
   return null;
 }
 
+function isStatementFutureContractSymbol(symbol, description = '') {
+  const rawSymbol = String(symbol || '').replace(/"/g, '').trim().toUpperCase();
+  const upperDescription = String(description || '').replace(/"/g, '').trim().toUpperCase();
+  if (!rawSymbol.startsWith('/')) return false;
+  return Boolean(getFutureRootSymbol(rawSymbol)) || upperDescription.includes('FUTURES');
+}
+
 function getUploadedAssetMeta(symbol, description = '', assetType = '') {
   const rawSymbol = String(symbol || '').replace(/"/g, '').trim().toUpperCase();
   const descriptionText = String(description || '').replace(/"/g, '').trim();
@@ -1160,8 +1167,8 @@ function parseFuturesStatementCSV(text, {
       };
       profitsLookup.set(symbol, profitEntry);
 
-      const assetMeta = getUploadedAssetMeta(symbol, description, 'Future');
-      if (!assetMeta.futureLike) return;
+      if (!isStatementFutureContractSymbol(symbol, description)) return;
+      const assetMeta = getUploadedAssetMeta(symbol, description, '');
       const pnlOpen = Number.isFinite(profitEntry.pnlOpen) ? profitEntry.pnlOpen : 0;
       const pnlYtd = Number.isFinite(profitEntry.pnlYtd) ? profitEntry.pnlYtd : 0;
       const realizedPnl = pnlYtd - pnlOpen;
