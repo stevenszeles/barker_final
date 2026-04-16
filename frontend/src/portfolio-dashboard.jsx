@@ -342,6 +342,28 @@ function getLegacyRealizedTradeOverrideKey(trade) {
   ].join('::');
 }
 
+function isFutureLikeRealizedTrade(trade) {
+  const assetType = String(trade?.assetType || '').toLowerCase();
+  if (assetType.includes('future')) return true;
+  return Boolean(FUTURES_ROOT_TO_SECTOR[getFutureRootSymbol(trade?.baseSym || trade?.symbol)]);
+}
+
+function getRealizedTradeAssetTypeToken(trade) {
+  const assetType = String(trade?.assetType || '').toLowerCase();
+  if (assetType.includes('future') && assetType.includes('option')) return 'FUT_OPT';
+  if (assetType.includes('future') || trade?.isFuture) return 'FUT';
+  if (assetType.includes('option') || trade?.isOption) return 'OPT';
+  return 'EQ';
+}
+
+function getRealizedTradeBadge(trade) {
+  const token = getRealizedTradeAssetTypeToken(trade);
+  if (token === 'FUT_OPT') return { label: 'FOP', color: PALETTE.brass };
+  if (token === 'FUT') return { label: 'FUT', color: PALETTE.brass };
+  if (token === 'OPT') return { label: 'OPT', color: PALETTE.warning };
+  return { label: 'EQ', color: PALETTE.info };
+}
+
 function getRealizedTradeOverrideKeys(trade) {
   if (!trade) return [];
   const accountName = normalizeAccountName(trade.account);
@@ -351,7 +373,7 @@ function getRealizedTradeOverrideKeys(trade) {
   const baseSymbol = String(trade.baseSym || '').trim();
   const qty = formatOverrideNumber(Math.abs(Number(trade.qty)));
   const term = String(trade.term || '').trim().toUpperCase();
-  const tradeType = trade?.isOption ? 'OPT' : 'EQ';
+  const tradeType = getRealizedTradeAssetTypeToken(trade);
 
   const stableKeys = [
     ['REALIZED_V2', accountName, symbol, closedDate, openedDate, qty, term, tradeType].join('::'),
@@ -554,6 +576,8 @@ function mergeSharedDashboardStates(baseState, localState, remoteState) {
 }
 
 function resolveMainSector(symbol, cleanSym, assetType = "") {
+  const futureSector = resolveStatementFutureSector(symbol, symbol);
+  if (futureSector) return futureSector;
   const mapped = SYMBOL_TO_SECTOR[cleanSym] || SYMBOL_TO_SECTOR[symbol] || ETF_TO_SECTOR[cleanSym] || null;
   if (mapped && SP500_SECTOR_SET.has(mapped)) return mapped;
   if (assetType.includes("Option")) return null;
@@ -663,6 +687,26 @@ function resolveStatementFutureSector(symbol, description = '') {
     return 'Equities';
   }
   return null;
+}
+
+function getUploadedAssetMeta(symbol, description = '', assetType = '') {
+  const rawSymbol = String(symbol || '').replace(/"/g, '').trim().toUpperCase();
+  const descriptionText = String(description || '').replace(/"/g, '').trim();
+  const assetTypeText = String(assetType || '').trim().toLowerCase();
+  const optionLike = assetTypeText.includes('option') || rawSymbol.includes(' ') || /\d{2}\/\d{2}\/\d{4}/.test(rawSymbol);
+  const futureSector = resolveStatementFutureSector(rawSymbol, descriptionText);
+  const futureLike = assetTypeText.includes('future') || Boolean(futureSector);
+  const baseToken = rawSymbol.split(' ')[0] || rawSymbol;
+  const baseSymbol = futureLike ? (getFutureRootSymbol(rawSymbol) || baseToken) : baseToken;
+  return {
+    assetType: futureLike ? (optionLike ? 'Futures Option' : 'Future') : (optionLike ? 'Option' : 'Equity'),
+    baseSymbol,
+    futureLike,
+    optionLike,
+    mainSector: futureLike
+      ? futureSector
+      : resolveMainSector(baseSymbol, baseSymbol.replace(/[\/.\- ]/g, '_'), optionLike ? 'Option' : assetType),
+  };
 }
 
 function buildEmptyAccountData() {
@@ -891,20 +935,22 @@ function parsePositionsCSV(text) {
     const assetType = parts[16] || 'Equity';
     const description = parts[1]?.replace(/"/g, '').trim() || '';
     if (rawSymbol && Math.abs(qty) > 0) {
-      const isOption = assetType.includes('Option') || /\d{2}\/\d{2}\/\d{4}/.test(rawSymbol);
-      const baseSymbol = (rawSymbol.match(/^[A-Z]+(?:[./-][A-Z]+)?(?:\/[A-Z]+)?/)?.[0] || rawSymbol.split(' ')[0] || rawSymbol)
+      const assetMeta = getUploadedAssetMeta(rawSymbol, description, assetType);
+      const isOption = assetMeta.optionLike;
+      const futureLike = assetMeta.futureLike;
+      const baseSymbol = (assetMeta.baseSymbol || rawSymbol.match(/^[A-Z]+(?:[./-][A-Z]+)?(?:\/[A-Z]+)?/)?.[0] || rawSymbol.split(' ')[0] || rawSymbol)
         .replace(/[^A-Z0-9/._-]/g, '');
       const normalizedSymbol = rawSymbol.replace(/[^A-Z0-9/._ -]/g, '').trim();
-      const sectorLookupSym = isOption ? baseSymbol : normalizedSymbol;
+      const sectorLookupSym = futureLike ? baseSymbol : (isOption ? baseSymbol : normalizedSymbol);
       const cleanSym = sectorLookupSym.replace(/[\/.\- ]/g, '_');
-      const mainSector = resolveMainSector(sectorLookupSym, cleanSym, assetType);
+      const mainSector = assetMeta.mainSector;
       accounts[currentAccount].positions.push({
         account: currentAccount,
         symbol: rawSymbol,
         normalizedSymbol,
         baseSymbol,
-        overrideSymbol: isOption ? baseSymbol : normalizedSymbol,
-        historySymbol: isOption ? null : normalizedSymbol,
+        overrideSymbol: futureLike ? baseSymbol : (isOption ? baseSymbol : normalizedSymbol),
+        historySymbol: isOption || futureLike ? null : normalizedSymbol,
         cleanSym,
         description,
         qty,
@@ -912,7 +958,7 @@ function parsePositionsCSV(text) {
         mktVal,
         costBasis,
         gainPct,
-        assetType,
+        assetType: assetMeta.assetType,
         source: POSITION_SOURCE_STANDARD,
         sector: mainSector || UNCLASSIFIED_SECTOR,
         mainSector,
@@ -1182,9 +1228,10 @@ function parseRealizedCSV(text) {
     const gain = parseFloat(parts[9]?.replace(/[$,]/g,'')) || 0;
     const gainPct = parseFloat(parts[10]?.replace(/%/g,'')) || 0;
     const term = parts[13] || 'Short Term';
-    const isOption = sym.includes(' ') || sym.match(/\d{2}\/\d{2}\/\d{4}/);
-    const baseSym = sym.split(' ')[0];
-    const mainSector = resolveMainSector(baseSym, baseSym, isOption ? 'Option' : '');
+    const assetMeta = getUploadedAssetMeta(sym, sym, '');
+    const isOption = assetMeta.optionLike;
+    const baseSym = assetMeta.baseSymbol || sym.split(' ')[0];
+    const mainSector = assetMeta.mainSector;
     trades.push({
       account: currentAccount,
       symbol: sym,
@@ -1197,7 +1244,9 @@ function parseRealizedCSV(text) {
       gain,
       gainPct,
       term,
+      assetType: assetMeta.assetType,
       isOption,
+      isFuture: assetMeta.futureLike,
       sector: mainSector || UNCLASSIFIED_SECTOR,
       mainSector,
     });
@@ -1601,7 +1650,7 @@ function estimateAttributedRealizedTradeCarrySeries(trade, dates, sourceHistory,
 
   const openedDate = normalizeDateInput(trade.openedDate) || normalizeDateInput(trade.closedDate) || dates[0];
   const closedDate = normalizeDateInput(trade.closedDate) || openedDate;
-  const futureLike = Boolean(FUTURES_ROOT_TO_SECTOR[getFutureRootSymbol(trade.baseSym || trade.symbol)]);
+  const futureLike = isFutureLikeRealizedTrade(trade);
   const finalPnl = Number(trade.gain);
   if (!Number.isFinite(finalPnl) || Math.abs(finalPnl) < 0.0001) return { series: [], method: 'none' };
 
@@ -2954,9 +3003,18 @@ export default function App() {
   const accountList = useMemo(() => {
     const fromPositions = Object.keys(accounts);
     const fromBalances = Object.keys(balanceHistory);
-    const all = [...new Set([...fromPositions, ...fromBalances])].filter(k=>k!=='ALL');
+    const fromRealized = realizedTrades.map((trade) => normalizeAccountName(trade?.account)).filter(Boolean);
+    const fromPositionOverrides = Object.values(positionAttributionOverrides || {}).filter(Boolean);
+    const fromRealizedOverrides = Object.values(realizedTradeAttributionOverrides || {}).filter(Boolean);
+    const all = [...new Set([
+      ...fromPositions,
+      ...fromBalances,
+      ...fromRealized,
+      ...fromPositionOverrides,
+      ...fromRealizedOverrides,
+    ])].filter(k=>k!=='ALL');
     return all;
-  }, [accounts, balanceHistory]);
+  }, [accounts, balanceHistory, positionAttributionOverrides, realizedTradeAttributionOverrides, realizedTrades]);
   const latestBalanceSnapshotDate = useMemo(
     () => getLatestSeriesDate(Object.values(balanceHistory || {})),
     [balanceHistory],
@@ -5396,9 +5454,11 @@ export default function App() {
                   <tr>{['Symbol','Account Routing','Type','Sector Assignment','Closed Date','Qty','Proceeds','Cost','Gain $','Gain %','Term'].map(h => <th key={h} style={S.th}>{h}</th>)}</tr>
                 </thead>
                 <tbody>
-                  {filteredRealizedTrades.slice(0, 100).map((t, i) => (
+                  {filteredRealizedTrades.slice(0, 100).map((t, i) => {
+                    const badge = getRealizedTradeBadge(t);
+                    return (
                     <tr key={i}>
-                      <td style={{ ...S.td, fontWeight:700, color: t.isOption ? '#ffd600' : '#00d4ff' }}>{t.symbol.length > 30 ? t.symbol.slice(0,28)+'…' : t.symbol}</td>
+                      <td style={{ ...S.td, fontWeight:700, color: badge.color }}>{t.symbol.length > 30 ? t.symbol.slice(0,28)+'…' : t.symbol}</td>
                       <td style={{ ...S.td, minWidth:'210px' }}>
                         <div style={{ display:'flex', flexDirection:'column', gap:'6px' }}>
                           <div style={{ display:'flex', flexDirection:'column', gap:'2px' }}>
@@ -5428,7 +5488,7 @@ export default function App() {
                           </select>
                         </div>
                       </td>
-                      <td style={S.td}><span style={S.badge(t.isOption ? '#ffd600' : '#00d4ff')}>{t.isOption ? 'OPT' : 'EQ'}</span></td>
+                      <td style={S.td}><span style={S.badge(badge.color)}>{badge.label}</span></td>
                       <td style={S.td}>
                         <div style={{ display:'flex', flexDirection:'column', gap:'6px', minWidth:'180px' }}>
                           <div><span style={{ color: SECTOR_COLORS[t.sector] || '#666' }}>●</span> {t.sector}</div>
@@ -5453,7 +5513,7 @@ export default function App() {
                       <td style={{ ...S.td, color: t.gain >= 0 ? '#00e676' : '#ff4444' }}>{fmtPct(t.gainPct)}</td>
                       <td style={S.td}><span style={S.badge(t.term === 'Long Term' ? '#00e676' : '#ffd600')}>{t.term === 'Long Term' ? 'LT' : 'ST'}</span></td>
                     </tr>
-                  ))}
+                  );})}
                   {filteredRealizedTrades.length === 0 && (
                     <tr>
                       <td colSpan={11} style={{ ...S.td, textAlign:'center', color:'#333', padding:'32px' }}>

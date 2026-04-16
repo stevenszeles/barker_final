@@ -526,8 +526,29 @@ def _ensure_instrument(conn, instrument_id: str, fields: Optional[Dict[str, Any]
     row = cur.fetchone()
     if row:
         data = dict(row)
-        if not data.get("symbol") and fields:
-            data.update(fields)
+        if fields:
+            merged = {**data}
+            for key, value in fields.items():
+                if value is None:
+                    continue
+                if isinstance(value, str) and value == "":
+                    continue
+                merged[key] = value
+            updates = []
+            params = []
+            for key in ("symbol", "asset_class", "underlying", "expiry", "strike", "option_type", "multiplier"):
+                old_value = data.get(key)
+                new_value = merged.get(key)
+                if old_value != new_value:
+                    updates.append(f"{key}=?")
+                    params.append(new_value)
+            if updates:
+                cur.execute(
+                    f"UPDATE instruments SET {', '.join(updates)} WHERE id=?",
+                    params + [instrument_id],
+                )
+                conn.commit()
+                data = merged
         return data
     data = fields or _derive_instrument_fields(instrument_id)
     cur.execute(
@@ -646,7 +667,11 @@ def _get_last_price_date(symbol: str) -> Optional[str]:
     def _run(conn):
         cur = conn.cursor()
         cur.execute("SELECT MAX(date) as d FROM price_cache WHERE symbol=?", (symbol,))
-        row = cur.fetchone()
+        if hasattr(cur, "fetchone"):
+            row = cur.fetchone()
+        else:
+            rows = cur.fetchall() if hasattr(cur, "fetchall") else []
+            row = rows[0] if rows else None
         if not row:
             return None
         if isinstance(row, dict):
