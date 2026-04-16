@@ -399,6 +399,35 @@ function getRealizedTradeOverrideMatch(trade, sectorOverrides = {}) {
   };
 }
 
+function getRealizedTradeMergeKey(trade, fallback = '') {
+  const importKey = String(trade?.importKey || '').trim();
+  if (importKey) return importKey;
+  const overrideKeys = getRealizedTradeOverrideKeys(trade);
+  if (overrideKeys.length) return overrideKeys[0];
+  return fallback;
+}
+
+function mergeImportedRealizedTrades(existingTrades = [], incomingTrades = []) {
+  const merged = new Map();
+  [...(existingTrades || []), ...(incomingTrades || [])].forEach((trade, index) => {
+    if (!trade) return;
+    const fallback = `REALIZED_MERGE::${index}::${normalizeAccountName(trade?.account)}::${trade?.symbol || ''}::${trade?.closedDate || ''}::${trade?.gain || ''}`;
+    merged.set(getRealizedTradeMergeKey(trade, fallback), trade);
+  });
+  return [...merged.values()].sort((left, right) => {
+    const leftClosed = normalizeDateInput(left?.closedDate) || '';
+    const rightClosed = normalizeDateInput(right?.closedDate) || '';
+    if (leftClosed !== rightClosed) return rightClosed.localeCompare(leftClosed);
+    const leftOpened = normalizeDateInput(left?.openedDate) || '';
+    const rightOpened = normalizeDateInput(right?.openedDate) || '';
+    if (leftOpened !== rightOpened) return rightOpened.localeCompare(leftOpened);
+    const leftAccount = normalizeAccountName(left?.account);
+    const rightAccount = normalizeAccountName(right?.account);
+    if (leftAccount !== rightAccount) return leftAccount.localeCompare(rightAccount);
+    return String(left?.symbol || '').localeCompare(String(right?.symbol || ''));
+  });
+}
+
 function normalizeAccountName(value) {
   const raw = String(value || '').replace(/"/g, '').trim();
   if (!raw) return '';
@@ -662,6 +691,18 @@ function getFutureRootSymbol(symbol) {
   const token = raw.split(/\s+/)[0];
   const match = token.match(/^((?:\/)?[A-Z0-9]{1,5}?)[FGHJKMNQUVXZ](?:20)?\d{1,2}$/);
   return match ? match[1] : token;
+}
+
+function isStatementFutureOptionSymbol(symbol) {
+  return /^\/[A-Z0-9]+[CP]\d+(?:\.\d+)?$/i.test(String(symbol || '').trim());
+}
+
+function buildStatementFutureOptionSymbol(optionRoot, strike, optionType) {
+  const root = String(optionRoot || '').replace(/"/g, '').trim().toUpperCase();
+  const strikeText = String(strike || '').replace(/"/g, '').trim();
+  if (!root) return '';
+  if (!strikeText) return root;
+  return `${root}${String(optionType || '').trim().toUpperCase().startsWith('P') ? 'P' : 'C'}${strikeText}`;
 }
 
 function resolveStatementFutureSector(symbol, description = '') {
@@ -980,7 +1021,15 @@ function parseFuturesStatementCSV(text, {
   const accountName = chooseFuturesStatementAccount(text, accountHint, preferredAccount, existingAccountNames, selectedAccount);
   const accounts = { [accountName]: buildEmptyAccountData() };
   const futuresPnlSnapshots = {};
-  if (!rows.length) return { accounts, accountName, importedCount: 0, statementDate, futuresPnlSnapshots };
+  const realizedTrades = [];
+  if (!rows.length) return {
+    accounts,
+    accountName,
+    importedCount: 0,
+    statementDate,
+    futuresPnlSnapshots,
+    realizedTrades,
+  };
 
   const isSectionHeader = (row = []) => {
     if (!row.length) return false;
@@ -1006,11 +1055,13 @@ function parseFuturesStatementCSV(text, {
     }
     return { header, rows: dataRows };
   };
+  const readRowCell = (row, index) => (index >= 0 && index < row.length ? String(row[index] || '').replace(/"/g, '').trim() : '');
 
   const profitsSection = readSectionRows('Profits and Losses');
   const profitsLookup = new Map();
   if (profitsSection.header.length) {
     const symbolIdx = profitsSection.header.indexOf('symbol');
+    const descIdx = profitsSection.header.indexOf('description');
     const pnlOpenIdx = profitsSection.header.indexOf('p_l_open');
     const pnlPctIdx = profitsSection.header.indexOf('p_l');
     const pnlDayIdx = profitsSection.header.indexOf('p_l_day');
@@ -1018,15 +1069,49 @@ function parseFuturesStatementCSV(text, {
     const marginReqIdx = profitsSection.header.indexOf('margin_req');
     const markValueIdx = profitsSection.header.indexOf('mark_value');
     profitsSection.rows.forEach((row) => {
-      const symbol = String(row[symbolIdx] || '').trim();
+      const symbol = readRowCell(row, symbolIdx).toUpperCase();
       if (!symbol) return;
-      profitsLookup.set(symbol, {
+      const description = readRowCell(row, descIdx);
+      const profitEntry = {
+        description,
         pnlOpen: parseStatementNumber(row[pnlOpenIdx]),
         gainPct: parseStatementNumber(row[pnlPctIdx]),
         pnlDay: parseStatementNumber(row[pnlDayIdx]),
         pnlYtd: parseStatementNumber(row[pnlYtdIdx]),
         marginReq: parseStatementNumber(row[marginReqIdx]),
         markValue: parseStatementNumber(row[markValueIdx]),
+      };
+      profitsLookup.set(symbol, profitEntry);
+
+      const assetMeta = getUploadedAssetMeta(symbol, description, 'Future');
+      if (!assetMeta.futureLike) return;
+      const pnlOpen = Number.isFinite(profitEntry.pnlOpen) ? profitEntry.pnlOpen : 0;
+      const pnlYtd = Number.isFinite(profitEntry.pnlYtd) ? profitEntry.pnlYtd : 0;
+      const realizedPnl = pnlYtd - pnlOpen;
+      if (!Number.isFinite(realizedPnl) || Math.abs(realizedPnl) < 0.0001) return;
+      const futureOptionLike = isStatementFutureOptionSymbol(symbol) || /\bCALL\b|\bPUT\b/i.test(description);
+      const baseSym = assetMeta.baseSymbol || getFutureRootSymbol(symbol) || symbol;
+      const mainSector = assetMeta.mainSector || resolveStatementFutureSector(baseSym, description);
+      realizedTrades.push({
+        account: accountName,
+        symbol,
+        baseSym,
+        closedDate: statementDate,
+        openedDate: statementDate,
+        qty: 0,
+        proceeds: realizedPnl >= 0 ? realizedPnl : 0,
+        cost: realizedPnl < 0 ? Math.abs(realizedPnl) : 0,
+        gain: realizedPnl,
+        gainPct: 0,
+        term: 'Short Term',
+        assetType: futureOptionLike ? 'Futures Option' : 'Future',
+        isOption: futureOptionLike,
+        isFuture: true,
+        sector: mainSector || UNCLASSIFIED_SECTOR,
+        mainSector,
+        description,
+        importKey: ['FUTURES_STMT_PNL', accountName, futureOptionLike ? 'FUT_OPT' : 'FUT', symbol].join('::'),
+        importSource: 'futures_statement',
       });
     });
   }
@@ -1170,12 +1255,131 @@ function parseFuturesStatementCSV(text, {
     });
   }
 
+  const accountTradeHistorySection = readSectionRows('Account Trade History');
+  if (accountTradeHistorySection.header.length) {
+    const execTimeIdx = accountTradeHistorySection.header.indexOf('exec_time');
+    const sideIdx = accountTradeHistorySection.header.indexOf('side');
+    const qtyIdx = accountTradeHistorySection.header.indexOf('qty');
+    const posEffectIdx = accountTradeHistorySection.header.indexOf('pos_effect');
+    const symbolIdx = accountTradeHistorySection.header.indexOf('symbol');
+    const expIdx = accountTradeHistorySection.header.indexOf('exp');
+    const strikeIdx = accountTradeHistorySection.header.indexOf('strike');
+    const typeIdx = accountTradeHistorySection.header.indexOf('type');
+    const priceIdx = accountTradeHistorySection.header.indexOf('price');
+    const groupedRows = [];
+    let currentGroup = [];
+
+    accountTradeHistorySection.rows.forEach((row) => {
+      const execTime = readRowCell(row, execTimeIdx);
+      if (execTime && currentGroup.length) {
+        groupedRows.push(currentGroup);
+        currentGroup = [row];
+        return;
+      }
+      currentGroup.push(row);
+    });
+    if (currentGroup.length) groupedRows.push(currentGroup);
+
+    const openLotsBySymbol = new Map();
+
+    groupedRows.slice().reverse().forEach((group) => {
+      const execTime = readRowCell(group[0], execTimeIdx);
+      const execDate = normalizeDateInput(execTime.split(/\s+/)[0] || execTime || '');
+      if (!execDate) return;
+
+      group.forEach((row) => {
+        const optionType = readRowCell(row, typeIdx).toUpperCase();
+        const optionRoot = readRowCell(row, expIdx).toUpperCase();
+        if (!optionRoot.startsWith('/') || !['CALL', 'PUT'].includes(optionType)) return;
+
+        const side = readRowCell(row, sideIdx).toUpperCase();
+        const positionEffect = readRowCell(row, posEffectIdx).toUpperCase();
+        const underlyingDescription = readRowCell(row, symbolIdx);
+        const strikeText = readRowCell(row, strikeIdx);
+        const contracts = Math.abs(parseStatementNumber(readRowCell(row, qtyIdx)));
+        const premium = parseStatementNumber(readRowCell(row, priceIdx));
+        if (!Number.isFinite(contracts) || contracts === 0 || !Number.isFinite(premium)) return;
+
+        const optionSymbol = buildStatementFutureOptionSymbol(optionRoot, strikeText, optionType);
+        if (!optionSymbol) return;
+
+        const multiplier = parseStatementMultiplier(String(underlyingDescription || '').match(/\d+\s*\/\s*\d+/)?.[0] || '');
+        const baseSym = getFutureRootSymbol(underlyingDescription) || getFutureRootSymbol(optionRoot) || optionRoot;
+        const mainSector = resolveStatementFutureSector(baseSym || optionRoot, underlyingDescription);
+        const description = [underlyingDescription, strikeText, optionType].filter(Boolean).join(' · ');
+        const lots = openLotsBySymbol.get(optionSymbol) || [];
+
+        if (positionEffect.includes('TO OPEN')) {
+          lots.push({
+            qtyRemaining: contracts,
+            openedDate: execDate,
+            openPrice: premium,
+            positionSide: side === 'BUY' ? 'long' : 'short',
+            multiplier,
+            baseSym,
+            mainSector,
+            description,
+          });
+          openLotsBySymbol.set(optionSymbol, lots);
+          return;
+        }
+
+        if (!positionEffect.includes('TO CLOSE')) return;
+
+        const closingSide = side === 'SELL' ? 'long' : 'short';
+        let remainingContracts = contracts;
+        for (const lot of lots) {
+          if (remainingContracts <= 0) break;
+          if (!lot || lot.positionSide !== closingSide || !(lot.qtyRemaining > 0)) continue;
+
+          const matchedContracts = Math.min(remainingContracts, lot.qtyRemaining);
+          const proceeds = closingSide === 'long'
+            ? premium * matchedContracts * lot.multiplier
+            : lot.openPrice * matchedContracts * lot.multiplier;
+          const cost = closingSide === 'long'
+            ? lot.openPrice * matchedContracts * lot.multiplier
+            : premium * matchedContracts * lot.multiplier;
+          const gain = proceeds - cost;
+          const signedQty = closingSide === 'short' ? -matchedContracts : matchedContracts;
+
+          realizedTrades.push({
+            account: accountName,
+            symbol: optionSymbol,
+            baseSym: lot.baseSym || baseSym,
+            closedDate: execDate,
+            openedDate: lot.openedDate || execDate,
+            qty: signedQty,
+            proceeds,
+            cost,
+            gain,
+            gainPct: cost ? (gain / Math.abs(cost)) * 100 : 0,
+            term: 'Short Term',
+            assetType: 'Futures Option',
+            isOption: true,
+            isFuture: true,
+            sector: lot.mainSector || mainSector || UNCLASSIFIED_SECTOR,
+            mainSector: lot.mainSector || mainSector,
+            description: lot.description || description,
+            importKey: ['FUTURES_STMT_FOP', accountName, optionSymbol, lot.openedDate || execDate, execDate, formatOverrideNumber(Math.abs(signedQty))].join('::'),
+            importSource: 'futures_statement',
+          });
+
+          lot.qtyRemaining -= matchedContracts;
+          remainingContracts -= matchedContracts;
+        }
+
+        openLotsBySymbol.set(optionSymbol, lots.filter((lot) => lot && lot.qtyRemaining > 0.0001));
+      });
+    });
+  }
+
   return {
     accounts,
     accountName,
     importedCount: accounts[accountName].positions.length,
     statementDate,
     futuresPnlSnapshots,
+    realizedTrades,
   };
 }
 
@@ -2918,19 +3122,26 @@ export default function App() {
           existingAccountNames: knownAccounts,
           selectedAccount,
         });
-        if (!parsed.importedCount) {
+        const realizedCount = parsed.realizedTrades?.length || 0;
+        if (!parsed.importedCount && !realizedCount) {
           setUploadStatus((s) => ({
             ...s,
-            futures: '✗ No futures rows found. Use a Schwab account statement CSV that includes the Futures / Futures Options sections.',
+            futures: '✗ No futures rows found. Use a Schwab account statement CSV that includes Futures, Futures Options, or Profits and Losses sections.',
           }));
           return;
         }
         markSharedWorkspaceDirty('Futures statement upload pending sync');
         setAccounts((prev) => mergeSupplementalFuturesAccounts(prev, parsed.accounts));
         setFuturesPnlSnapshots((prev) => mergeFuturesPnlSnapshots(prev, parsed.futuresPnlSnapshots));
+        if (realizedCount) {
+          setRealizedTrades((prev) => mergeImportedRealizedTrades(prev, parsed.realizedTrades));
+        }
+        const importedParts = [];
+        if (parsed.importedCount) importedParts.push(`${parsed.importedCount} live futures lines`);
+        if (realizedCount) importedParts.push(`${realizedCount} realized futures rows`);
         setUploadStatus((s) => ({
           ...s,
-          futures: `✓ ${parsed.importedCount} futures lines imported to ${formatShortAccountName(parsed.accountName)} (${parsed.statementDate})`,
+          futures: `✓ ${importedParts.join(' + ')} imported to ${formatShortAccountName(parsed.accountName)} (${parsed.statementDate})`,
         }));
       } catch (err) {
         setUploadStatus((s) => ({ ...s, futures: `✗ Parse error: ${err.message}` }));
