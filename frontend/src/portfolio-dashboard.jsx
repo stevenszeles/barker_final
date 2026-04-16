@@ -31,6 +31,7 @@ const ALL_SECTORS = [...SP500_SECTORS, ...MANUAL_ONLY_SECTORS];
 const UNCLASSIFIED_SECTOR = "Unclassified";
 const SECTOR_OVERRIDE_AUTO = "__AUTO__";
 const POSITION_ATTRIBUTION_HELD = "__HELD_ACCOUNT__";
+const REALIZED_ATTRIBUTION_FOLLOW_POSITION = "__FOLLOW_POSITION_ATTRIBUTION__";
 const FUTURES_STATEMENT_ACCOUNT_AUTO = "__AUTO_FUTURES_ACCOUNT__";
 const FUTURES_CLEARING_ACCOUNT = "Futures_Clearing ...FUT";
 const DEFAULT_FUTURES_HELD_ACCOUNT_SUFFIX = "145";
@@ -397,6 +398,31 @@ function getRealizedTradeOverrideMatch(trade, sectorOverrides = {}) {
     value: null,
     keys,
   };
+}
+
+function getRealizedTradeExplicitAttributionOverride(trade, realizedTradeAttributionOverrides = {}) {
+  const keys = getRealizedTradeOverrideKeys(trade);
+  for (const key of keys) {
+    const value = realizedTradeAttributionOverrides[key];
+    if (value) return normalizeAccountName(value);
+  }
+  return '';
+}
+
+function getRealizedTradeInheritedAccount(trade, positionAttributionOverrides = {}) {
+  const heldAccount = normalizeAccountName(trade?.account);
+  const candidates = [...new Set([
+    trade?.baseSym,
+    trade?.symbol,
+    getFutureRootSymbol(trade?.baseSym),
+    getFutureRootSymbol(trade?.symbol),
+  ].map((value) => String(value || '').trim().toUpperCase()).filter(Boolean))];
+  for (const candidate of candidates) {
+    const positionKey = heldAccount && candidate ? `${heldAccount}::${candidate}` : '';
+    const mappedAccount = positionKey ? positionAttributionOverrides[positionKey] : '';
+    if (mappedAccount) return normalizeAccountName(mappedAccount);
+  }
+  return heldAccount;
 }
 
 function getRealizedTradeMergeKey(trade, fallback = '') {
@@ -1057,6 +1083,57 @@ function parseFuturesStatementCSV(text, {
   };
   const readRowCell = (row, index) => (index >= 0 && index < row.length ? String(row[index] || '').replace(/"/g, '').trim() : '');
 
+  const accountTradeHistorySection = readSectionRows('Account Trade History');
+  const groupedTradeHistoryRows = [];
+  const futureTradeActivityBySymbol = new Map();
+  if (accountTradeHistorySection.header.length) {
+    const execTimeIdx = accountTradeHistorySection.header.indexOf('exec_time');
+    const posEffectIdx = accountTradeHistorySection.header.indexOf('pos_effect');
+    const symbolIdx = accountTradeHistorySection.header.indexOf('symbol');
+    const expIdx = accountTradeHistorySection.header.indexOf('exp');
+    const typeIdx = accountTradeHistorySection.header.indexOf('type');
+
+    let currentExecDate = '';
+    let currentGroup = [];
+    const commitTradeHistoryGroup = () => {
+      if (!currentGroup.length) return;
+      groupedTradeHistoryRows.push(currentGroup);
+      currentGroup = [];
+    };
+
+    accountTradeHistorySection.rows.forEach((row) => {
+      const execTime = readRowCell(row, execTimeIdx);
+      if (execTime && currentGroup.length) commitTradeHistoryGroup();
+      currentGroup.push(row);
+
+      const normalizedExecDate = normalizeDateInput(execTime.split(/\s+/)[0] || execTime || '');
+      if (normalizedExecDate) currentExecDate = normalizedExecDate;
+
+      const tradeType = readRowCell(row, typeIdx).toUpperCase();
+      if (!currentExecDate || tradeType !== 'FUTURE') return;
+
+      const positionEffect = readRowCell(row, posEffectIdx).toUpperCase();
+      const rawSymbol = readRowCell(row, symbolIdx).toUpperCase();
+      const expirySymbol = readRowCell(row, expIdx).toUpperCase();
+      const futureSymbol = [rawSymbol, expirySymbol]
+        .map((value) => String(value || '').split(/\s+/)[0].trim().toUpperCase())
+        .find((value) => value.startsWith('/')) || '';
+      if (!futureSymbol) return;
+
+      const activity = futureTradeActivityBySymbol.get(futureSymbol) || {};
+      if (!activity.firstTradeDate || currentExecDate < activity.firstTradeDate) activity.firstTradeDate = currentExecDate;
+      if (positionEffect.includes('TO OPEN') && (!activity.firstOpenDate || currentExecDate < activity.firstOpenDate)) {
+        activity.firstOpenDate = currentExecDate;
+      }
+      if (positionEffect.includes('TO CLOSE') && (!activity.lastCloseDate || currentExecDate > activity.lastCloseDate)) {
+        activity.lastCloseDate = currentExecDate;
+      }
+      futureTradeActivityBySymbol.set(futureSymbol, activity);
+    });
+
+    commitTradeHistoryGroup();
+  }
+
   const profitsSection = readSectionRows('Profits and Losses');
   const profitsLookup = new Map();
   if (profitsSection.header.length) {
@@ -1089,20 +1166,25 @@ function parseFuturesStatementCSV(text, {
       const pnlYtd = Number.isFinite(profitEntry.pnlYtd) ? profitEntry.pnlYtd : 0;
       const realizedPnl = pnlYtd - pnlOpen;
       if (!Number.isFinite(realizedPnl) || Math.abs(realizedPnl) < 0.0001) return;
+      const futureActivity = futureTradeActivityBySymbol.get(symbol) || {};
+      const markValue = Number.isFinite(profitEntry.markValue) ? profitEntry.markValue : 0;
+      const isClosedContract = Math.abs(markValue) < 0.0001 && Math.abs(pnlOpen) < 0.0001;
+      const closedDate = isClosedContract ? (futureActivity.lastCloseDate || statementDate) : statementDate;
+      const openedDate = futureActivity.firstOpenDate || futureActivity.firstTradeDate || closedDate;
       const futureOptionLike = isStatementFutureOptionSymbol(symbol) || /\bCALL\b|\bPUT\b/i.test(description);
-      const baseSym = assetMeta.baseSymbol || getFutureRootSymbol(symbol) || symbol;
+      const baseSym = symbol;
       const mainSector = assetMeta.mainSector || resolveStatementFutureSector(baseSym, description);
       realizedTrades.push({
         account: accountName,
         symbol,
         baseSym,
-        closedDate: statementDate,
-        openedDate: statementDate,
+        closedDate,
+        openedDate,
         qty: 0,
-        proceeds: realizedPnl >= 0 ? realizedPnl : 0,
-        cost: realizedPnl < 0 ? Math.abs(realizedPnl) : 0,
+        proceeds: null,
+        cost: null,
         gain: realizedPnl,
-        gainPct: 0,
+        gainPct: null,
         term: 'Short Term',
         assetType: futureOptionLike ? 'Futures Option' : 'Future',
         isOption: futureOptionLike,
@@ -1110,6 +1192,8 @@ function parseFuturesStatementCSV(text, {
         sector: mainSector || UNCLASSIFIED_SECTOR,
         mainSector,
         description,
+        derivedSummary: true,
+        isStatementClosedContract: isClosedContract,
         importKey: ['FUTURES_STMT_PNL', accountName, futureOptionLike ? 'FUT_OPT' : 'FUT', symbol].join('::'),
         importSource: 'futures_statement',
       });
@@ -1255,8 +1339,7 @@ function parseFuturesStatementCSV(text, {
     });
   }
 
-  const accountTradeHistorySection = readSectionRows('Account Trade History');
-  if (accountTradeHistorySection.header.length) {
+  if (groupedTradeHistoryRows.length) {
     const execTimeIdx = accountTradeHistorySection.header.indexOf('exec_time');
     const sideIdx = accountTradeHistorySection.header.indexOf('side');
     const qtyIdx = accountTradeHistorySection.header.indexOf('qty');
@@ -1266,23 +1349,10 @@ function parseFuturesStatementCSV(text, {
     const strikeIdx = accountTradeHistorySection.header.indexOf('strike');
     const typeIdx = accountTradeHistorySection.header.indexOf('type');
     const priceIdx = accountTradeHistorySection.header.indexOf('price');
-    const groupedRows = [];
-    let currentGroup = [];
-
-    accountTradeHistorySection.rows.forEach((row) => {
-      const execTime = readRowCell(row, execTimeIdx);
-      if (execTime && currentGroup.length) {
-        groupedRows.push(currentGroup);
-        currentGroup = [row];
-        return;
-      }
-      currentGroup.push(row);
-    });
-    if (currentGroup.length) groupedRows.push(currentGroup);
 
     const openLotsBySymbol = new Map();
 
-    groupedRows.slice().reverse().forEach((group) => {
+    groupedTradeHistoryRows.slice().reverse().forEach((group) => {
       const execTime = readRowCell(group[0], execTimeIdx);
       const execDate = normalizeDateInput(execTime.split(/\s+/)[0] || execTime || '');
       if (!execDate) return;
@@ -1304,7 +1374,9 @@ function parseFuturesStatementCSV(text, {
         if (!optionSymbol) return;
 
         const multiplier = parseStatementMultiplier(String(underlyingDescription || '').match(/\d+\s*\/\s*\d+/)?.[0] || '');
-        const baseSym = getFutureRootSymbol(underlyingDescription) || getFutureRootSymbol(optionRoot) || optionRoot;
+        const baseSym = String(underlyingDescription || '').split(/\s+/)[0].trim().toUpperCase()
+          || getFutureRootSymbol(optionRoot)
+          || optionRoot;
         const mainSector = resolveStatementFutureSector(baseSym || optionRoot, underlyingDescription);
         const description = [underlyingDescription, strikeText, optionType].filter(Boolean).join(' · ');
         const lots = openLotsBySymbol.get(optionSymbol) || [];
@@ -2079,14 +2151,28 @@ function getPositionAttributedAccount(position, positionAttributionOverrides = {
   return key ? (positionAttributionOverrides[key] || heldAccount) : heldAccount;
 }
 
-function getRealizedTradeAttributedAccount(trade, realizedTradeAttributionOverrides = {}) {
+function getRealizedTradeAttributedAccount(
+  trade,
+  realizedTradeAttributionOverrides = {},
+  positionAttributionOverrides = {},
+) {
+  const explicitOverride = getRealizedTradeExplicitAttributionOverride(trade, realizedTradeAttributionOverrides);
+  if (explicitOverride) return explicitOverride;
+  return getRealizedTradeInheritedAccount(trade, positionAttributionOverrides);
+}
+
+function getRealizedTradeAttributionSelectionValue(
+  trade,
+  realizedTradeAttributionOverrides = {},
+  positionAttributionOverrides = {},
+) {
   const heldAccount = normalizeAccountName(trade?.account);
-  const keys = getRealizedTradeOverrideKeys(trade);
-  for (const key of keys) {
-    const value = realizedTradeAttributionOverrides[key];
-    if (value) return value;
-  }
-  return heldAccount;
+  const explicitOverride = getRealizedTradeExplicitAttributionOverride(trade, realizedTradeAttributionOverrides);
+  if (explicitOverride) return explicitOverride === heldAccount ? POSITION_ATTRIBUTION_HELD : explicitOverride;
+  const inheritedAccount = getRealizedTradeInheritedAccount(trade, positionAttributionOverrides);
+  return inheritedAccount && inheritedAccount !== heldAccount
+    ? REALIZED_ATTRIBUTION_FOLLOW_POSITION
+    : POSITION_ATTRIBUTION_HELD;
 }
 
 function getPositionDisplayAccount(position) {
@@ -3363,10 +3449,16 @@ export default function App() {
     () => realizedTrades
       .map((trade) => {
         const custodyAccount = normalizeAccountName(trade.account);
-        const attributedAccount = getRealizedTradeAttributedAccount(trade, realizedTradeAttributionOverrides);
+        const inheritedAccount = getRealizedTradeInheritedAccount(trade, positionAttributionOverrides);
+        const attributedAccount = getRealizedTradeAttributedAccount(
+          trade,
+          realizedTradeAttributionOverrides,
+          positionAttributionOverrides,
+        );
         return {
           ...trade,
           custodyAccount,
+          inheritedAccount,
           attributedAccount,
         };
       })
@@ -3374,14 +3466,19 @@ export default function App() {
         const heldAccount = normalizeAccountName(trade.account);
         return heldAccount && trade.attributedAccount && heldAccount !== trade.attributedAccount;
       }),
-    [realizedTradeAttributionOverrides, realizedTrades],
+    [positionAttributionOverrides, realizedTradeAttributionOverrides, realizedTrades],
   );
 
   const selectedRealizedTrades = useMemo(
     () => realizedTrades
       .map((trade) => {
         const custodyAccount = normalizeAccountName(trade.account);
-        const attributedAccount = getRealizedTradeAttributedAccount(trade, realizedTradeAttributionOverrides);
+        const inheritedAccount = getRealizedTradeInheritedAccount(trade, positionAttributionOverrides);
+        const attributedAccount = getRealizedTradeAttributedAccount(
+          trade,
+          realizedTradeAttributionOverrides,
+          positionAttributionOverrides,
+        );
         if (selectedAccount !== 'ALL' && attributedAccount !== selectedAccount) return null;
         const { key: tradeOverrideKey, value: tradeSectorOverride, keys: tradeOverrideKeys } = getRealizedTradeOverrideMatch(trade, sectorOverrides);
         const override = tradeSectorOverride
@@ -3395,6 +3492,7 @@ export default function App() {
         return {
           ...trade,
           custodyAccount,
+          inheritedAccount,
           attributedAccount,
           tradeOverrideKeys,
           tradeOverrideKey,
@@ -3404,7 +3502,7 @@ export default function App() {
         };
       })
       .filter(Boolean),
-    [realizedTradeAttributionOverrides, realizedTrades, selectedAccount, sectorOverrides],
+    [positionAttributionOverrides, realizedTradeAttributionOverrides, realizedTrades, selectedAccount, sectorOverrides],
   );
 
   const selectedRealizedTradesWithDates = useMemo(
@@ -4489,6 +4587,7 @@ export default function App() {
   const updateRealizedTradeAttributionOverride = useCallback((trade, nextAccount) => {
     const keys = getRealizedTradeOverrideKeys(trade);
     const heldAccount = normalizeAccountName(trade?.account);
+    const inheritedAccount = getRealizedTradeInheritedAccount(trade, positionAttributionOverrides);
     if (!keys.length || !heldAccount) return;
     markSharedWorkspaceDirty('Closed-trade desk attribution pending sync');
     setRealizedTradeAttributionOverrides((prev) => {
@@ -4496,13 +4595,19 @@ export default function App() {
       keys.forEach((key) => {
         if (key in next) delete next[key];
       });
-      if (!nextAccount || nextAccount === heldAccount) {
+      if (!nextAccount || nextAccount === REALIZED_ATTRIBUTION_FOLLOW_POSITION) {
+        return next;
+      }
+      if (nextAccount === POSITION_ATTRIBUTION_HELD || nextAccount === heldAccount) {
+        if (inheritedAccount && inheritedAccount !== heldAccount) {
+          next[keys[0]] = heldAccount;
+        }
         return next;
       }
       next[keys[0]] = nextAccount;
       return next;
     });
-  }, [markSharedWorkspaceDirty]);
+  }, [markSharedWorkspaceDirty, positionAttributionOverrides]);
 
   const updateRealizedTradeSectorOverride = useCallback((trade, nextSector) => {
     const keys = getRealizedTradeOverrideKeys(trade);
@@ -5681,16 +5786,25 @@ export default function App() {
                             </span>
                           </div>
                           <select
-                            value={t.attributedAccount !== t.custodyAccount ? t.attributedAccount : POSITION_ATTRIBUTION_HELD}
+                            value={getRealizedTradeAttributionSelectionValue(
+                              t,
+                              realizedTradeAttributionOverrides,
+                              positionAttributionOverrides,
+                            )}
                             onChange={(e) => updateRealizedTradeAttributionOverride(
                               t,
-                              e.target.value === POSITION_ATTRIBUTION_HELD ? '' : e.target.value,
+                              e.target.value,
                             )}
                             style={{ ...S.input, padding:'4px 6px', fontSize:'10px', minWidth:'176px' }}
                           >
                             <option value={POSITION_ATTRIBUTION_HELD}>
                               Held Account ({formatShortAccountName(t.custodyAccount)})
                             </option>
+                            {t.inheritedAccount && t.inheritedAccount !== t.custodyAccount && (
+                              <option value={REALIZED_ATTRIBUTION_FOLLOW_POSITION}>
+                                Follow Position Transfer ({formatShortAccountName(t.inheritedAccount)})
+                              </option>
+                            )}
                             {accountList.map((accountName) => (
                               <option key={accountName} value={accountName}>
                                 {formatShortAccountName(accountName)}
@@ -5717,7 +5831,7 @@ export default function App() {
                         </div>
                       </td>
                       <td style={{ ...S.td, color:'#666' }}>{t.closedDate}</td>
-                      <td style={S.td}>{t.qty}</td>
+                      <td style={S.td}>{Number.isFinite(Number(t.qty)) && Number(t.qty) !== 0 ? t.qty : '--'}</td>
                       <td style={S.td}>{fmt$(t.proceeds)}</td>
                       <td style={S.td}>{fmt$(t.cost)}</td>
                       <td style={{ ...S.td, color: t.gain >= 0 ? '#00e676' : '#ff4444', fontWeight:600 }}>{fmt$(t.gain)}</td>
