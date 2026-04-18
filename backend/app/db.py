@@ -19,14 +19,18 @@ _SQLITE_FALLBACK_ACTIVE = False
 _LAST_CONNECTION_ERROR = None
 
 
-def _is_postgres() -> bool:
+def _is_postgres_configured() -> bool:
     return bool(settings.db_url)
 
 
+def _is_postgres() -> bool:
+    return _is_postgres_configured() and not _SQLITE_FALLBACK_ACTIVE
+
+
 def storage_diagnostics() -> dict:
-    backend = "postgres" if _is_postgres() and not _SQLITE_FALLBACK_ACTIVE else "sqlite"
+    backend = "postgres" if _is_postgres() else "sqlite"
     return {
-        "configured_backend": "postgres" if _is_postgres() else "sqlite",
+        "configured_backend": "postgres" if _is_postgres_configured() else "sqlite",
         "active_backend": backend,
         "fallback_active": bool(_SQLITE_FALLBACK_ACTIVE),
         "fallback_enabled": bool(getattr(settings, "db_fallback_to_sqlite", False)),
