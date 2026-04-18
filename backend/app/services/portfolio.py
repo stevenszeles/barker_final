@@ -12,8 +12,12 @@ def get_snapshot(account: Optional[str] = None) -> Dict[str, Any]:
     return engine.get_snapshot(account=account)
 
 
-def get_nav_series(limit: int = 120, account: Optional[str] = None) -> List[Dict[str, Any]]:
-    return engine.get_nav_series(limit=limit, account=account)
+def get_nav_series(
+    limit: int = 120,
+    account: Optional[str] = None,
+    accounting_mode: str = "legal",
+) -> List[Dict[str, Any]]:
+    return engine.get_nav_series(limit=limit, account=account, accounting_mode=accounting_mode)
 
 
 def get_sector_series(sector: str, limit: int = 120, source: str = "auto", account: Optional[str] = None) -> List[Dict[str, Any]]:

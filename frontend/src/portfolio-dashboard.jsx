@@ -1207,6 +1207,16 @@ function parseFuturesStatementCSV(text, {
     });
   }
 
+  const isProfitFallbackFutureRow = (symbol, description) => {
+    const rawSymbol = String(symbol || '').trim().toUpperCase();
+    const rawDescription = String(description || '');
+    if (!rawSymbol && !rawDescription) return false;
+    const root = getFutureRootSymbol(rawSymbol);
+    if ((rawSymbol.startsWith('/') || root.startsWith('/')) && /[A-Z0-9]/.test(rawSymbol)) return true;
+    if (FUTURES_ROOT_TO_SECTOR[root]) return true;
+    return /futures?|e-mini|micro e-mini/i.test(rawDescription);
+  };
+
   const pushPosition = (position, snapshotPnl = null) => {
     if (!position || !position.symbol || !Number.isFinite(position.qty) || position.qty === 0) return;
     accounts[accountName].positions.push(position);
@@ -1222,6 +1232,7 @@ function parseFuturesStatementCSV(text, {
   };
 
   const futuresSection = readSectionRows('Futures');
+  const importedSymbols = new Set();
   if (futuresSection.header.length) {
     const symbolIdx = futuresSection.header.indexOf('symbol');
     const descIdx = futuresSection.header.indexOf('description');
@@ -1277,6 +1288,60 @@ function parseFuturesStatementCSV(text, {
         pnlYtd: Number.isFinite(profitRow.pnlYtd) ? profitRow.pnlYtd : null,
       };
       pushPosition(position, pnlOpen);
+      importedSymbols.add(rawSymbol);
+    });
+  }
+
+  if (profitsSection.header.length) {
+    const symbolIdx = profitsSection.header.indexOf('symbol');
+    const gainPctIdx = profitsSection.header.indexOf('p_l');
+    const markValueIdx = profitsSection.header.indexOf('mark_value');
+    const marginReqIdx = profitsSection.header.indexOf('margin_req');
+
+    profitsSection.rows.forEach((row) => {
+      const rawSymbol = String(row[symbolIdx] || '').trim().toUpperCase();
+      const profitRow = profitsLookup.get(rawSymbol);
+      const description = String(profitRow?.description || row[1] || '').replace(/"/g, '').trim();
+      if (!rawSymbol || importedSymbols.has(rawSymbol) || !isProfitFallbackFutureRow(rawSymbol, description)) return;
+
+      const pnlOpen = Number.isFinite(profitRow?.pnlOpen) ? profitRow.pnlOpen : 0;
+      const gainPct = Number.isFinite(profitRow?.gainPct) ? profitRow.gainPct : parseStatementNumber(row[gainPctIdx]);
+      const markValue = Number.isFinite(profitRow?.markValue) ? profitRow.markValue : parseStatementNumber(row[markValueIdx]);
+      const marginReq = Number.isFinite(profitRow?.marginReq) ? profitRow.marginReq : parseStatementNumber(row[marginReqIdx]);
+      const mainSector = resolveStatementFutureSector(rawSymbol, description);
+      const qty = markValue < 0 ? -1 : 1;
+      const referencePrice = Number.isFinite(markValue) && markValue !== 0
+        ? Math.abs(markValue)
+        : (Number.isFinite(marginReq) ? Math.abs(marginReq) : Math.abs(pnlOpen));
+
+      const position = {
+        account: accountName,
+        symbol: rawSymbol,
+        normalizedSymbol: rawSymbol,
+        baseSymbol: rawSymbol,
+        overrideSymbol: rawSymbol,
+        historySymbol: null,
+        cleanSym: rawSymbol.replace(/[\/.\- ]/g, '_'),
+        description,
+        qty,
+        price: Number.isFinite(referencePrice) ? referencePrice : 0,
+        tradePrice: null,
+        markPrice: null,
+        multiplier: 1,
+        mktVal: Number.isFinite(pnlOpen) ? pnlOpen : 0,
+        costBasis: 0,
+        gainPct: Number.isFinite(gainPct) ? gainPct : 0,
+        assetType: 'Future',
+        source: POSITION_SOURCE_FUTURES,
+        sector: mainSector || UNCLASSIFIED_SECTOR,
+        mainSector,
+        isSectorETF: false,
+        marginReq: Number.isFinite(marginReq) ? marginReq : null,
+        pnlDay: Number.isFinite(profitRow?.pnlDay) ? profitRow.pnlDay : null,
+        pnlYtd: Number.isFinite(profitRow?.pnlYtd) ? profitRow.pnlYtd : null,
+      };
+      pushPosition(position, pnlOpen);
+      importedSymbols.add(rawSymbol);
     });
   }
 
@@ -2806,6 +2871,7 @@ export default function App() {
     normalizePerformanceChartSelection(persisted.performanceChartSelection, [], persisted.showBenchmark ?? true),
   );
   const [legalNavPointsByAccount, setLegalNavPointsByAccount] = useState({});
+  const [deskNavPointsByAccount, setDeskNavPointsByAccount] = useState({});
   const [sharedStateReady, setSharedStateReady] = useState(false);
   const [sharedStateUpdatedAt, setSharedStateUpdatedAt] = useState(null);
   const [sharedSyncStatus, setSharedSyncStatus] = useState('Booting shared workspace');
@@ -3219,7 +3285,7 @@ export default function App() {
         if (!parsed.importedCount && !realizedCount) {
           setUploadStatus((s) => ({
             ...s,
-            futures: '✗ No futures rows found. Use a Schwab account statement CSV that includes Futures, Futures Options, or Profits and Losses sections.',
+            futures: '✗ No futures rows found. Use a Schwab account statement CSV that includes Futures, Futures Options, or Profits and Losses futures rows.',
           }));
           return;
         }
@@ -3391,6 +3457,42 @@ export default function App() {
       } catch (error) {
         console.warn('Legal NAV fetch failed for performance charts', error);
         if (!cancelled) setLegalNavPointsByAccount({});
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [accountList, sharedStateUpdatedAt]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const targets = [...new Set(['ALL', ...accountList])];
+    if (!targets.length) {
+      setDeskNavPointsByAccount({});
+      return undefined;
+    }
+
+    (async () => {
+      try {
+        const rows = await Promise.all(
+          targets.map(async (accountName) => {
+            const response = await api.get('/portfolio/nav', {
+              params: {
+                limit: 2000,
+                accounting_mode: 'desk',
+                ...(accountName === 'ALL' ? {} : { account: accountName }),
+                _ts: Date.now(),
+              },
+              headers: { 'Cache-Control': 'no-cache' },
+            });
+            return [accountName, Array.isArray(response.data) ? response.data : []];
+          }),
+        );
+        if (!cancelled) setDeskNavPointsByAccount(Object.fromEntries(rows));
+      } catch (error) {
+        console.warn('Desk NAV fetch failed for performance charts', error);
+        if (!cancelled) setDeskNavPointsByAccount({});
       }
     })();
 
@@ -3694,6 +3796,16 @@ export default function App() {
     [accountList, balanceHistory, legalNavPointsByAccount],
   );
 
+  const backendDeskPerformanceModelsByAccount = useMemo(
+    () => Object.fromEntries(
+      accountList.map((accountName) => [
+        accountName,
+        buildPerformanceModelFromNavPoints(deskNavPointsByAccount[accountName], balanceHistory[accountName] || []),
+      ]),
+    ),
+    [accountList, balanceHistory, deskNavPointsByAccount],
+  );
+
   const legalAggregatePerformanceModel = useMemo(
     () => buildAggregatePerformanceModel(
       legalPerformanceModelsByAccount,
@@ -3702,12 +3814,27 @@ export default function App() {
     [accountList, legalPerformanceModelsByAccount, selectedPerformanceAccounts],
   );
 
+  const backendDeskAggregatePerformanceModel = useMemo(
+    () => buildAggregatePerformanceModel(
+      backendDeskPerformanceModelsByAccount,
+      selectedPerformanceAccounts.length ? selectedPerformanceAccounts : accountList,
+    ),
+    [accountList, backendDeskPerformanceModelsByAccount, selectedPerformanceAccounts],
+  );
+
   const legalActivePerformanceModel = useMemo(() => {
     if (selectedAccount === 'ALL') {
       return buildAggregatePerformanceModel(legalPerformanceModelsByAccount, accountList);
     }
     return legalPerformanceModelsByAccount[selectedAccount] || buildPerformanceModelFromNavPoints([], balanceHistory[selectedAccount] || []);
   }, [accountList, balanceHistory, legalPerformanceModelsByAccount, selectedAccount]);
+
+  const backendDeskActivePerformanceModel = useMemo(() => {
+    if (selectedAccount === 'ALL') {
+      return buildAggregatePerformanceModel(backendDeskPerformanceModelsByAccount, accountList);
+    }
+    return backendDeskPerformanceModelsByAccount[selectedAccount] || buildPerformanceModelFromNavPoints([], balanceHistory[selectedAccount] || []);
+  }, [accountList, balanceHistory, backendDeskPerformanceModelsByAccount, selectedAccount]);
 
   const deskPerformanceModel = useMemo(() => {
     const globalDates = [...new Set(
@@ -3843,15 +3970,19 @@ export default function App() {
       }),
     );
 
+    const backendDeskAvailable = Object.values(backendDeskPerformanceModelsByAccount || {}).some((model) => model?.navSeries?.length);
+
     return {
-      accountModels,
-      aggregateModel: buildAggregatePerformanceModel(
+      accountModels: backendDeskAvailable ? backendDeskPerformanceModelsByAccount : accountModels,
+      aggregateModel: backendDeskAvailable ? backendDeskAggregatePerformanceModel : buildAggregatePerformanceModel(
         accountModels,
         selectedPerformanceAccounts.length ? selectedPerformanceAccounts : accountList,
       ),
-      activeModel: selectedAccount === 'ALL'
-        ? buildAggregatePerformanceModel(accountModels, accountList)
-        : (accountModels[selectedAccount] || { navSeries: [], twrSeries: [], flowSeries: [], hasFlowAdjustedReturns: false }),
+      activeModel: backendDeskAvailable
+        ? backendDeskActivePerformanceModel
+        : (selectedAccount === 'ALL'
+          ? buildAggregatePerformanceModel(accountModels, accountList)
+          : (accountModels[selectedAccount] || { navSeries: [], twrSeries: [], flowSeries: [], hasFlowAdjustedReturns: false })),
       transferCount: transferredPositions.length + transferredRealizedTrades.length,
       openTransferCount: transferredPositions.length,
       closedTransferCount: transferredRealizedTrades.length,
@@ -3861,7 +3992,7 @@ export default function App() {
       linearCount,
       flatCount,
     };
-  }, [accountList, futuresPnlSnapshots, getPositionHistorySeries, getRealizedTradeHistorySeries, legalActivePerformanceModel, legalAggregatePerformanceModel, legalPerformanceModelsByAccount, positionTransferEffectiveDates, selectedAccount, selectedPerformanceAccounts, transferredPositions, transferredRealizedTrades]);
+  }, [accountList, backendDeskActivePerformanceModel, backendDeskAggregatePerformanceModel, backendDeskPerformanceModelsByAccount, futuresPnlSnapshots, getPositionHistorySeries, getRealizedTradeHistorySeries, legalActivePerformanceModel, legalAggregatePerformanceModel, legalPerformanceModelsByAccount, positionTransferEffectiveDates, selectedAccount, selectedPerformanceAccounts, transferredPositions, transferredRealizedTrades]);
 
   const performanceModelSource = useMemo(
     () => (performanceAccountingMode === 'desk'
@@ -6107,9 +6238,9 @@ export default function App() {
               },
               {
                 key: 'futures', label: 'FUTURES STATEMENT FILE', hint: 'AccountStatement_*.csv',
-                desc: 'Export from Schwab account statement CSV. Imports the Futures and Futures Options sections as supplemental live positions so they persist alongside the normal positions file.',
+                desc: 'Export from Schwab account statement CSV. Imports the Futures and Futures Options sections as supplemental live positions and falls back to Profits and Losses when Schwab omits the dedicated Futures block.',
                 handler: handleFuturesStatementUpload, accept: '.csv,.CSV',
-                fields: ['Futures: Symbol', 'SPC', 'Qty', 'Trade Price', 'Mark', 'P/L Day'],
+                fields: ['Futures: Symbol', 'SPC', 'Qty', 'Trade Price', 'Mark', 'P/L Day', 'Profits and Losses: Symbol', 'P/L Open'],
               },
               {
                 key: 'balances', label: 'BALANCE HISTORY FILES', hint: 'Account_XXXX###_Balances_*.CSV',
