@@ -1217,6 +1217,35 @@ function parseFuturesStatementCSV(text, {
     return /futures?|e-mini|micro e-mini/i.test(rawDescription);
   };
 
+  const extractFutureSymbolFromStatementDescription = (description) => {
+    const normalized = String(description || '').replace(/"/g, '').trim().toUpperCase();
+    if (!normalized) return '';
+    const match = normalized.match(/\/[A-Z0-9.]+(?::[A-Z0-9]+)?/);
+    return match ? match[0].split(':')[0] : '';
+  };
+
+  const parseStatementTradeQuantity = (description) => {
+    const normalized = String(description || '').replace(/"/g, '').trim().toUpperCase();
+    if (!normalized) return 0;
+    const explicitQtyMatch = normalized.match(/\b(?:BOT|BOUGHT|BUY|SOLD|SELL)\s+([+-]?\d+(?:\.\d+)?)/i);
+    if (explicitQtyMatch) {
+      const parsed = parseFloat(explicitQtyMatch[1]);
+      if (Number.isFinite(parsed) && parsed !== 0) return parsed;
+    }
+    const actionMatch = normalized.match(/\b(BOT|BOUGHT|BUY|SOLD|SELL)\b/i);
+    if (!actionMatch) return 0;
+    return /SOLD|SELL/i.test(actionMatch[1]) ? -1 : 1;
+  };
+
+  const parseStatementTradePriceFromDescription = (description) => {
+    const normalized = String(description || '').replace(/"/g, '').trim();
+    if (!normalized) return null;
+    const priceMatch = normalized.match(/@\s*(-?\d+(?:\.\d+)?)/);
+    if (!priceMatch) return null;
+    const parsed = parseFloat(priceMatch[1]);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+
   const pushPosition = (position, snapshotPnl = null) => {
     if (!position || !position.symbol || !Number.isFinite(position.qty) || position.qty === 0) return;
     accounts[accountName].positions.push(position);
@@ -1232,6 +1261,7 @@ function parseFuturesStatementCSV(text, {
   };
 
   const futuresSection = readSectionRows('Futures');
+  const futuresStatementsSection = readSectionRows('Futures Statements');
   const importedSymbols = new Set();
   if (futuresSection.header.length) {
     const symbolIdx = futuresSection.header.indexOf('symbol');
@@ -1339,6 +1369,89 @@ function parseFuturesStatementCSV(text, {
         marginReq: Number.isFinite(marginReq) ? marginReq : null,
         pnlDay: Number.isFinite(profitRow?.pnlDay) ? profitRow.pnlDay : null,
         pnlYtd: Number.isFinite(profitRow?.pnlYtd) ? profitRow.pnlYtd : null,
+      };
+      pushPosition(position, pnlOpen);
+      importedSymbols.add(rawSymbol);
+    });
+  }
+
+  if (futuresStatementsSection.header.length) {
+    const typeIdx = futuresStatementsSection.header.indexOf('type');
+    const descIdx = futuresStatementsSection.header.indexOf('description');
+    const amountIdx = futuresStatementsSection.header.indexOf('amount');
+    const tradeStateBySymbol = new Map();
+
+    futuresStatementsSection.rows.forEach((row) => {
+      const type = readRowCell(row, typeIdx).toUpperCase();
+      const description = readRowCell(row, descIdx);
+      if (!type || !description) return;
+
+      const rawSymbol = extractFutureSymbolFromStatementDescription(description);
+      if (!rawSymbol) return;
+
+      const tradeState = tradeStateBySymbol.get(rawSymbol) || {
+        qty: 0,
+        tradePrice: null,
+        markPrice: null,
+        amount: 0,
+        description,
+      };
+
+      if (type === 'TRD') {
+        const qty = parseStatementTradeQuantity(description);
+        if (Number.isFinite(qty) && qty !== 0) tradeState.qty += qty;
+        const tradePrice = parseStatementTradePriceFromDescription(description);
+        if (Number.isFinite(tradePrice)) tradeState.tradePrice = tradePrice;
+        const amount = parseStatementNumber(row[amountIdx]);
+        if (Number.isFinite(amount)) tradeState.amount += amount;
+      } else if (type === 'ADJ') {
+        const markPrice = parseStatementTradePriceFromDescription(description.replace(/\bmark to market\b/i, '@'));
+        if (Number.isFinite(markPrice)) tradeState.markPrice = markPrice;
+      }
+
+      if (description) tradeState.description = description;
+      tradeStateBySymbol.set(rawSymbol, tradeState);
+    });
+
+    tradeStateBySymbol.forEach((tradeState, rawSymbol) => {
+      if (!rawSymbol || importedSymbols.has(rawSymbol) || !Number.isFinite(tradeState.qty) || tradeState.qty === 0) return;
+
+      const profitRow = profitsLookup.get(rawSymbol) || {};
+      const description = String(profitRow.description || tradeState.description || rawSymbol).replace(/"/g, '').trim();
+      const pnlOpen = Number.isFinite(profitRow.pnlOpen) ? profitRow.pnlOpen : 0;
+      const gainPct = Number.isFinite(profitRow.gainPct) ? profitRow.gainPct : 0;
+      const marginReq = Number.isFinite(profitRow.marginReq) ? profitRow.marginReq : null;
+      const markValue = Number.isFinite(profitRow.markValue) ? profitRow.markValue : null;
+      const mainSector = resolveStatementFutureSector(rawSymbol, description);
+      const referencePrice = Number.isFinite(tradeState.markPrice) ? tradeState.markPrice
+        : (Number.isFinite(tradeState.tradePrice) ? tradeState.tradePrice : 0);
+
+      const position = {
+        account: accountName,
+        symbol: rawSymbol,
+        normalizedSymbol: rawSymbol,
+        baseSymbol: rawSymbol,
+        overrideSymbol: rawSymbol,
+        historySymbol: null,
+        cleanSym: rawSymbol.replace(/[\/.\- ]/g, '_'),
+        description,
+        qty: tradeState.qty,
+        price: Number.isFinite(referencePrice) ? referencePrice : 0,
+        tradePrice: Number.isFinite(tradeState.tradePrice) ? tradeState.tradePrice : null,
+        markPrice: Number.isFinite(tradeState.markPrice) ? tradeState.markPrice : null,
+        multiplier: 1,
+        mktVal: Number.isFinite(pnlOpen) ? pnlOpen : 0,
+        costBasis: 0,
+        gainPct,
+        assetType: 'Future',
+        source: POSITION_SOURCE_FUTURES,
+        sector: mainSector || UNCLASSIFIED_SECTOR,
+        mainSector,
+        isSectorETF: false,
+        marginReq,
+        pnlDay: Number.isFinite(profitRow.pnlDay) ? profitRow.pnlDay : null,
+        pnlYtd: Number.isFinite(profitRow.pnlYtd) ? profitRow.pnlYtd : null,
+        markValue,
       };
       pushPosition(position, pnlOpen);
       importedSymbols.add(rawSymbol);
