@@ -1875,7 +1875,15 @@ function getLatestSeriesDate(seriesList) {
   }, null);
 }
 
-function filterByTimeframe(data, tf, anchorDateISO = null) {
+function getSharedSeriesEndDate(seriesList) {
+  const dates = (seriesList || [])
+    .map((series) => series?.[series.length - 1]?.[0] || null)
+    .filter(Boolean);
+  if (!dates.length) return null;
+  return dates.reduce((earliest, date) => (!earliest || date < earliest ? date : earliest), null);
+}
+
+function filterByTimeframe(data, tf, anchorDateISO = null, includePriorPoint = false) {
   if (!data?.length) return data;
   const endDate = anchorDateISO || data[data.length - 1]?.[0];
   const bounded = endDate ? data.filter(([date]) => date <= endDate) : [...data];
@@ -1884,6 +1892,7 @@ function filterByTimeframe(data, tf, anchorDateISO = null) {
   if (!startDate) return bounded;
   const startIndex = bounded.findIndex(([date]) => date >= startDate);
   if (startIndex === -1) return bounded;
+  if (!includePriorPoint) return bounded.slice(startIndex);
   return bounded.slice(Math.max(0, startIndex - 1));
 }
 
@@ -3809,7 +3818,7 @@ export default function App() {
   }, [editableSectorScope, sectorTargetsByAccount, accountList, accountValueMap]);
 
   const comparisonEndDate = useMemo(
-    () => getLatestSeriesDate([activeHistory, spxData]),
+    () => getSharedSeriesEndDate([activeHistory, spxData]) || getLatestSeriesDate([activeHistory, spxData]),
     [activeHistory, spxData],
   );
   const filteredHistory = useMemo(
@@ -3820,7 +3829,14 @@ export default function App() {
     () => filterByTimeframe(spxData, timeframe, comparisonEndDate),
     [spxData, timeframe, comparisonEndDate],
   );
-  const sectorAccountHistory = useMemo(() => filterByTimeframe(activeHistory, sectorTimeframe), [activeHistory, sectorTimeframe]);
+  const sectorBenchmarkEndDate = useMemo(
+    () => activeHistory[activeHistory.length - 1]?.[0] || null,
+    [activeHistory],
+  );
+  const sectorAccountHistory = useMemo(
+    () => filterByTimeframe(activeHistory, sectorTimeframe, sectorBenchmarkEndDate),
+    [activeHistory, sectorBenchmarkEndDate, sectorTimeframe],
+  );
   const currentAccountValue = useMemo(() => {
     const positionsTotal = selectedAccountsData.reduce((sum, accountData) => {
       const total = accountData?.total;
@@ -4135,11 +4151,11 @@ export default function App() {
       if (history?.length) candidateSeries.push(history);
     });
     if (performanceChartSelection.spx && spxData.length) candidateSeries.push(spxData);
-    return getLatestSeriesDate(candidateSeries);
+    return getSharedSeriesEndDate(candidateSeries) || getLatestSeriesDate(candidateSeries);
   }, [performanceChartSelection, performanceModelSource.accountModels, selectedAggregateReturnSeries, selectedPerformanceAccounts, spxData]);
 
   const performanceComparisonEndDate = useMemo(
-    () => getLatestSeriesDate([performanceActiveHistory, spxData]),
+    () => getSharedSeriesEndDate([performanceActiveHistory, spxData]) || getLatestSeriesDate([performanceActiveHistory, spxData]),
     [performanceActiveHistory, spxData],
   );
 
@@ -4260,7 +4276,11 @@ export default function App() {
 
     return ALL_SECTORS.map(({ name, etf, color }) => {
       const benchmarkSymbol = etf || 'SPX';
-      const benchmarkSeries = filterByTimeframe(etf ? (sectorBenchmarkData[name] || []) : spxData, sectorTimeframe);
+      const benchmarkSeries = filterByTimeframe(
+        etf ? (sectorBenchmarkData[name] || []) : spxData,
+        sectorTimeframe,
+        sectorBenchmarkEndDate,
+      );
       const totalReturn = computePeriodReturn(benchmarkSeries);
       const benchmarkWeight = resolvedSectorTargets[name]?.benchmarkWeight ?? DEFAULT_SECTOR_BENCHMARK_WEIGHTS[name] ?? 0;
       const targetWeight = resolvedSectorTargets[name]?.targetWeight ?? benchmarkWeight;
@@ -4388,6 +4408,7 @@ export default function App() {
     getPositionHistorySeries,
     resolvedSectorTargets,
     sectorAccountHistory,
+    sectorBenchmarkEndDate,
     sectorBenchmarkData,
     sectorStartAccountValue,
     sectorTimeframe,
@@ -4463,8 +4484,9 @@ export default function App() {
       sectorBenchmarkData[selectedSector]
       || (MANUAL_ONLY_SECTORS.some((sector) => sector.name === selectedSector) ? spxData : []),
       sectorTimeframe,
+      sectorBenchmarkEndDate,
     ),
-    [sectorBenchmarkData, selectedSector, sectorTimeframe, spxData],
+    [sectorBenchmarkData, selectedSector, sectorBenchmarkEndDate, sectorTimeframe, spxData],
   );
 
   const sectorDetail = useMemo(
