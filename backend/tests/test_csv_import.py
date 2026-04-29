@@ -442,24 +442,14 @@ def test_resolve_balance_history_account_prefers_filename_suffix_over_single_exi
 def test_snapshot_all_series_forward_fills_sparse_account_dates(monkeypatch):
     from backend.app.services import legacy_engine as engine
 
-    monkeypatch.setattr(
-        engine,
-        "get_bench_series",
-        lambda symbol=None, start_date=None: pd.DataFrame(
-            [
-                {"d": "2026-01-01", "close": 5000.0},
-                {"d": "2026-01-02", "close": 5100.0},
-                {"d": "2026-01-03", "close": 5200.0},
-            ]
-        ),
-    )
-
     class _Cursor:
         def __init__(self):
             self.sql = ""
+            self.params = None
 
         def execute(self, sql, params=None):
             self.sql = str(sql)
+            self.params = params
 
         def fetchall(self):
             if "FROM nav_snapshots" in self.sql and "account != 'ALL'" in self.sql:
@@ -468,6 +458,12 @@ def test_snapshot_all_series_forward_fills_sparse_account_dates(monkeypatch):
                     {"account": "A", "date": "2026-01-02", "nav": 110.0, "bench": None},
                     {"account": "B", "date": "2026-01-02", "nav": 100.0, "bench": None},
                     {"account": "B", "date": "2026-01-03", "nav": 105.0, "bench": None},
+                ]
+            if "FROM price_cache" in self.sql and self.params and self.params[0] in {"^GSPC", "^SPX", "SPX", "$SPX"}:
+                return [
+                    {"date": "2026-01-01", "close": 5000.0},
+                    {"date": "2026-01-02", "close": 5100.0},
+                    {"date": "2026-01-03", "close": 5200.0},
                 ]
             return []
 
@@ -480,7 +476,43 @@ def test_snapshot_all_series_forward_fills_sparse_account_dates(monkeypatch):
     out = engine._get_nav_series_from_snapshots(limit=10, account="ALL")
     assert [row["date"] for row in out] == ["2026-01-02", "2026-01-03"]
     assert [round(float(row["nav"]), 6) for row in out] == [210.0, 215.0]
+    assert [round(float(row["bench"]), 6) for row in out] == [5100.0, 5200.0]
     assert [round(float(row["twr"]), 6) for row in out] == [1.0, 1.02381]
+
+
+def test_snapshot_series_prefers_cached_benchmark_over_stored_snapshot_bench(monkeypatch):
+    from backend.app.services import legacy_engine as engine
+
+    class _Cursor:
+        def __init__(self):
+            self.sql = ""
+            self.params = None
+
+        def execute(self, sql, params=None):
+            self.sql = str(sql)
+            self.params = params
+
+        def fetchall(self):
+            if "FROM nav_snapshots" in self.sql and "WHERE account=?" in self.sql:
+                return [
+                    {"date": "2026-01-02", "nav": 100.0, "bench": 9999.0},
+                    {"date": "2026-01-03", "nav": 103.0, "bench": 9998.0},
+                ]
+            if "FROM price_cache" in self.sql and self.params and self.params[0] in {"^GSPC", "^SPX", "SPX", "$SPX"}:
+                return [
+                    {"date": "2026-01-02", "close": 5000.0},
+                    {"date": "2026-01-03", "close": 5100.0},
+                ]
+            return []
+
+    class _Conn:
+        def cursor(self):
+            return _Cursor()
+
+    monkeypatch.setattr(engine, "with_conn", lambda fn: fn(_Conn()))
+
+    out = engine._get_nav_series_from_snapshots(limit=10, account="A")
+    assert [round(float(row["bench"]), 6) for row in out] == [5000.0, 5100.0]
 
 
 def test_effective_nav_start_prefers_earliest_balance_history(monkeypatch):

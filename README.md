@@ -11,7 +11,8 @@ This build focuses on what matters most:
 
 - Backend: FastAPI (`/Users/stevenszeles/Downloads/barker_final/backend/app`)
 - Frontend: React + TypeScript + Lightweight Charts (`/Users/stevenszeles/Downloads/barker_final/frontend/src`)
-- Data source: JSON file (`/Users/stevenszeles/Downloads/barker_final/data/portfolio_data.json`)
+- Primary storage: SQLite by default or Postgres via `DATABASE_URL`
+- Demo seed data only: `/Users/stevenszeles/Downloads/barker_final/data/portfolio_data.json`
 
 ## Run locally
 
@@ -36,13 +37,27 @@ Open: `http://localhost:8080`
 
 ## Key API endpoints
 
-- `GET /api/health`
-- `GET /api/options`
-- `GET /api/dashboard?scope=total&range=1Y&compare=account:taxable,portfolio:retirement:equity&benchmarks=SPY,QQQ`
+- `GET /health`
+- `GET /version`
+- `GET /api/portfolio/snapshot`
+- `GET /api/portfolio/nav?limit=120&account=ALL`
+- `GET /api/risk/summary`
+- `GET /api/status/components`
+- `POST /api/admin/import-positions`
+- `POST /api/admin/import-balances`
+- `POST /api/admin/import-transactions`
 
 ## Data model
 
-Edit `/Users/stevenszeles/Downloads/barker_final/data/portfolio_data.json`:
+Primary app data lives in the database, not in a JSON file:
+
+- `accounts`: current cash / account anchors
+- `positions`: current holdings
+- `nav_snapshots`: historical NAV and benchmark values
+- `price_cache`: cached benchmark and symbol history
+- `trades`: blotter / realized / transaction analytics
+
+Edit `/Users/stevenszeles/Downloads/barker_final/data/portfolio_data.json` only if you are using demo seeding via `WS_SEED_DEMO=1`:
 
 - `benchmarks`: default benchmark symbols for overlay
 - `accounts[]`: top-level account containers
@@ -50,7 +65,7 @@ Edit `/Users/stevenszeles/Downloads/barker_final/data/portfolio_data.json`:
 - `positions[]`: `{symbol, shares, avg_cost}` for each holding
 - `cash`: cash balance per portfolio
 
-After data edits, refresh the page. The backend auto-reloads file contents on file change.
+For the primary import-driven workflow, use the Admin tab to import positions, balances, and realized trades.
 
 ## Reliability approach
 
@@ -68,6 +83,12 @@ For Render production stability:
 
 ## Full System Context
 
-For full architecture, return methodology, import workflows, schema details, and operational handoff instructions, see:
+For the best single-file handoff for Claude or any repo-aware coding assistant, start with:
 
-`/Users/stevenszeles/Downloads/barker_final/SYSTEM_CONTEXT_GUIDE.md`
+`/Users/stevenszeles/Downloads/barker_final/CLAUDE_COMPLETE_PROJECT_CONTEXT.md`
+
+Supporting context docs:
+
+- `/Users/stevenszeles/Downloads/barker_final/SYSTEM_CONTEXT_GUIDE.md`
+- `/Users/stevenszeles/Downloads/barker_final/CODEBASE_CONTEXT_FOR_CLAUDE_VSCODE.md`
+- `/Users/stevenszeles/Downloads/barker_final/CLAUDE_RENDER_IMPORT_CONTEXT_2026-03-07.md`
