@@ -74,13 +74,15 @@ class Settings:
             bool((os.environ.get(name) or "").strip())
             for name in ("RENDER", "RENDER_SERVICE_ID", "RENDER_EXTERNAL_URL", "RENDER_EXTERNAL_HOSTNAME")
         )
+        vercel_runtime = bool((os.environ.get("VERCEL") or "").strip())
 
         # API prefix
         self.api_prefix = os.environ.get("WS_API_PREFIX", "/api")
 
         # Database configuration
         self.db_url = _clean_optional(os.environ.get("DATABASE_URL") or os.environ.get("WS_DATABASE_URL"))
-        self.db_path = os.environ.get("WS_DB_PATH", str(Path.home() / "workstation.db"))
+        default_db_path = "/tmp/workstation.db" if vercel_runtime else str(Path.home() / "workstation.db")
+        self.db_path = os.environ.get("WS_DB_PATH", default_db_path)
         self.db_fallback_to_sqlite = _env_bool("WS_DB_FALLBACK_TO_SQLITE", default=render_runtime)
 
         # Mode configuration

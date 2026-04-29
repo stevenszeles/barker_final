@@ -124,7 +124,8 @@ def _startup():
         # Demo seed can be expensive; keep disabled by default in deployed envs.
         if os.getenv("WS_SEED_DEMO", "0") == "1":
             seed_demo_portfolio_if_empty()
-        start_workers()
+        if os.getenv("VERCEL", "0") != "1":
+            start_workers()
     except Exception as exc:  # pragma: no cover - startup hardening path
         app.state.startup_ready = False
         app.state.startup_degraded = True
