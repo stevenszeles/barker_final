@@ -4192,7 +4192,16 @@ export default function App() {
       }),
     );
 
-    const backendDeskAvailable = Object.values(backendDeskPerformanceModelsByAccount || {}).some((model) => model?.navSeries?.length);
+    const backendDeskHasData = Object.values(backendDeskPerformanceModelsByAccount || {})
+      .some((model) => model?.navSeries?.length);
+    const backendDeskMatchesLegal = backendDeskHasData
+      && Object.entries(backendDeskPerformanceModelsByAccount || {}).every(([name, deskModel]) => {
+        const desk = deskModel?.navSeries || [];
+        const legal = legalPerformanceModelsByAccount[name]?.navSeries || [];
+        if (desk.length !== legal.length) return false;
+        return desk.every(([d, v], i) => legal[i]?.[0] === d && legal[i]?.[1] === v);
+      });
+    const backendDeskAvailable = backendDeskHasData && !backendDeskMatchesLegal;
 
     return {
       accountModels: backendDeskAvailable ? backendDeskPerformanceModelsByAccount : accountModels,
