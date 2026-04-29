@@ -1,4 +1,3 @@
-import json
 import math
 import re
 import threading
@@ -11,14 +10,7 @@ import pandas as pd
 
 from ..db import with_conn
 from ..config import settings
-from . import (
-    desk_accounting,
-    futures as futures_service,
-    openfigi,
-    options as options_service,
-    schwab,
-    stooq,
-)
+from . import schwab, stooq, openfigi, options as options_service, futures as futures_service
 from .cache import cache
 
 try:
@@ -534,29 +526,8 @@ def _ensure_instrument(conn, instrument_id: str, fields: Optional[Dict[str, Any]
     row = cur.fetchone()
     if row:
         data = dict(row)
-        if fields:
-            merged = {**data}
-            for key, value in fields.items():
-                if value is None:
-                    continue
-                if isinstance(value, str) and value == "":
-                    continue
-                merged[key] = value
-            updates = []
-            params = []
-            for key in ("symbol", "asset_class", "underlying", "expiry", "strike", "option_type", "multiplier"):
-                old_value = data.get(key)
-                new_value = merged.get(key)
-                if old_value != new_value:
-                    updates.append(f"{key}=?")
-                    params.append(new_value)
-            if updates:
-                cur.execute(
-                    f"UPDATE instruments SET {', '.join(updates)} WHERE id=?",
-                    params + [instrument_id],
-                )
-                conn.commit()
-                data = merged
+        if not data.get("symbol") and fields:
+            data.update(fields)
         return data
     data = fields or _derive_instrument_fields(instrument_id)
     cur.execute(
@@ -1416,17 +1387,12 @@ def build_positions_live(pricing_date_iso: str, start_date_iso: str, account: Op
 # NAV series
 # ----------------------------
 
-def _normalize_accounting_mode(value: Optional[str]) -> str:
-    mode = str(value or "").strip().lower()
-    return "desk" if mode == "desk" else "legal"
+def _nav_cache_key(limit: int, account: Optional[str]) -> str:
+    return f"nav:{_account_label(account)}:{int(limit)}"
 
 
-def _nav_cache_key(limit: int, account: Optional[str], accounting_mode: str = "legal") -> str:
-    return f"nav:{_normalize_accounting_mode(accounting_mode)}:{_account_label(account)}:{int(limit)}"
-
-
-def _get_nav_cache(limit: int, account: Optional[str], accounting_mode: str = "legal") -> Optional[List[Dict[str, Any]]]:
-    key = _nav_cache_key(limit, account, accounting_mode=accounting_mode)
+def _get_nav_cache(limit: int, account: Optional[str]) -> Optional[List[Dict[str, Any]]]:
+    key = _nav_cache_key(limit, account)
     cached = NAV_CACHE.get(key)
     if not cached:
         return None
@@ -1436,33 +1402,12 @@ def _get_nav_cache(limit: int, account: Optional[str], accounting_mode: str = "l
     return data
 
 
-def _set_nav_cache(limit: int, account: Optional[str], data: List[Dict[str, Any]], accounting_mode: str = "legal") -> None:
-    NAV_CACHE[_nav_cache_key(limit, account, accounting_mode=accounting_mode)] = (time.time(), data)
+def _set_nav_cache(limit: int, account: Optional[str], data: List[Dict[str, Any]]) -> None:
+    NAV_CACHE[_nav_cache_key(limit, account)] = (time.time(), data)
 
 
 def _clear_nav_cache() -> None:
     NAV_CACHE.clear()
-
-
-def _get_shared_dashboard_state_for_accounting() -> Optional[Dict[str, Any]]:
-    def _run(conn):
-        cur = conn.cursor()
-        cur.execute("SELECT value FROM settings WHERE key=?", ("shared_dashboard_state",))
-        row = cur.fetchone()
-        if not row:
-            return None
-        if isinstance(row, dict):
-            return row.get("value")
-        return row[0]
-
-    raw_state = with_conn(_run)
-    if not raw_state:
-        return None
-    try:
-        decoded = json.loads(raw_state)
-    except Exception:
-        return None
-    return decoded if isinstance(decoded, dict) else None
 
 
 def _extend_nav_points_with_benchmark(
@@ -1909,8 +1854,8 @@ def build_daily_nav_series(start_iso: str, bench_series: pd.DataFrame, account: 
     return pd.DataFrame({"d": dates, "nav": nav, "day_pl": day_pl, "ret": ret, "twr": twr})
 
 
-def _get_legal_nav_series(limit: int = 120, account: Optional[str] = None) -> List[Dict[str, Any]]:
-    cached = _get_nav_cache(limit, account, accounting_mode="legal")
+def get_nav_series(limit: int = 120, account: Optional[str] = None) -> List[Dict[str, Any]]:
+    cached = _get_nav_cache(limit, account)
     if cached is not None:
         return cached
     start_iso = _effective_nav_start(account)
@@ -1918,7 +1863,7 @@ def _get_legal_nav_series(limit: int = 120, account: Optional[str] = None) -> Li
     snapshot_points = _get_nav_series_from_snapshots(limit=limit, account=account)
     # Imported/stored snapshots are cheap and deterministic; prefer them in all modes.
     if snapshot_points:
-        _set_nav_cache(limit, account, snapshot_points, accounting_mode="legal")
+        _set_nav_cache(limit, account, snapshot_points)
         return snapshot_points
     if settings.static_mode:
         return []
@@ -1926,7 +1871,7 @@ def _get_legal_nav_series(limit: int = 120, account: Optional[str] = None) -> Li
     nav_df = build_daily_nav_series(start_iso, bench_series, account=account)
     if nav_df is None or nav_df.empty:
         if snapshot_points:
-            _set_nav_cache(limit, account, snapshot_points, accounting_mode="legal")
+            _set_nav_cache(limit, account, snapshot_points)
             return snapshot_points
         return []
     nav_df = nav_df.tail(int(limit))
@@ -1968,102 +1913,8 @@ def _get_legal_nav_series(limit: int = 120, account: Optional[str] = None) -> Li
             }
         )
     points = _extend_nav_points_with_benchmark(points, bench_map, limit)
-    _set_nav_cache(limit, account, points, accounting_mode="legal")
+    _set_nav_cache(limit, account, points)
     return points
-
-
-def _load_nav_price_series_for_desk(symbol: str, start_date: str) -> List[Tuple[str, float]]:
-    clean_symbol = str(symbol or "").strip().upper()
-    start_iso = parse_iso_date(start_date) or _get_bench_start()
-    if not clean_symbol or is_option_symbol(clean_symbol):
-        return []
-    try:
-        ensure_symbol_history(clean_symbol, start_iso, is_bench=False)
-    except Exception:
-        pass
-
-    def _run(conn):
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT date, close FROM price_cache WHERE symbol=? AND date>=? ORDER BY date ASC",
-            (clean_symbol, start_iso),
-        )
-        return _fetch_rows(cur)
-
-    rows = with_conn(_run)
-    out: List[Tuple[str, float]] = []
-    for row in rows:
-        d = parse_iso_date(row.get("date") if isinstance(row, dict) else (row[0] if row else None))
-        try:
-            close_val = float(row.get("close") if isinstance(row, dict) else (row[1] if row else 0.0))
-        except Exception:
-            close_val = 0.0
-        if d and np.isfinite(close_val) and close_val > 0:
-            out.append((d, float(close_val)))
-    return out
-
-
-def _get_desk_nav_series(limit: int = 120, account: Optional[str] = None) -> List[Dict[str, Any]]:
-    shared_state = _get_shared_dashboard_state_for_accounting()
-    if not shared_state:
-        return _get_legal_nav_series(limit=limit, account=account)
-
-    normalized_state = desk_accounting.normalize_shared_dashboard_state(shared_state)
-    state_accounts = list(normalized_state.get("accountNames", []))
-    state_accounts.extend(
-        [
-            desk_accounting.get_position_held_account(position)
-            for account_payload in normalized_state.get("accounts", {}).values()
-            for position in account_payload.get("positions", [])
-        ]
-    )
-    state_accounts.extend(
-        [
-            desk_accounting.get_position_attributed_account(position, normalized_state.get("positionAttributionOverrides", {}))
-            for account_payload in normalized_state.get("accounts", {}).values()
-            for position in account_payload.get("positions", [])
-        ]
-    )
-    state_accounts.extend(
-        [
-            desk_accounting.normalize_account_name(trade.get("account"))
-            for trade in normalized_state.get("realizedTrades", [])
-        ]
-    )
-    state_accounts.extend(
-        [
-            desk_accounting.get_realized_trade_attributed_account(
-                trade,
-                normalized_state.get("realizedTradeAttributionOverrides", {}),
-            )
-            for trade in normalized_state.get("realizedTrades", [])
-        ]
-    )
-    account_names = sorted({name for name in state_accounts if name and name != "ALL"})
-    full_limit = max(int(limit), 4000)
-    legal_nav_by_account = {"ALL": _get_legal_nav_series(limit=full_limit, account="ALL")}
-    for account_name in account_names:
-        legal_nav_by_account[account_name] = _get_legal_nav_series(limit=full_limit, account=account_name)
-
-    points = desk_accounting.build_desk_nav_points(
-        legal_nav_by_account=legal_nav_by_account,
-        shared_state=normalized_state,
-        account=account,
-        limit=limit,
-        load_price_series=_load_nav_price_series_for_desk,
-    )
-    return points or _get_legal_nav_series(limit=limit, account=account)
-
-
-def get_nav_series(
-    limit: int = 120,
-    account: Optional[str] = None,
-    accounting_mode: str = "legal",
-) -> List[Dict[str, Any]]:
-    mode = _normalize_accounting_mode(accounting_mode)
-    if mode == "desk":
-        return _get_desk_nav_series(limit=limit, account=account)
-    return _get_legal_nav_series(limit=limit, account=account)
 
 
 def _get_nav_series_from_snapshots(limit: int = 120, account: Optional[str] = None) -> List[Dict[str, Any]]:

@@ -31,15 +31,10 @@ def snapshot(response: Response, account: Optional[str] = None):
 
 
 @router.get("/nav", response_model=list[NavPoint])
-def nav(
-    response: Response,
-    limit: int = 120,
-    account: Optional[str] = None,
-    accounting_mode: str = "legal",
-):
+def nav(response: Response, limit: int = 120, account: Optional[str] = None):
     try:
         response.headers["Cache-Control"] = "no-store"
-        return get_nav_series(limit=limit, account=account, accounting_mode=accounting_mode)
+        return get_nav_series(limit=limit, account=account)
     except Exception as exc:
         _raise_portfolio_error(exc)
 

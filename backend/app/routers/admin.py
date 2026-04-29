@@ -15,7 +15,6 @@ from ..db import with_conn
 from ..config import settings
 from ..services import portfolio as portfolio_service
 from ..services import legacy_engine as legacy_engine
-from ..services import futures as futures_service
 from ..services import options as options_service
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -937,60 +936,6 @@ def _parse_money_value(raw: Any) -> Optional[float]:
         return None
 
 
-def _infer_import_instrument(
-    symbol_raw: Any,
-    description: Any = "",
-    security_type: Any = "",
-) -> Dict[str, Any]:
-    symbol = _normalize_symbol_token(str(symbol_raw or "").strip().upper())
-    description_text = str(description or "").strip().upper()
-    security_type_lower = str(security_type or "").strip().lower()
-
-    asset_class = "equity"
-    underlying = symbol
-    expiry = None
-    strike = None
-    option_type = None
-
-    parsed_option = _parse_option_symbol(symbol) or _parse_option_symbol(description_text)
-    option_hint = "option" in security_type_lower
-    future_hint = futures_service.parse_future_symbol(symbol) or (
-        "future" in security_type_lower and "option" not in security_type_lower
-    )
-
-    if parsed_option:
-        asset_class = "option"
-        symbol = parsed_option["symbol"]
-        underlying = parsed_option["underlying"]
-        expiry = parsed_option["expiry"]
-        strike = parsed_option["strike"]
-        option_type = parsed_option["option_type"]
-    elif option_hint or legacy_engine.is_option_symbol(symbol):
-        asset_class = "option"
-        parsed_osi = options_service.parse_osi_symbol(symbol)
-        if parsed_osi:
-            underlying, expiry, right, strike = parsed_osi
-            option_type = "CALL" if str(right).upper().startswith("C") else "PUT"
-    elif future_hint:
-        asset_class = "future"
-        spec = futures_service.get_future_spec(symbol)
-        underlying = str(spec.get("root") or symbol).strip().upper()
-        expiry = spec.get("expiry") or expiry
-
-    multiplier = float(legacy_engine.contract_multiplier(symbol, asset_class) or 1.0)
-    instrument_id = f"{symbol}:{asset_class.upper()}" if symbol else ""
-    return {
-        "symbol": symbol,
-        "asset_class": asset_class,
-        "underlying": underlying,
-        "expiry": expiry,
-        "strike": strike,
-        "option_type": option_type,
-        "multiplier": multiplier,
-        "instrument_id": instrument_id,
-    }
-
-
 def _event_key_token(value: Any) -> str:
     if value is None:
         return ""
@@ -1080,10 +1025,10 @@ def _parse_realized_lot_details_rows(text: str, target_account: str) -> List[Dic
             )
             or 0.0
         )
-        instrument_meta = _infer_import_instrument(symbol_raw, desc)
-        asset_class = str(instrument_meta.get("asset_class") or "equity")
-        symbol = str(instrument_meta.get("symbol") or symbol_raw)
-        mult = float(instrument_meta.get("multiplier") or 1.0)
+        parsed_option = _parse_option_symbol(symbol_raw) or _parse_option_symbol(desc)
+        asset_class = "option" if parsed_option else "equity"
+        symbol = parsed_option["symbol"] if parsed_option else symbol_raw
+        mult = legacy_engine.contract_multiplier(symbol, asset_class)
 
         buy_amount = -(qty * cost_per_share * mult)
         sell_amount = qty * proceeds_per_share * mult
@@ -1244,15 +1189,22 @@ def _parse_custaccs_positions(text: str) -> Dict[str, Any]:
         day_chg = _parse_money(_cell(row, "Day Chng $ (Day Change $)"))
         cost_basis = _parse_money(_cell(row, "Cost Basis"))
         gain = _parse_money(_cell(row, "Gain $ (Gain/Loss $)"))
-        instrument_meta = _infer_import_instrument(symbol, _cell(row, "Description"), security_type)
-        symbol = str(instrument_meta.get("symbol") or symbol)
-        asset_class = str(instrument_meta.get("asset_class") or "equity")
-        underlying = instrument_meta.get("underlying")
-        expiry = instrument_meta.get("expiry")
-        strike = instrument_meta.get("strike")
-        option_type = instrument_meta.get("option_type")
-        multiplier = float(instrument_meta.get("multiplier") or 1.0)
-        instrument_id = str(instrument_meta.get("instrument_id") or f"{symbol}:{asset_class.upper()}")
+        parsed_option = _parse_option_symbol(symbol) or _parse_option_symbol(_cell(row, "Description"))
+        asset_class = "option" if parsed_option or "option" in security_type_lower else "equity"
+        underlying = symbol
+        expiry = None
+        strike = None
+        option_type = None
+        multiplier = 100.0 if asset_class == "option" else 1.0
+        if asset_class == "option":
+            parsed = parsed_option or _parse_option_symbol(symbol) or _parse_option_symbol(_cell(row, "Description"))
+            if parsed:
+                symbol = parsed["symbol"]
+                underlying = parsed["underlying"]
+                expiry = parsed["expiry"]
+                strike = parsed["strike"]
+                option_type = parsed["option_type"]
+        instrument_id = f"{symbol}:{'OPTION' if asset_class == 'option' else 'EQUITY'}"
         avg_cost = price
         if qty and cost_basis:
             try:
@@ -1909,19 +1861,25 @@ def _store_transactions_static(
                 inserted_event_keys.append(("CASH_FLOW", cash_event_key))
             continue
 
-        instrument_meta = _infer_import_instrument(symbol_raw, description)
-        symbol_raw = str(instrument_meta.get("symbol") or symbol_raw)
-        asset_class = str(instrument_meta.get("asset_class") or "equity")
-        underlying = instrument_meta.get("underlying")
-        expiry = instrument_meta.get("expiry")
-        strike = instrument_meta.get("strike")
-        option_type = instrument_meta.get("option_type")
+        parsed_option = _parse_option_symbol(symbol_raw) or _parse_option_symbol(description)
+        asset_class = "equity"
+        underlying = symbol_raw
+        expiry = None
+        strike = None
+        option_type = None
+        if parsed_option:
+            asset_class = "option"
+            symbol_raw = parsed_option["symbol"]
+            underlying = parsed_option["underlying"]
+            expiry = parsed_option["expiry"]
+            strike = parsed_option["strike"]
+            option_type = parsed_option["option_type"]
 
         qty_abs = abs(float(qty or 0.0))
         if qty_abs <= 1e-12:
             continue
 
-        mult = float(instrument_meta.get("multiplier") or 1.0)
+        mult = float(legacy_engine.contract_multiplier(symbol_raw, asset_class) or 1.0)
         price = float(price_val or 0.0)
         if price <= 0 and amount_val is not None and qty_abs > 0 and mult > 0:
             try:
@@ -1955,12 +1913,8 @@ def _store_transactions_static(
             skipped_duplicate_rows += 1
             continue
 
-        inferred_cash = 0.0 if asset_class == "future" else (
-            (qty_abs * price * mult) if side == "SELL" else (-qty_abs * price * mult)
-        )
-        cash_flow = 0.0 if asset_class == "future" else (
-            float(amount_val) if amount_val is not None else float(inferred_cash)
-        )
+        inferred_cash = (qty_abs * price * mult) if side == "SELL" else (-qty_abs * price * mult)
+        cash_flow = float(amount_val) if amount_val is not None else float(inferred_cash)
         explicit_sector = _normalize_sector_value(
             row.get("Sector")
             or row.get("sector")
@@ -1975,7 +1929,7 @@ def _store_transactions_static(
                 "ts": now_ts,
                 "trade_date": trade_date,
                 "account": acct,
-                "instrument_id": str(instrument_meta.get("instrument_id") or f"{symbol_raw}:{asset_class.upper()}"),
+                "instrument_id": f"{symbol_raw}:{asset_class.upper()}",
                 "symbol": symbol_raw,
                 "side": side,
                 "qty": qty_abs,
@@ -2435,43 +2389,27 @@ async def import_transactions(
 
         with_conn(_clear)
 
-    def _load_live_positions(conn):
+    def _load_live_qty(conn):
         cur = conn.cursor()
         cur.execute("SELECT instrument_id, qty FROM positions WHERE account=?", (acct,))
-        qty_map: Dict[str, float] = {}
-        instrument_aliases: Dict[str, str] = {}
+        out: Dict[str, float] = {}
         for row in cur.fetchall() or []:
             instrument_id = row.get("instrument_id") if isinstance(row, dict) else row[0]
             qty_val = row.get("qty") if isinstance(row, dict) else row[1]
             if not instrument_id:
                 continue
-            instrument_id = str(instrument_id)
             try:
-                qty_map[instrument_id] = float(qty_val or 0.0)
+                out[str(instrument_id)] = float(qty_val or 0.0)
             except Exception:
-                qty_map[instrument_id] = 0.0
-            try:
-                fields = legacy_engine._derive_instrument_fields(instrument_id)
-            except Exception:
-                fields = {}
-            canonical_symbol = str(fields.get("symbol") or instrument_id.split(":", 1)[0]).strip().upper()
-            canonical_asset = str(fields.get("asset_class") or "equity").strip().upper() or "EQUITY"
-            canonical_id = f"{canonical_symbol}:{canonical_asset}" if canonical_symbol else instrument_id
-            instrument_aliases[canonical_id] = instrument_id
-            if canonical_symbol and futures_service.parse_future_symbol(canonical_symbol):
-                instrument_aliases[f"{canonical_symbol}:FUTURE"] = instrument_id
-        return qty_map, instrument_aliases
+                out[str(instrument_id)] = 0.0
+        return out
 
     def _load_event_keys(conn):
         cur = conn.cursor()
         cur.execute("SELECT kind, event_key FROM import_event_keys WHERE account=?", (acct,))
         return {(str((r.get("kind") if isinstance(r, dict) else r[0]) or ""), str((r.get("event_key") if isinstance(r, dict) else r[1]) or "")) for r in (cur.fetchall() or [])}
 
-    if replace:
-        live_qty = {}
-        live_instrument_aliases = {}
-    else:
-        live_qty, live_instrument_aliases = with_conn(_load_live_positions)
+    live_qty: Dict[str, float] = with_conn(_load_live_qty) if not replace else {}
     existing_event_keys = with_conn(_load_event_keys) if not replace else set()
     symbol_sector_map = with_conn(lambda conn: _load_symbol_sector_map_for_account(conn, acct))
     acct_hash = hashlib.sha1(acct.encode("utf-8")).hexdigest()[:10]
@@ -2548,25 +2486,33 @@ async def import_transactions(
                     )
             continue
 
-        instrument_meta = _infer_import_instrument(symbol_raw, description)
-        symbol_raw = str(instrument_meta.get("symbol") or symbol_raw)
-        asset_class = str(instrument_meta.get("asset_class") or "equity")
-        underlying = instrument_meta.get("underlying")
-        expiry = instrument_meta.get("expiry")
-        strike = instrument_meta.get("strike")
-        option_type = instrument_meta.get("option_type")
+        parsed_option = _parse_option_symbol(symbol_raw) or _parse_option_symbol(description)
+        asset_class = "equity"
+        underlying = symbol_raw
+        expiry = None
+        strike = None
+        option_type = None
+        if parsed_option:
+            asset_class = "option"
+            symbol_raw = parsed_option["symbol"]
+            underlying = parsed_option["underlying"]
+            expiry = parsed_option["expiry"]
+            strike = parsed_option["strike"]
+            option_type = parsed_option["option_type"]
+        elif legacy_engine.is_option_symbol(symbol_raw):
+            asset_class = "option"
+            parsed_osi = options_service.parse_osi_symbol(symbol_raw)
+            if parsed_osi:
+                underlying, expiry, right, strike = parsed_osi
+                option_type = "CALL" if str(right).upper().startswith("C") else "PUT"
 
         price = float(price_val or 0.0)
         if price == 0.0 and amount_val is not None and qty:
-            mult = float(instrument_meta.get("multiplier") or 1.0)
+            mult = legacy_engine.contract_multiplier(symbol_raw, asset_class)
             try:
                 price = abs(float(amount_val)) / (abs(float(qty)) * float(mult))
             except Exception:
                 price = 0.0
-
-        instrument_id = str(instrument_meta.get("instrument_id") or f"{symbol_raw}:{asset_class.upper()}")
-        if not replace:
-            instrument_id = live_instrument_aliases.get(instrument_id, instrument_id)
 
         trade_event_key = _build_import_event_key(
             event_counters,
@@ -2600,7 +2546,7 @@ async def import_transactions(
                 "action_lower": action_lower,
                 "is_close": _action_is_close(action_lower),
                 "symbol": symbol_raw,
-                "instrument_id": instrument_id,
+                "instrument_id": f"{symbol_raw}:{asset_class.upper()}",
                 "side": side,
                 "qty": abs(float(qty or 0.0)),
                 "price": price,
