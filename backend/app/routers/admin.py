@@ -876,7 +876,7 @@ def _action_cash_only(action_lower: str) -> bool:
 def _action_to_side(action_lower: str, qty: float) -> Optional[str]:
     if not action_lower:
         return None
-    if "expired" in action_lower:
+    if any(marker in action_lower for marker in ("expired", "expiration", "settled", "settlement", "closed")):
         return "SELL" if qty >= 0 else "BUY"
     if "buy" in action_lower or "reinvest" in action_lower or "cover" in action_lower:
         return "BUY"
@@ -897,6 +897,11 @@ def _action_is_close(action_lower: str) -> bool:
         "stc",
         "cover",
         "expired",
+        "expiration",
+        "settled",
+        "settlement",
+        "closed",
+        "close position",
         "assignment",
         "assigned",
         "called away",
@@ -920,6 +925,15 @@ def _cap_close_qty(side: str, current_qty: float, requested_qty: float) -> float
     if side == "SELL":
         return min(qty, max(cur, 0.0))
     return min(qty, max(-cur, 0.0))
+
+
+def _side_for_zero_qty_close(current_qty: float) -> Optional[str]:
+    cur = float(current_qty or 0.0)
+    if cur > 1e-12:
+        return "SELL"
+    if cur < -1e-12:
+        return "BUY"
+    return None
 
 
 def _parse_money_value(raw: Any) -> Optional[float]:
@@ -1827,7 +1841,8 @@ def _store_transactions_static(
             description,
             idx,
         )
-        if amount_val is not None and (_action_cash_only(action_lower) or (qty == 0 and not _action_is_close(action_lower))):
+        is_close_action = _action_is_close(action_lower)
+        if amount_val is not None and (_action_cash_only(action_lower) or (qty == 0 and not is_close_action)):
             if not replace and ("CASH_FLOW", cash_event_key) in existing_event_keys:
                 skipped_duplicate_rows += 1
                 continue
@@ -1843,7 +1858,12 @@ def _store_transactions_static(
             inserted_event_keys.append(("CASH_FLOW", cash_event_key))
             continue
 
+        is_close_action = _action_is_close(action_lower)
         side = _action_to_side(action_lower, qty)
+        if side is None and is_close_action:
+            side = "SELL" if qty >= 0 else "BUY"
+        if side is None and is_close_action:
+            side = "SELL" if qty >= 0 else "BUY"
         if side is None:
             if amount_val is not None:
                 if not replace and ("CASH_FLOW", cash_event_key) in existing_event_keys:
@@ -2544,7 +2564,7 @@ async def import_transactions(
                 "row_index": idx,
                 "trade_date": trade_date,
                 "action_lower": action_lower,
-                "is_close": _action_is_close(action_lower),
+                "is_close": is_close_action,
                 "symbol": symbol_raw,
                 "instrument_id": f"{symbol_raw}:{asset_class.upper()}",
                 "side": side,
@@ -2613,8 +2633,7 @@ async def import_transactions(
                     skipped_trade_event_keys.append(event_key)
                 continue
             requested_qty = abs(current_qty)
-            if "expired" in action_lower:
-                side = "SELL" if current_qty > 0 else "BUY"
+            side = _side_for_zero_qty_close(current_qty) or side
         elif requested_qty <= 0:
             continue
 

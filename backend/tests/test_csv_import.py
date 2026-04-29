@@ -235,15 +235,23 @@ def test_workers_start_nonblocking(monkeypatch):
 
 
 def test_action_close_detection_and_side_mapping():
-    from backend.app.routers.admin import _action_is_close, _action_to_side
+    from backend.app.routers.admin import _action_is_close, _action_to_side, _side_for_zero_qty_close
 
     assert _action_is_close("Sell to Close")
     assert _action_is_close("BUY TO CLOSE")
     assert _action_is_close("Expired")
+    assert _action_is_close("Cash Settled")
+    assert _action_is_close("Closed Position")
     assert not _action_is_close("Sell Short")
 
     assert _action_to_side("expired option", 1) == "SELL"
     assert _action_to_side("expired option", -1) == "BUY"
+    assert _action_to_side("cash settled option", 0) == "SELL"
+    assert _action_to_side("closed position", -1) == "BUY"
+
+    assert _side_for_zero_qty_close(3.0) == "SELL"
+    assert _side_for_zero_qty_close(-2.0) == "BUY"
+    assert _side_for_zero_qty_close(0.0) is None
 
 
 def test_cap_close_qty_prevents_position_flip():
