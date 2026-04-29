@@ -17,5 +17,19 @@
       "source": "/(.*)",
       "destination": "/$1"
     }
-  ]
+  ],
+  "experimentalServices": {
+    "web": {
+      "entrypoint": "app.py",
+      "framework": "fastapi",
+      "routePrefix": "/",
+      "includeFiles": [
+        "backend/**",
+        "frontend/dist/**",
+        "data/**"
+      ],
+      "memory": 1024,
+      "maxDuration": 60
+    }
+  }
 }
