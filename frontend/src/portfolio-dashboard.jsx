@@ -2268,6 +2268,15 @@ function estimateAttributedRealizedTradeCarrySeries(trade, dates, sourceHistory,
   };
 }
 
+function selectedAccountsCoverAllAccounts(selectedAccounts = [], accountList = []) {
+  const allAccounts = (accountList || []).filter(Boolean);
+  if (!allAccounts.length) return false;
+  const selected = (selectedAccounts || []).filter(Boolean);
+  if (!selected.length) return true;
+  const selectedSet = new Set(selected);
+  return allAccounts.every((accountName) => selectedSet.has(accountName));
+}
+
 function buildPortfolioBenchmarkChartData(portfolioSeries, benchmarkSeries) {
   if (!portfolioSeries?.length) return [];
 
@@ -3086,7 +3095,6 @@ export default function App() {
     normalizePerformanceChartSelection(persisted.performanceChartSelection, [], persisted.showBenchmark ?? true),
   );
   const [legalNavPointsByAccount, setLegalNavPointsByAccount] = useState({});
-  const [deskNavPointsByAccount, setDeskNavPointsByAccount] = useState({});
   const [sharedStateReady, setSharedStateReady] = useState(false);
   const [sharedStateUpdatedAt, setSharedStateUpdatedAt] = useState(null);
   const [sharedSyncStatus, setSharedSyncStatus] = useState('Booting shared workspace');
@@ -3680,42 +3688,6 @@ export default function App() {
     };
   }, [accountList, sharedStateUpdatedAt]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const targets = [...new Set(['ALL', ...accountList])];
-    if (!targets.length) {
-      setDeskNavPointsByAccount({});
-      return undefined;
-    }
-
-    (async () => {
-      try {
-        const rows = await Promise.all(
-          targets.map(async (accountName) => {
-            const response = await api.get('/portfolio/nav', {
-              params: {
-                limit: 2000,
-                accounting_mode: 'desk',
-                ...(accountName === 'ALL' ? {} : { account: accountName }),
-                _ts: Date.now(),
-              },
-              headers: { 'Cache-Control': 'no-cache' },
-            });
-            return [accountName, Array.isArray(response.data) ? response.data : []];
-          }),
-        );
-        if (!cancelled) setDeskNavPointsByAccount(Object.fromEntries(rows));
-      } catch (error) {
-        console.warn('Desk NAV fetch failed for performance charts', error);
-        if (!cancelled) setDeskNavPointsByAccount({});
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [accountList, sharedStateUpdatedAt]);
-
   const selectedAccountsData = useMemo(
     () => (selectedAccount === 'ALL' ? Object.values(accounts) : [accounts[selectedAccount]].filter(Boolean)),
     [accounts, selectedAccount],
@@ -4018,16 +3990,6 @@ export default function App() {
     [accountList, balanceHistory, legalNavPointsByAccount],
   );
 
-  const backendDeskPerformanceModelsByAccount = useMemo(
-    () => Object.fromEntries(
-      accountList.map((accountName) => [
-        accountName,
-        buildPerformanceModelFromNavPoints(deskNavPointsByAccount[accountName], balanceHistory[accountName] || []),
-      ]),
-    ),
-    [accountList, balanceHistory, deskNavPointsByAccount],
-  );
-
   const legalAggregatePerformanceModel = useMemo(
     () => buildAggregatePerformanceModel(
       legalPerformanceModelsByAccount,
@@ -4036,27 +3998,12 @@ export default function App() {
     [accountList, legalPerformanceModelsByAccount, selectedPerformanceAccounts],
   );
 
-  const backendDeskAggregatePerformanceModel = useMemo(
-    () => buildAggregatePerformanceModel(
-      backendDeskPerformanceModelsByAccount,
-      selectedPerformanceAccounts.length ? selectedPerformanceAccounts : accountList,
-    ),
-    [accountList, backendDeskPerformanceModelsByAccount, selectedPerformanceAccounts],
-  );
-
   const legalActivePerformanceModel = useMemo(() => {
     if (selectedAccount === 'ALL') {
       return buildAggregatePerformanceModel(legalPerformanceModelsByAccount, accountList);
     }
     return legalPerformanceModelsByAccount[selectedAccount] || buildPerformanceModelFromNavPoints([], balanceHistory[selectedAccount] || []);
   }, [accountList, balanceHistory, legalPerformanceModelsByAccount, selectedAccount]);
-
-  const backendDeskActivePerformanceModel = useMemo(() => {
-    if (selectedAccount === 'ALL') {
-      return buildAggregatePerformanceModel(backendDeskPerformanceModelsByAccount, accountList);
-    }
-    return backendDeskPerformanceModelsByAccount[selectedAccount] || buildPerformanceModelFromNavPoints([], balanceHistory[selectedAccount] || []);
-  }, [accountList, balanceHistory, backendDeskPerformanceModelsByAccount, selectedAccount]);
 
   const deskPerformanceModel = useMemo(() => {
     const globalDates = [...new Set(
@@ -4192,28 +4139,20 @@ export default function App() {
       }),
     );
 
-    const backendDeskHasData = Object.values(backendDeskPerformanceModelsByAccount || {})
-      .some((model) => model?.navSeries?.length);
-    const backendDeskMatchesLegal = backendDeskHasData
-      && Object.entries(backendDeskPerformanceModelsByAccount || {}).every(([name, deskModel]) => {
-        const desk = deskModel?.navSeries || [];
-        const legal = legalPerformanceModelsByAccount[name]?.navSeries || [];
-        if (desk.length !== legal.length) return false;
-        return desk.every(([d, v], i) => legal[i]?.[0] === d && legal[i]?.[1] === v);
-      });
-    const backendDeskAvailable = backendDeskHasData && !backendDeskMatchesLegal;
+    const allAccountsSelectedForAggregate = selectedAccountsCoverAllAccounts(selectedPerformanceAccounts, accountList);
+    const aggregateDeskModel = allAccountsSelectedForAggregate
+      ? legalAggregatePerformanceModel
+      : buildAggregatePerformanceModel(
+          accountModels,
+          selectedPerformanceAccounts.length ? selectedPerformanceAccounts : accountList,
+        );
 
     return {
-      accountModels: backendDeskAvailable ? backendDeskPerformanceModelsByAccount : accountModels,
-      aggregateModel: backendDeskAvailable ? backendDeskAggregatePerformanceModel : buildAggregatePerformanceModel(
-        accountModels,
-        selectedPerformanceAccounts.length ? selectedPerformanceAccounts : accountList,
-      ),
-      activeModel: backendDeskAvailable
-        ? backendDeskActivePerformanceModel
-        : (selectedAccount === 'ALL'
-          ? buildAggregatePerformanceModel(accountModels, accountList)
-          : (accountModels[selectedAccount] || { navSeries: [], twrSeries: [], flowSeries: [], hasFlowAdjustedReturns: false })),
+      accountModels,
+      aggregateModel: aggregateDeskModel,
+      activeModel: selectedAccount === 'ALL'
+        ? legalActivePerformanceModel
+        : (accountModels[selectedAccount] || { navSeries: [], twrSeries: [], flowSeries: [], hasFlowAdjustedReturns: false }),
       transferCount: transferredPositions.length + transferredRealizedTrades.length,
       openTransferCount: transferredPositions.length,
       closedTransferCount: transferredRealizedTrades.length,
@@ -4223,7 +4162,7 @@ export default function App() {
       linearCount,
       flatCount,
     };
-  }, [accountList, backendDeskActivePerformanceModel, backendDeskAggregatePerformanceModel, backendDeskPerformanceModelsByAccount, futuresPnlSnapshots, getPositionHistorySeries, getRealizedTradeHistorySeries, legalActivePerformanceModel, legalAggregatePerformanceModel, legalPerformanceModelsByAccount, positionTransferEffectiveDates, selectedAccount, selectedPerformanceAccounts, transferredPositions, transferredRealizedTrades]);
+  }, [accountList, futuresPnlSnapshots, getPositionHistorySeries, getRealizedTradeHistorySeries, legalActivePerformanceModel, legalAggregatePerformanceModel, legalPerformanceModelsByAccount, positionTransferEffectiveDates, selectedAccount, selectedPerformanceAccounts, transferredPositions, transferredRealizedTrades]);
 
   const performanceModelSource = useMemo(
     () => (performanceAccountingMode === 'desk'
