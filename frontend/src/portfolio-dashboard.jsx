@@ -1332,8 +1332,8 @@ function parseFuturesStatementCSV(text, {
     return /futures?|e-mini|micro e-mini/i.test(rawDescription);
   };
 
-  const pushPosition = (position, snapshotPnl = null) => {
-    if (!position || !position.symbol || !Number.isFinite(position.qty) || position.qty === 0) return;
+  const pushPosition = (position, snapshotPnl = null, { allowZeroQty = false } = {}) => {
+    if (!position || !position.symbol || !Number.isFinite(position.qty) || (!allowZeroQty && position.qty === 0)) return;
     accounts[accountName].positions.push(position);
     if (position?.source === POSITION_SOURCE_FUTURES && Number.isFinite(Number(snapshotPnl))) {
       const snapshotKey = getPositionSnapshotKey(position);
@@ -1423,9 +1423,9 @@ function parseFuturesStatementCSV(text, {
       const gainPct = Number.isFinite(profitRow?.gainPct) ? profitRow.gainPct : parseStatementNumber(row[gainPctIdx]);
       const markValue = Number.isFinite(profitRow?.markValue) ? profitRow.markValue : parseStatementNumber(row[markValueIdx]);
       const marginReq = Number.isFinite(profitRow?.marginReq) ? profitRow.marginReq : parseStatementNumber(row[marginReqIdx]);
-      if (Math.abs(pnlOpen) < 0.0001 && Math.abs(markValue) < 0.0001 && Math.abs(marginReq) < 0.0001) return;
+      const isFlatStatementFuture = Math.abs(pnlOpen) < 0.0001 && Math.abs(markValue) < 0.0001 && Math.abs(marginReq) < 0.0001;
       const mainSector = resolveStatementFutureSector(rawSymbol, description);
-      const qty = markValue < 0 ? -1 : 1;
+      const qty = isFlatStatementFuture ? 0 : (markValue < 0 ? -1 : 1);
       const referencePrice = Number.isFinite(markValue) && markValue !== 0
         ? Math.abs(markValue)
         : (Number.isFinite(marginReq) ? Math.abs(marginReq) : Math.abs(pnlOpen));
@@ -1455,8 +1455,10 @@ function parseFuturesStatementCSV(text, {
         marginReq: Number.isFinite(marginReq) ? marginReq : null,
         pnlDay: Number.isFinite(profitRow?.pnlDay) ? profitRow.pnlDay : null,
         pnlYtd: Number.isFinite(profitRow?.pnlYtd) ? profitRow.pnlYtd : null,
+        statementOnly: isFlatStatementFuture,
+        isFlatStatementFuture,
       };
-      pushPosition(position, pnlOpen);
+      pushPosition(position, pnlOpen, { allowZeroQty: isFlatStatementFuture });
       importedSymbols.add(rawSymbol);
     });
   }
