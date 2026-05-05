@@ -1096,6 +1096,41 @@ function parseFuturesStatementCSV(text, {
     const match = normalized.match(/\/[A-Z0-9.]+(?::[A-Z0-9]+)?/);
     return match ? match[0].split(':')[0] : '';
   };
+  const extractFutureSymbolsFromStatementDescription = (description) => {
+    const normalized = String(description || '').replace(/"/g, '').trim().toUpperCase();
+    if (!normalized) return [];
+    return [...new Set((normalized.match(/\/[A-Z0-9.]+(?::[A-Z0-9]+)?/g) || [])
+      .map((value) => value.split(':')[0])
+      .filter(Boolean))];
+  };
+  const getStatementFutureLegs = (description) => {
+    const normalized = String(description || '').replace(/"/g, '').trim().toUpperCase();
+    const signedQty = parseStatementTradeQuantity(normalized);
+    if (!Number.isFinite(signedQty) || signedQty === 0) return [];
+    if (/\bCALL\b|\bPUT\b|VERTICAL|CONDOR|BUTTERFLY/i.test(normalized)) return [];
+    const symbols = extractFutureSymbolsFromStatementDescription(normalized);
+    if (!symbols.length) return [];
+    if (/FUT\s+CALENDAR/i.test(normalized) && symbols.length >= 2) {
+      return [
+        { symbol: symbols[0], qty: signedQty },
+        { symbol: symbols[1], qty: -signedQty },
+      ];
+    }
+    return [{ symbol: symbols[0], qty: signedQty }];
+  };
+  const getFutureContractYearMonth = (symbol) => {
+    const match = String(symbol || '').toUpperCase().match(/\/?[A-Z]+([FGHJKMNQUVXZ])(\d{1,2})$/);
+    if (!match) return null;
+    const monthCode = { F: 1, G: 2, H: 3, J: 4, K: 5, M: 6, N: 7, Q: 8, U: 9, V: 10, X: 11, Z: 12 }[match[1]];
+    const yearDigits = match[2].padStart(2, '0');
+    const year = Number(yearDigits) >= 70 ? 1900 + Number(yearDigits) : 2000 + Number(yearDigits);
+    return Number.isFinite(year) && monthCode ? `${year}-${String(monthCode).padStart(2, '0')}` : null;
+  };
+  const isExpiredStatementFutureContract = (symbol) => {
+    const contractYearMonth = getFutureContractYearMonth(symbol);
+    const statementYearMonth = String(statementDate || '').slice(0, 7);
+    return !!contractYearMonth && !!statementYearMonth && contractYearMonth < statementYearMonth;
+  };
 
   const parseStatementTradeQuantity = (description) => {
     const normalized = String(description || '').replace(/"/g, '').trim().toUpperCase();
@@ -1135,71 +1170,35 @@ function parseFuturesStatementCSV(text, {
     return 'TRADE';
   };
 
+  const futuresStatementActivityBySymbol = new Map();
   const futuresStatementsSection = readSectionRows('Futures Statements');
   if (futuresStatementsSection.header.length) {
     const tradeDateIdx = futuresStatementsSection.header.indexOf('trade_date');
     const execDateIdx = futuresStatementsSection.header.indexOf('exec_date');
     const execTimeIdx = futuresStatementsSection.header.indexOf('exec_time');
     const typeIdx = futuresStatementsSection.header.indexOf('type');
-    const refIdx = futuresStatementsSection.header.indexOf('ref');
     const descIdx = futuresStatementsSection.header.indexOf('description');
-    const miscFeesIdx = futuresStatementsSection.header.indexOf('misc_fees');
-    const commissionsIdx = futuresStatementsSection.header.indexOf('commissions_fees');
-    const amountIdx = futuresStatementsSection.header.indexOf('amount');
 
-    futuresStatementsSection.rows.forEach((row, rowIndex) => {
+    futuresStatementsSection.rows.forEach((row) => {
       const type = readRowCell(row, typeIdx).toUpperCase();
       const description = readRowCell(row, descIdx);
       if (type !== 'TRD' || !description) return;
-
-      const rawSymbol = extractFutureSymbolFromStatementDescription(description);
-      const isFutureDescription = rawSymbol
-        || /\b(?:FUTURES?|FUTURE SETTLE|CASH SETTLE|CALL|PUT|VERTICAL|CONDOR|BUTTERFLY)\b/i.test(description);
-      if (!isFutureDescription) return;
 
       const execDateRaw = readRowCell(row, execDateIdx) || readRowCell(row, tradeDateIdx);
       const execTime = readRowCell(row, execTimeIdx);
       const execDate = normalizeDateInput(execDateRaw) || statementDate;
       const tradeDate = normalizeDateInput(readRowCell(row, tradeDateIdx)) || execDate;
-      const qty = parseStatementTradeQuantity(description);
-      const price = parseStatementTradePriceFromDescription(description);
-      const cashFlow = parseStatementNumber(row[amountIdx]);
-      const miscFees = parseStatementNumber(row[miscFeesIdx]);
-      const commissions = parseStatementNumber(row[commissionsIdx]);
-      const totalFees = [miscFees, commissions].reduce((sum, fee) => sum + (Number.isFinite(fee) ? fee : 0), 0);
-      const action = getStatementTradeAction(description);
-      const futureOptionLike = /\bCALL\b|\bPUT\b|VERTICAL|CONDOR|BUTTERFLY/i.test(description);
-      const baseSym = rawSymbol || extractFutureSymbolFromStatementDescription(description.replace(/\s+/g, ' '));
-      const mainSector = resolveStatementFutureSector(baseSym, description);
-      const signedCashFlow = Number.isFinite(cashFlow) ? cashFlow : 0;
-
-      realizedTrades.push({
-        account: accountName,
-        symbol: baseSym || `FUTURES_TRD_${rowIndex + 1}`,
-        baseSym: baseSym || '',
-        closedDate: execDate,
-        openedDate: tradeDate,
-        qty: Number.isFinite(qty) ? qty : 0,
-        proceeds: signedCashFlow > 0 ? signedCashFlow : null,
-        cost: signedCashFlow < 0 ? Math.abs(signedCashFlow) : null,
-        gain: signedCashFlow,
-        gainPct: null,
-        term: 'Short Term',
-        assetType: futureOptionLike ? 'Futures Option' : 'Future',
-        isOption: futureOptionLike,
-        isFuture: true,
-        sector: mainSector || UNCLASSIFIED_SECTOR,
-        mainSector,
-        description,
-        action,
-        price: Number.isFinite(price) ? price : null,
-        fees: totalFees,
-        tradeDate,
-        execTime,
-        ref: readRowCell(row, refIdx),
-        cashFlow: signedCashFlow,
-        importKey: ['FUTURES_STMT_TRD', accountName, readRowCell(row, refIdx) || rowIndex, execDate, baseSym || rowIndex].join('::'),
-        importSource: 'futures_statement',
+      extractFutureSymbolsFromStatementDescription(description).forEach((symbol) => {
+        const activity = futuresStatementActivityBySymbol.get(symbol) || {};
+        if (!activity.firstTradeDate || tradeDate < activity.firstTradeDate) activity.firstTradeDate = tradeDate;
+        if (getStatementTradeAction(description) === 'BUY' && (!activity.firstOpenDate || tradeDate < activity.firstOpenDate)) {
+          activity.firstOpenDate = tradeDate;
+        }
+        if (/(?:SOLD|SELL|EXPIRE|SETTLE|TO CLOSE)/i.test(description) && (!activity.lastCloseDate || execDate > activity.lastCloseDate)) {
+          activity.lastCloseDate = execDate;
+        }
+        if (execTime) activity.lastExecTime = execTime;
+        futuresStatementActivityBySymbol.set(symbol, activity);
       });
     });
   }
@@ -1281,14 +1280,16 @@ function parseFuturesStatementCSV(text, {
       };
       profitsLookup.set(symbol, profitEntry);
 
-      if (realizedTrades.some((trade) => trade?.importSource === 'futures_statement')) return;
       if (!isStatementFutureContractSymbol(symbol, description)) return;
       const assetMeta = getUploadedAssetMeta(symbol, description, '');
       const pnlOpen = Number.isFinite(profitEntry.pnlOpen) ? profitEntry.pnlOpen : 0;
       const pnlYtd = Number.isFinite(profitEntry.pnlYtd) ? profitEntry.pnlYtd : 0;
       const realizedPnl = pnlYtd - pnlOpen;
       if (!Number.isFinite(realizedPnl) || Math.abs(realizedPnl) < 0.0001) return;
-      const futureActivity = futureTradeActivityBySymbol.get(symbol) || {};
+      const futureActivity = {
+        ...(futuresStatementActivityBySymbol.get(symbol) || {}),
+        ...(futureTradeActivityBySymbol.get(symbol) || {}),
+      };
       const markValue = Number.isFinite(profitEntry.markValue) ? profitEntry.markValue : 0;
       const isClosedContract = Math.abs(markValue) < 0.0001 && Math.abs(pnlOpen) < 0.0001;
       const closedDate = isClosedContract ? (futureActivity.lastCloseDate || statementDate) : statementDate;
@@ -1424,8 +1425,9 @@ function parseFuturesStatementCSV(text, {
       const markValue = Number.isFinite(profitRow?.markValue) ? profitRow.markValue : parseStatementNumber(row[markValueIdx]);
       const marginReq = Number.isFinite(profitRow?.marginReq) ? profitRow.marginReq : parseStatementNumber(row[marginReqIdx]);
       const isFlatStatementFuture = Math.abs(pnlOpen) < 0.0001 && Math.abs(markValue) < 0.0001 && Math.abs(marginReq) < 0.0001;
+      if (isFlatStatementFuture) return;
       const mainSector = resolveStatementFutureSector(rawSymbol, description);
-      const qty = isFlatStatementFuture ? 0 : (markValue < 0 ? -1 : 1);
+      const qty = markValue < 0 ? -1 : 1;
       const referencePrice = Number.isFinite(markValue) && markValue !== 0
         ? Math.abs(markValue)
         : (Number.isFinite(marginReq) ? Math.abs(marginReq) : Math.abs(pnlOpen));
@@ -1455,10 +1457,10 @@ function parseFuturesStatementCSV(text, {
         marginReq: Number.isFinite(marginReq) ? marginReq : null,
         pnlDay: Number.isFinite(profitRow?.pnlDay) ? profitRow.pnlDay : null,
         pnlYtd: Number.isFinite(profitRow?.pnlYtd) ? profitRow.pnlYtd : null,
-        statementOnly: isFlatStatementFuture,
-        isFlatStatementFuture,
+        statementOnly: false,
+        isFlatStatementFuture: false,
       };
-      pushPosition(position, pnlOpen, { allowZeroQty: isFlatStatementFuture });
+      pushPosition(position, pnlOpen);
       importedSymbols.add(rawSymbol);
     });
   }
@@ -1475,34 +1477,45 @@ function parseFuturesStatementCSV(text, {
       if (!type || !description) return;
 
       const rawSymbol = extractFutureSymbolFromStatementDescription(description);
-      if (!rawSymbol) return;
+      const legs = type === 'TRD' ? getStatementFutureLegs(description) : [];
+      if (!rawSymbol && !legs.length) return;
 
-      const tradeState = tradeStateBySymbol.get(rawSymbol) || {
+      const ensureTradeState = (symbol) => {
+        const existing = tradeStateBySymbol.get(symbol);
+        if (existing) return existing;
+        return {
         qty: 0,
         tradePrice: null,
         markPrice: null,
         amount: 0,
         description,
+        };
       };
 
       if (type === 'TRD') {
-        const qty = parseStatementTradeQuantity(description);
-        if (Number.isFinite(qty) && qty !== 0) tradeState.qty += qty;
         const tradePrice = parseStatementTradePriceFromDescription(description);
-        if (Number.isFinite(tradePrice)) tradeState.tradePrice = tradePrice;
         const amount = parseStatementNumber(row[amountIdx]);
-        if (Number.isFinite(amount)) tradeState.amount += amount;
+        legs.forEach((leg) => {
+          if (!leg?.symbol || !Number.isFinite(leg.qty) || leg.qty === 0) return;
+          const legState = ensureTradeState(leg.symbol);
+          legState.qty += leg.qty;
+          if (Number.isFinite(tradePrice)) legState.tradePrice = tradePrice;
+          if (Number.isFinite(amount)) legState.amount += amount;
+          if (description) legState.description = description;
+          tradeStateBySymbol.set(leg.symbol, legState);
+        });
       } else if (type === 'ADJ') {
+        const tradeState = ensureTradeState(rawSymbol);
         const markPrice = parseStatementTradePriceFromDescription(description.replace(/\bmark to market\b/i, '@'));
         if (Number.isFinite(markPrice)) tradeState.markPrice = markPrice;
+        if (description) tradeState.description = description;
+        tradeStateBySymbol.set(rawSymbol, tradeState);
       }
-
-      if (description) tradeState.description = description;
-      tradeStateBySymbol.set(rawSymbol, tradeState);
     });
 
     tradeStateBySymbol.forEach((tradeState, rawSymbol) => {
       if (!rawSymbol || importedSymbols.has(rawSymbol) || !Number.isFinite(tradeState.qty) || tradeState.qty === 0) return;
+      if (isExpiredStatementFutureContract(rawSymbol)) return;
 
       const profitRow = profitsLookup.get(rawSymbol) || {};
       const description = String(profitRow.description || tradeState.description || rawSymbol).replace(/"/g, '').trim();
@@ -1612,7 +1625,7 @@ function parseFuturesStatementCSV(text, {
     });
   }
 
-  if (!realizedTrades.some((trade) => trade?.importSource === 'futures_statement') && groupedTradeHistoryRows.length) {
+  if (groupedTradeHistoryRows.length) {
     const execTimeIdx = accountTradeHistorySection.header.indexOf('exec_time');
     const sideIdx = accountTradeHistorySection.header.indexOf('side');
     const qtyIdx = accountTradeHistorySection.header.indexOf('qty');
@@ -3588,7 +3601,10 @@ export default function App() {
       try {
         const trades = parseRealizedCSV(e.target.result);
         markSharedWorkspaceDirty('Realized trades upload pending sync');
-        setRealizedTrades(trades);
+        setRealizedTrades((prev) => mergeImportedRealizedTrades(
+          (prev || []).filter((trade) => trade?.importSource === 'futures_statement'),
+          trades,
+        ));
         const accountCount = new Set(trades.map(t => t.account)).size;
         setUploadStatus(s => ({
           ...s,
