@@ -1853,7 +1853,7 @@ function computeDailyFlowFromTwr(prevNav, nextNav, prevTwr, nextTwr) {
 }
 
 function buildPerformanceModelFromNavPoints(points = [], fallbackSeries = []) {
-  const navSeries = Array.isArray(points) && points.length
+  const apiNavSeries = Array.isArray(points)
     ? points
         .map((point) => {
           const nav = Number(point?.nav);
@@ -1863,7 +1863,15 @@ function buildPerformanceModelFromNavPoints(points = [], fallbackSeries = []) {
           return { date, nav, twr: Number.isFinite(twr) && twr > 0 ? twr : null };
         })
         .filter(Boolean)
-    : (fallbackSeries || []).map(([date, nav]) => ({ date, nav: Number(nav), twr: null })).filter((point) => point.date && Number.isFinite(point.nav));
+    : [];
+  const fallbackNavSeries = (fallbackSeries || [])
+    .map(([date, nav]) => ({ date, nav: Number(nav), twr: null }))
+    .filter((point) => point.date && Number.isFinite(point.nav));
+  const apiHasRealNav = apiNavSeries.some((point) => Math.abs(point.nav) > 0.0001);
+  const fallbackHasRealNav = fallbackNavSeries.some((point) => Math.abs(point.nav) > 0.0001);
+  const navSeries = apiNavSeries.length && (apiHasRealNav || !fallbackHasRealNav)
+    ? apiNavSeries
+    : fallbackNavSeries;
 
   if (!navSeries.length) {
     return {
@@ -3884,9 +3892,13 @@ export default function App() {
     }));
   }, [editableSectorScope, sectorTargetsByAccount, accountList, accountValueMap]);
 
+  const benchmarkAnchorHistory = useMemo(
+    () => buildAggregateHistory(balanceHistory),
+    [balanceHistory],
+  );
   const comparisonEndDate = useMemo(
-    () => getSharedSeriesEndDate([activeHistory, spxData]) || getLatestSeriesDate([activeHistory, spxData]),
-    [activeHistory, spxData],
+    () => getSharedSeriesEndDate([benchmarkAnchorHistory, spxData]) || getLatestSeriesDate([benchmarkAnchorHistory, spxData]),
+    [benchmarkAnchorHistory, spxData],
   );
   const filteredHistory = useMemo(
     () => filterByTimeframe(activeHistory, timeframe, comparisonEndDate),
@@ -4186,20 +4198,11 @@ export default function App() {
   const selectedAggregateHistory = performanceModelSource.aggregateModel?.navSeries || [];
   const selectedAggregateReturnSeries = performanceModelSource.aggregateModel?.twrSeries || [];
 
-  const performanceWindowEndDate = useMemo(() => {
-    const candidateSeries = [];
-    if (performanceChartSelection.aggregate && selectedAggregateReturnSeries.length) candidateSeries.push(selectedAggregateReturnSeries);
-    selectedPerformanceAccounts.forEach((accountName) => {
-      const history = performanceModelSource.accountModels?.[accountName]?.twrSeries;
-      if (history?.length) candidateSeries.push(history);
-    });
-    if (performanceChartSelection.spx && spxData.length) candidateSeries.push(spxData);
-    return getSharedSeriesEndDate(candidateSeries) || getLatestSeriesDate(candidateSeries);
-  }, [performanceChartSelection, performanceModelSource.accountModels, selectedAggregateReturnSeries, selectedPerformanceAccounts, spxData]);
+  const performanceWindowEndDate = comparisonEndDate;
 
   const performanceComparisonEndDate = useMemo(
-    () => getSharedSeriesEndDate([performanceActiveHistory, spxData]) || getLatestSeriesDate([performanceActiveHistory, spxData]),
-    [performanceActiveHistory, spxData],
+    () => comparisonEndDate || getSharedSeriesEndDate([performanceActiveHistory, spxData]) || getLatestSeriesDate([performanceActiveHistory, spxData]),
+    [comparisonEndDate, performanceActiveHistory, spxData],
   );
 
   const performanceFilteredHistory = useMemo(
@@ -4281,8 +4284,8 @@ export default function App() {
 
   // Merge portfolio + SPX for chart
   const chartData = useMemo(() => {
-    return buildPortfolioBenchmarkChartData(filteredHistory, filteredSPX);
-  }, [filteredHistory, filteredSPX]);
+    return buildPortfolioBenchmarkChartData(performanceFilteredReturnSeries, filteredSPX);
+  }, [performanceFilteredReturnSeries, filteredSPX]);
 
   const stats = useMemo(() => filteredHistory.length >= 2 ? computeReturns(filteredHistory) : null, [filteredHistory]);
   const allTimeStats = useMemo(() => activeHistory.length >= 2 ? computeReturns(activeHistory) : null, [activeHistory]);
