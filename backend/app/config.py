@@ -83,7 +83,7 @@ class Settings:
         self.db_url = _clean_optional(os.environ.get("DATABASE_URL") or os.environ.get("WS_DATABASE_URL"))
         default_db_path = "/tmp/workstation.db" if vercel_runtime else str(Path.home() / "workstation.db")
         self.db_path = os.environ.get("WS_DB_PATH", default_db_path)
-        self.db_fallback_to_sqlite = _env_bool("WS_DB_FALLBACK_TO_SQLITE", default=render_runtime)
+        self.db_fallback_to_sqlite = _env_bool("WS_DB_FALLBACK_TO_SQLITE", default=False)
 
         # Mode configuration
         self.demo_mode = os.environ.get("WS_DEMO_MODE", "0") == "1"

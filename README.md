@@ -80,6 +80,7 @@ Current Docker image serves both API and frontend in one service. Deploy this co
 For Render production stability:
 - Set `DATABASE_URL` to your Render Postgres connection string (required for persistent imports).
 - Set `WS_LIVE_QUOTES=0` (reduces background market-data load).
+- Keep `WS_DB_FALLBACK_TO_SQLITE=0` in production. SQLite on Render is ephemeral and can lose imported dashboard data after a restart or redeploy.
 
 ## Full System Context
 

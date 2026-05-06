@@ -30,6 +30,20 @@ app.state.startup_ready = False
 app.state.startup_degraded = False
 app.state.startup_error = None
 
+
+def _is_production_runtime() -> bool:
+    env = os.getenv("ENVIRONMENT", "").strip().lower()
+    return env in {"production", "prod"} or bool(os.getenv("RENDER"))
+
+
+def _assert_persistent_storage_configured() -> None:
+    if _is_production_runtime() and not settings.db_url:
+        raise RuntimeError(
+            "DATABASE_URL is required in production. Configure a persistent Postgres database "
+            "before importing dashboard data; SQLite storage on Render is ephemeral and can reset."
+        )
+
+
 def _is_local_origin(origin: str) -> bool:
     lowered = (origin or "").lower()
     return "localhost" in lowered or "127.0.0.1" in lowered
@@ -117,6 +131,7 @@ def version():
 @app.on_event("startup")
 def _startup():
     try:
+        _assert_persistent_storage_configured()
         ensure_schema()
         app.state.startup_ready = True
         app.state.startup_degraded = False

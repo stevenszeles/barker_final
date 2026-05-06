@@ -511,6 +511,24 @@ If you've tried everything:
 
 ---
 
+## Render Dashboard Data Reset
+
+Symptom: the dashboard was up to date yesterday, but after a Render restart or deploy it shows 0 accounts, 0 positions, or missing imports.
+
+Most likely cause: the app was running without `DATABASE_URL`, or it fell back to SQLite. SQLite storage inside a Render web service is ephemeral, so imported data can disappear when the container is replaced.
+
+Fix:
+
+1. Create or attach a Render Postgres database.
+2. Set `DATABASE_URL` on the Render web service to the database's internal connection string.
+3. Keep `ENVIRONMENT=production`.
+4. Keep `WS_DB_FALLBACK_TO_SQLITE=0`.
+5. Redeploy, then re-import/upload the dashboard data once.
+
+The app now fails startup database initialization in production when `DATABASE_URL` is missing, which makes this configuration problem visible in `/health` and Render logs instead of silently storing data in ephemeral SQLite.
+
+---
+
 ## 📊 Performance Monitoring Checklist
 
 Weekly checks:

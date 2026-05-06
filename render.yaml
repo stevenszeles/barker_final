@@ -18,6 +18,6 @@ services:
       - key: WS_LIVE_QUOTES
         value: "0"
       - key: WS_DB_FALLBACK_TO_SQLITE
-        value: "1"
+        value: "0"
       - key: WS_ALLOW_ALL_ORIGINS
         value: "1"
