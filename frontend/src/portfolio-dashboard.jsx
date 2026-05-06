@@ -6105,7 +6105,7 @@ export default function App() {
                   <tr>{['Symbol','Account Routing','Type','Sector Assignment','Closed Date','Qty','Proceeds','Cost','Gain $','Gain %','Term'].map(h => <th key={h} style={S.th}>{h}</th>)}</tr>
                 </thead>
                 <tbody>
-                  {filteredRealizedTrades.slice(0, 100).map((t, i) => {
+                  {filteredRealizedTrades.map((t, i) => {
                     const badge = getRealizedTradeBadge(t);
                     return (
                     <tr key={i}>
@@ -6185,7 +6185,7 @@ export default function App() {
                   )}
                 </tbody>
               </table>
-              {filteredRealizedTrades.length > 100 && <div style={{ padding:'8px 12px', color:'#444', fontSize:'10px' }}>Showing 100 of {filteredRealizedTrades.length} trades</div>}
+              {filteredRealizedTrades.length > 0 && <div style={{ padding:'8px 12px', color:'#666', fontSize:'10px' }}>Showing all {filteredRealizedTrades.length} trades</div>}
             </div>
           </div>
         </div>
