@@ -3112,7 +3112,7 @@ export default function App() {
   const [positionTransferEffectiveDates, setPositionTransferEffectiveDates] = useState(sharedSeedRef.current.positionTransferEffectiveDates);
   const [futuresPnlSnapshots, setFuturesPnlSnapshots] = useState(sharedSeedRef.current.futuresPnlSnapshots);
   const [performanceAccountingMode, setPerformanceAccountingMode] = useState(persisted.performanceAccountingMode || 'desk');
-  const [performanceChartMode, setPerformanceChartMode] = useState(persisted.performanceChartMode || 'line');
+  const [performanceChartMode, setPerformanceChartMode] = useState(persisted.performanceChartMode || 'focus');
   const [futuresStatementImportAccount, setFuturesStatementImportAccount] = useState(FUTURES_STATEMENT_ACCOUNT_AUTO);
   const [performanceChartSelection, setPerformanceChartSelection] = useState(() =>
     normalizePerformanceChartSelection(persisted.performanceChartSelection, [], persisted.showBenchmark ?? true),
@@ -4298,6 +4298,129 @@ export default function App() {
     [performanceSeriesSummary],
   );
 
+  const performanceAccountRanking = useMemo(() => accountList
+    .map((accountName, accountIndex) => {
+      const history = performanceModelSource.accountModels?.[accountName]?.twrSeries || [];
+      const data = filterByTimeframe(history, timeframe, performanceWindowEndDate);
+      const periodReturn = computePeriodReturn(data);
+      if (!data.length || !Number.isFinite(periodReturn)) return null;
+      return {
+        key: getPerformanceSeriesKey(accountName, accountIndex),
+        label: accountName,
+        shortLabel: formatShortAccountName(accountName),
+        color: accountColorMap[accountName] || '#e0e0e0',
+        strokeWidth: selectedAccount === accountName ? 2.5 : 1.8,
+        data,
+        periodReturn,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.periodReturn - a.periodReturn),
+    [accountList, performanceModelSource.accountModels, accountColorMap, selectedAccount, timeframe, performanceWindowEndDate],
+  );
+
+  const performanceFocusAccounts = useMemo(() => {
+    const selectedSet = new Set(selectedPerformanceAccounts);
+    const selectedRanked = performanceAccountRanking.filter((series) => selectedSet.has(series.label));
+    if (selectedRanked.length) return selectedRanked.slice(0, 6);
+
+    const picks = [];
+    const addPick = (series) => {
+      if (series && !picks.some((item) => item.label === series.label)) picks.push(series);
+    };
+    addPick(performanceAccountRanking[0]);
+    addPick(performanceAccountRanking[1]);
+    addPick(performanceAccountRanking[performanceAccountRanking.length - 1]);
+    if (selectedAccount !== 'ALL') {
+      addPick(performanceAccountRanking.find((series) => series.label === selectedAccount));
+    }
+    return picks.filter(Boolean);
+  }, [performanceAccountRanking, selectedPerformanceAccounts, selectedAccount]);
+
+  const performanceFocusSeriesDefinitions = useMemo(() => {
+    const definitions = [];
+    if (selectedAggregateReturnSeries.length) {
+      definitions.push({
+        key: '__portfolio__',
+        label: 'Aggregate Portfolio',
+        shortLabel: 'Aggregate',
+        color: PALETTE.portfolio,
+        strokeWidth: 3,
+        data: filterByTimeframe(selectedAggregateReturnSeries, timeframe, performanceWindowEndDate),
+      });
+    }
+    if (spxData.length) {
+      definitions.push({
+        key: '__spx__',
+        label: 'SPX',
+        shortLabel: 'SPX',
+        color: PALETTE.benchmark,
+        strokeWidth: 2.4,
+        strokeDasharray: '6 4',
+        data: filterByTimeframe(spxData, timeframe, performanceWindowEndDate),
+      });
+    }
+    performanceFocusAccounts.forEach((series) => {
+      definitions.push({
+        ...series,
+        strokeWidth: series.strokeWidth || 1.8,
+      });
+    });
+    return definitions.filter((series) => series.data.length);
+  }, [performanceFocusAccounts, selectedAggregateReturnSeries, spxData, timeframe, performanceWindowEndDate]);
+
+  const performanceFocusData = useMemo(
+    () => buildNormalizedComparisonRows(performanceFocusSeriesDefinitions),
+    [performanceFocusSeriesDefinitions],
+  );
+
+  const performanceFocusSummary = useMemo(() => {
+    const aggregate = performanceFocusSeriesDefinitions.find((series) => series.key === '__portfolio__');
+    const spx = performanceFocusSeriesDefinitions.find((series) => series.key === '__spx__');
+    const aggregateReturn = computePeriodReturn(aggregate?.data);
+    const spxReturn = computePeriodReturn(spx?.data);
+    const bestAccount = performanceAccountRanking[0] || null;
+    const worstAccount = performanceAccountRanking[performanceAccountRanking.length - 1] || null;
+    const deltaVsSpx = Number.isFinite(aggregateReturn) && Number.isFinite(spxReturn)
+      ? aggregateReturn - spxReturn
+      : null;
+    return {
+      aggregateReturn,
+      spxReturn,
+      deltaVsSpx,
+      bestAccount,
+      worstAccount,
+    };
+  }, [performanceFocusSeriesDefinitions, performanceAccountRanking]);
+
+  const performanceFocusRankingRows = useMemo(() => {
+    const rows = [
+      ...performanceAccountRanking.slice(0, 8),
+    ];
+    const aggregate = performanceFocusSummary.aggregateReturn;
+    const spx = performanceFocusSummary.spxReturn;
+    const mixed = [
+      ...rows,
+      Number.isFinite(aggregate) ? {
+        key: '__portfolio__',
+        label: 'Aggregate Portfolio',
+        shortLabel: 'Aggregate',
+        color: PALETTE.portfolio,
+        periodReturn: aggregate,
+      } : null,
+      Number.isFinite(spx) ? {
+        key: '__spx__',
+        label: 'SPX',
+        shortLabel: 'SPX',
+        color: PALETTE.benchmark,
+        periodReturn: spx,
+      } : null,
+    ].filter(Boolean);
+    return mixed
+      .sort((a, b) => b.periodReturn - a.periodReturn)
+      .slice(0, 10);
+  }, [performanceAccountRanking, performanceFocusSummary]);
+
   // Merge portfolio + SPX for chart
   const chartData = useMemo(() => {
     return buildPortfolioBenchmarkChartData(performanceFilteredReturnSeries, filteredSPX);
@@ -5340,6 +5463,13 @@ export default function App() {
               <div style={{ display:'flex', gap:'6px', flexWrap:'wrap' }}>
                 <button
                   type="button"
+                  onClick={() => setPerformanceChartMode('focus')}
+                  style={{ ...S.btn, ...(performanceChartMode === 'focus' ? S.btnActive : {}), padding:'4px 10px', fontSize:'10px' }}
+                >
+                  Focus View
+                </button>
+                <button
+                  type="button"
                   onClick={() => setPerformanceChartMode('line')}
                   style={{ ...S.btn, ...(performanceChartMode === 'line' ? S.btnActive : {}), padding:'4px 10px', fontSize:'10px' }}
                 >
@@ -5416,10 +5546,10 @@ export default function App() {
           <div style={{ ...S.card, marginBottom:'16px' }}>
             <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'12px' }}>
               <div style={S.cardTitle}>
-                {performanceChartMode === 'bar' ? 'PERIOD RETURN SNAPSHOT' : 'NORMALIZED PERFORMANCE COMPARISON'}
+                {performanceChartMode === 'bar' ? 'PERIOD RETURN SNAPSHOT' : performanceChartMode === 'focus' ? 'PERFORMANCE FOCUS' : 'NORMALIZED PERFORMANCE COMPARISON'}
                 {' '}· {timeframe} · {performanceAccountingMode === 'desk' ? 'Desk NAV' : 'Legal NAV'}
               </div>
-              {performanceSeriesSummary.length > 0 && (
+              {performanceChartMode !== 'focus' && performanceSeriesSummary.length > 0 && (
                 <div style={{ display:'flex', gap:'14px', fontSize:'11px', flexWrap:'wrap', justifyContent:'flex-end' }}>
                   {performanceSeriesSummary.map((series) => (
                     <span key={series.key} style={{ color: series.color }}>
@@ -5430,7 +5560,64 @@ export default function App() {
                 </div>
               )}
             </div>
-            {performanceChartMode === 'bar' && performanceBarData.length > 0 ? (
+            {performanceChartMode === 'focus' && performanceFocusData.length > 0 ? (
+              <div>
+                <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(150px, 1fr))', gap:'10px', marginBottom:'14px' }}>
+                  {[
+                    ['Aggregate', fmtPct(performanceFocusSummary.aggregateReturn), Number(performanceFocusSummary.aggregateReturn) >= 0 ? PALETTE.positive : PALETTE.negative],
+                    ['SPX Benchmark', fmtPct(performanceFocusSummary.spxReturn), Number(performanceFocusSummary.spxReturn) >= 0 ? PALETTE.positive : PALETTE.negative],
+                    ['Vs SPX', Number.isFinite(performanceFocusSummary.deltaVsSpx) ? `${performanceFocusSummary.deltaVsSpx >= 0 ? '+' : ''}${performanceFocusSummary.deltaVsSpx.toFixed(2)} pts` : '--', Number(performanceFocusSummary.deltaVsSpx) >= 0 ? PALETTE.positive : PALETTE.negative],
+                    ['Best Account', performanceFocusSummary.bestAccount ? `${performanceFocusSummary.bestAccount.shortLabel} ${fmtPct(performanceFocusSummary.bestAccount.periodReturn)}` : '--', PALETTE.positive],
+                    ['Worst Account', performanceFocusSummary.worstAccount ? `${performanceFocusSummary.worstAccount.shortLabel} ${fmtPct(performanceFocusSummary.worstAccount.periodReturn)}` : '--', PALETTE.negative],
+                  ].map(([label, value, color]) => (
+                    <div key={label} style={{ border:`1px solid ${PALETTE.borderSubtle}`, background:'rgba(255,255,255,0.025)', borderRadius:'8px', padding:'10px 12px' }}>
+                      <div style={{ ...S.cardTitle, fontSize:'9px', marginBottom:'6px' }}>{label}</div>
+                      <div style={{ color, fontSize:'16px', fontWeight:700, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{value}</div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ display:'flex', flexWrap:'wrap', gap:'16px', alignItems:'stretch' }}>
+                  <div style={{ flex:'1 1 520px', minWidth:'280px', height:'392px' }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={performanceFocusData} margin={{ top:10, right:32, bottom:8, left:10 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke={PALETTE.lineGrid} />
+                        <XAxis dataKey="date" tick={CHART_TICK_STYLE} tickFormatter={d => d.slice(0,7)} interval={getTickInterval(performanceFocusData.length)} minTickGap={24} tickMargin={8} />
+                        <YAxis width={62} tick={CHART_TICK_STYLE} tickFormatter={v => `${v>=0?'+':''}${v.toFixed(1)}%`} tickMargin={8} />
+                        <Tooltip content={<CustomTooltip mode="pct" />} />
+                        <ReferenceLine y={0} stroke={PALETTE.lineGrid} />
+                        {performanceFocusSeriesDefinitions.map((series) => (
+                          <Line
+                            key={series.key}
+                            type="monotone"
+                            dataKey={series.key}
+                            stroke={series.color}
+                            dot={false}
+                            strokeWidth={series.strokeWidth}
+                            strokeDasharray={series.strokeDasharray}
+                            name={series.shortLabel || series.label}
+                            connectNulls
+                          />
+                        ))}
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <div style={{ flex:'0 1 260px', border:`1px solid ${PALETTE.borderSubtle}`, background:'rgba(255,255,255,0.02)', borderRadius:'8px', padding:'12px', minHeight:'340px' }}>
+                    <div style={{ ...S.cardTitle, marginBottom:'10px' }}>RANKED BY {timeframe}</div>
+                    <div style={{ display:'flex', flexDirection:'column', gap:'8px' }}>
+                      {performanceFocusRankingRows.map((row) => (
+                        <div key={row.key} style={{ display:'grid', gridTemplateColumns:'1fr auto', gap:'10px', alignItems:'center', fontSize:'11px' }}>
+                          <div style={{ display:'flex', alignItems:'center', gap:'8px', minWidth:0 }}>
+                            <span style={{ width:'8px', height:'8px', borderRadius:'50%', background:row.color, flex:'0 0 auto' }} />
+                            <span style={{ color:PALETTE.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{row.shortLabel || formatShortAccountName(row.label)}</span>
+                          </div>
+                          <strong style={{ color: row.periodReturn >= 0 ? PALETTE.positive : PALETTE.negative }}>{fmtPct(row.periodReturn)}</strong>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : performanceChartMode === 'bar' && performanceBarData.length > 0 ? (
               <ResponsiveContainer width="100%" height={372}>
                 <BarChart data={performanceBarData} margin={{ top:10, right:22, bottom:8, left:10 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke={PALETTE.lineGrid} />
