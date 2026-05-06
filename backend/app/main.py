@@ -1,5 +1,6 @@
 import logging
 import os
+import threading
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -29,6 +30,7 @@ app = FastAPI(title="Workstation", docs_url=None, redoc_url=None)
 app.state.startup_ready = False
 app.state.startup_degraded = False
 app.state.startup_error = None
+app.state.startup_initializing = False
 
 
 def _is_production_runtime() -> bool:
@@ -42,6 +44,27 @@ def _assert_persistent_storage_configured() -> None:
             "DATABASE_URL is required in production. Configure a persistent Postgres database "
             "before importing dashboard data; SQLite storage on Render is ephemeral and can reset."
         )
+
+
+def _initialize_runtime_services() -> None:
+    app.state.startup_initializing = True
+    try:
+        ensure_schema()
+        app.state.startup_ready = True
+        app.state.startup_degraded = False
+        app.state.startup_error = None
+        # Demo seed can be expensive; keep disabled by default in deployed envs.
+        if os.getenv("WS_SEED_DEMO", "0") == "1":
+            seed_demo_portfolio_if_empty()
+        if os.getenv("VERCEL", "0") != "1":
+            start_workers()
+    except Exception as exc:  # pragma: no cover - startup hardening path
+        app.state.startup_ready = False
+        app.state.startup_degraded = True
+        app.state.startup_error = str(exc)
+        logging.getLogger(__name__).exception("Startup degraded: database initialization failed.")
+    finally:
+        app.state.startup_initializing = False
 
 
 def _is_local_origin(origin: str) -> bool:
@@ -107,6 +130,7 @@ def health():
     return {
         "status": status,
         "db": "ready" if app.state.startup_ready else "unavailable",
+        "initializing": bool(app.state.startup_initializing),
         "startup_error": app.state.startup_error,
         "db_backend": storage.get("active_backend"),
         "db_fallback_active": storage.get("fallback_active"),
@@ -122,6 +146,7 @@ def version():
         "build_time": os.getenv("BUILD_TIMESTAMP", "unknown"),
         "environment": os.getenv("ENVIRONMENT", "development"),
         "db": "ready" if app.state.startup_ready else "unavailable",
+        "initializing": bool(app.state.startup_initializing),
         "startup_error": app.state.startup_error,
         "db_backend": storage.get("active_backend"),
         "db_fallback_active": storage.get("fallback_active"),
@@ -130,22 +155,9 @@ def version():
 
 @app.on_event("startup")
 def _startup():
-    try:
-        _assert_persistent_storage_configured()
-        ensure_schema()
-        app.state.startup_ready = True
-        app.state.startup_degraded = False
-        app.state.startup_error = None
-        # Demo seed can be expensive; keep disabled by default in deployed envs.
-        if os.getenv("WS_SEED_DEMO", "0") == "1":
-            seed_demo_portfolio_if_empty()
-        if os.getenv("VERCEL", "0") != "1":
-            start_workers()
-    except Exception as exc:  # pragma: no cover - startup hardening path
-        app.state.startup_ready = False
-        app.state.startup_degraded = True
-        app.state.startup_error = str(exc)
-        logging.getLogger(__name__).exception("Startup degraded: database initialization failed.")
+    _assert_persistent_storage_configured()
+    thread = threading.Thread(target=_initialize_runtime_services, name="runtime-init", daemon=True)
+    thread.start()
 
 
 if os.path.isdir(STATIC_DIR):
