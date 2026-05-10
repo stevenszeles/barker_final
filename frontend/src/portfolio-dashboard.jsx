@@ -246,6 +246,48 @@ function saveJSONStorage(key, value) {
   }
 }
 
+function exportScalar(value) {
+  if (value === null || value === undefined) return '';
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === 'number') return Number.isFinite(value) ? value : '';
+  if (typeof value === 'boolean') return value ? 'TRUE' : 'FALSE';
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
+
+function csvEscape(value) {
+  const text = exportScalar(value);
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function tableRowsToCombinedCsv(tables = {}) {
+  const tableEntries = Object.entries(tables).filter(([, rows]) => Array.isArray(rows) && rows.length);
+  const columns = [
+    'table',
+    ...new Set(tableEntries.flatMap(([, rows]) => rows.flatMap((row) => Object.keys(row || {})))),
+  ];
+  const lines = [columns.map(csvEscape).join(',')];
+  tableEntries.forEach(([tableName, rows]) => {
+    rows.forEach((row) => {
+      lines.push(columns.map((column) => csvEscape(column === 'table' ? tableName : row?.[column])).join(','));
+    });
+  });
+  return lines.join('\n');
+}
+
+function downloadTextFile(filename, content, mimeType = 'text/plain;charset=utf-8') {
+  if (typeof document === 'undefined') return;
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 250);
+}
+
 function clearJSONStorage(key) {
   if (typeof window === "undefined") return;
   try {
@@ -489,6 +531,19 @@ function normalizeDateMap(rawMap) {
   return normalized;
 }
 
+function normalizeAccountDisplayNames(rawMap = {}, accountNames = []) {
+  const allowed = new Set((accountNames || []).filter(Boolean));
+  const normalized = {};
+  Object.entries(asPlainObject(rawMap)).forEach(([accountName, displayName]) => {
+    const key = String(accountName || '').trim();
+    const value = String(displayName || '').trim();
+    if (!key || key === 'ALL' || !value) return;
+    if (allowed.size && !allowed.has(key)) return;
+    normalized[key] = value.slice(0, 48);
+  });
+  return normalized;
+}
+
 function normalizeFuturesPnlSnapshots(rawSnapshots) {
   const normalized = {};
   Object.entries(asPlainObject(rawSnapshots)).forEach(([key, snapshotMap]) => {
@@ -512,6 +567,7 @@ function normalizeSharedDashboardState(rawState) {
     accounts,
     balanceHistory,
     realizedTrades,
+    accountDisplayNames: normalizeAccountDisplayNames(rawState?.accountDisplayNames, accountNames),
     sectorTargetsByAccount: normalizeSectorTargetsByAccount(rawState?.sectorTargetsByAccount || rawState?.sectorTargets, accountNames),
     sectorOverrides: asPlainObject(rawState?.sectorOverrides),
     positionAttributionOverrides: asPlainObject(rawState?.positionAttributionOverrides),
@@ -527,6 +583,7 @@ function buildSharedDashboardStatePayload(rawState) {
     accounts: normalized.accounts,
     balanceHistory: normalized.balanceHistory,
     realizedTrades: normalized.realizedTrades,
+    accountDisplayNames: normalized.accountDisplayNames,
     sectorTargetsByAccount: normalized.sectorTargetsByAccount,
     sectorOverrides: normalized.sectorOverrides,
     positionAttributionOverrides: normalized.positionAttributionOverrides,
@@ -550,6 +607,7 @@ function hasSharedDashboardStateContent(rawState) {
     Object.keys(normalized.accounts).length
     || Object.keys(normalized.balanceHistory).length
     || normalized.realizedTrades.length
+    || Object.keys(normalized.accountDisplayNames || {}).length
     || Object.keys(normalized.sectorTargetsByAccount || {}).length
     || Object.keys(normalized.sectorOverrides || {}).length
     || Object.keys(normalized.positionAttributionOverrides || {}).length
@@ -2580,11 +2638,19 @@ function formatShortAccountName(accountName) {
   return raw.split('...')[1] ? `...${raw.split('...')[1]}` : raw;
 }
 
-function summarizeAccountNames(accountNames = []) {
+function getAccountDisplayName(accountName, accountDisplayNames = {}, { short = false } = {}) {
+  if (accountName === 'ALL') return short ? 'ALL' : 'All Accounts';
+  const displayName = String(accountDisplayNames?.[accountName] || '').trim();
+  if (displayName) return displayName;
+  const fallback = String(accountName || '').replace('Limit_Liability_Company ', 'LLC ').replace('Individual ', 'Indiv ');
+  return short ? formatShortAccountName(fallback) : fallback;
+}
+
+function summarizeAccountNames(accountNames = [], accountDisplayNames = {}) {
   const uniqueNames = [...new Set(accountNames.filter(Boolean))];
   if (!uniqueNames.length) return '--';
-  if (uniqueNames.length === 1) return formatShortAccountName(uniqueNames[0]);
-  return `${formatShortAccountName(uniqueNames[0])} +${uniqueNames.length - 1}`;
+  if (uniqueNames.length === 1) return getAccountDisplayName(uniqueNames[0], accountDisplayNames, { short: true });
+  return `${getAccountDisplayName(uniqueNames[0], accountDisplayNames, { short: true })} +${uniqueNames.length - 1}`;
 }
 
 function filterTradesByDateRange(trades, startDate, endDate) {
@@ -3071,6 +3137,7 @@ export default function App() {
     accounts: persisted.accounts,
     balanceHistory: persisted.balanceHistory,
     realizedTrades: persisted.realizedTrades,
+    accountDisplayNames: persisted.accountDisplayNames,
     sectorTargetsByAccount: persisted.sectorTargetsByAccount || persisted.sectorTargets,
     sectorOverrides: persisted.sectorOverrides,
     positionAttributionOverrides: persisted.positionAttributionOverrides,
@@ -3094,6 +3161,7 @@ export default function App() {
   const [accounts, setAccounts] = useState(sharedSeedRef.current.accounts);
   const [balanceHistory, setBalanceHistory] = useState(sharedSeedRef.current.balanceHistory);
   const [realizedTrades, setRealizedTrades] = useState(sharedSeedRef.current.realizedTrades);
+  const [accountDisplayNames, setAccountDisplayNames] = useState(sharedSeedRef.current.accountDisplayNames);
   const [spxData, setSpxData] = useState([]);
   const [sectorBenchmarkData, setSectorBenchmarkData] = useState({});
   const [securityHistoryData, setSecurityHistoryData] = useState(() => loadJSONStorage(SECURITY_HISTORY_STORAGE_KEY, {}));
@@ -3128,6 +3196,7 @@ export default function App() {
     setAccounts(normalized.accounts);
     setBalanceHistory(normalized.balanceHistory);
     setRealizedTrades(normalized.realizedTrades);
+    setAccountDisplayNames(normalized.accountDisplayNames);
     setSectorTargetsByAccount(normalized.sectorTargetsByAccount);
     setSectorOverrides(normalized.sectorOverrides);
     setPositionAttributionOverrides(normalized.positionAttributionOverrides);
@@ -3171,6 +3240,7 @@ export default function App() {
       accounts,
       balanceHistory,
       realizedTrades,
+      accountDisplayNames,
       sectorTargetsByAccount,
       sectorOverrides,
       positionAttributionOverrides,
@@ -3178,7 +3248,7 @@ export default function App() {
       positionTransferEffectiveDates,
       futuresPnlSnapshots,
     });
-  }, [accounts, balanceHistory, futuresPnlSnapshots, positionAttributionOverrides, positionTransferEffectiveDates, realizedTradeAttributionOverrides, realizedTrades, sectorOverrides, sectorTargetsByAccount]);
+  }, [accountDisplayNames, accounts, balanceHistory, futuresPnlSnapshots, positionAttributionOverrides, positionTransferEffectiveDates, realizedTradeAttributionOverrides, realizedTrades, sectorOverrides, sectorTargetsByAccount]);
 
   // Load SPX and sector ETF benchmarks using the proxied Stooq daily history feed.
   const loadBenchmarks = useCallback(async ({ forceRefresh = false, spxOnly = false } = {}) => {
@@ -3433,7 +3503,7 @@ export default function App() {
     }, SHARED_DASHBOARD_SAVE_DEBOUNCE_MS);
 
     return () => window.clearTimeout(timeoutId);
-  }, [accounts, balanceHistory, futuresPnlSnapshots, positionAttributionOverrides, positionTransferEffectiveDates, realizedTradeAttributionOverrides, realizedTrades, saveSharedDashboardState, sectorOverrides, sectorTargetsByAccount, sharedStateReady]);
+  }, [accountDisplayNames, accounts, balanceHistory, futuresPnlSnapshots, positionAttributionOverrides, positionTransferEffectiveDates, realizedTradeAttributionOverrides, realizedTrades, saveSharedDashboardState, sectorOverrides, sectorTargetsByAccount, sharedStateReady]);
 
   useEffect(() => {
     saveJSONStorage(APP_STATE_STORAGE_KEY, {
@@ -3443,6 +3513,7 @@ export default function App() {
       accounts,
       balanceHistory,
       realizedTrades,
+      accountDisplayNames,
       selectedAccount,
       showBenchmark,
       selectedSector,
@@ -3457,7 +3528,7 @@ export default function App() {
       performanceChartMode,
       performanceChartSelection,
     });
-  }, [timeframe, sectorTimeframe, realizedTimeframe, accounts, balanceHistory, futuresPnlSnapshots, realizedTrades, selectedAccount, showBenchmark, selectedSector, riskMatrixMode, sectorTargetsByAccount, sectorOverrides, positionAttributionOverrides, positionTransferEffectiveDates, realizedTradeAttributionOverrides, performanceAccountingMode, performanceChartMode, performanceChartSelection]);
+  }, [timeframe, sectorTimeframe, realizedTimeframe, accountDisplayNames, accounts, balanceHistory, futuresPnlSnapshots, realizedTrades, selectedAccount, showBenchmark, selectedSector, riskMatrixMode, sectorTargetsByAccount, sectorOverrides, positionAttributionOverrides, positionTransferEffectiveDates, realizedTradeAttributionOverrides, performanceAccountingMode, performanceChartMode, performanceChartSelection]);
 
   useEffect(() => {
     saveJSONStorage(SECURITY_HISTORY_STORAGE_KEY, securityHistoryData);
@@ -3473,6 +3544,7 @@ export default function App() {
     setAccounts({});
     setBalanceHistory({});
     setRealizedTrades([]);
+    setAccountDisplayNames({});
     setUploadStatus({});
     setSelectedAccount('ALL');
     setSectorTargetsByAccount({});
@@ -3546,14 +3618,14 @@ export default function App() {
         if (realizedCount) importedParts.push(`${realizedCount} realized futures rows`);
         setUploadStatus((s) => ({
           ...s,
-          futures: `✓ ${importedParts.join(' + ')} imported to ${formatShortAccountName(parsed.accountName)} (${parsed.statementDate})`,
+          futures: `✓ ${importedParts.join(' + ')} imported to ${getAccountDisplayName(parsed.accountName, accountDisplayNames, { short: true })} (${parsed.statementDate})`,
         }));
       } catch (err) {
         setUploadStatus((s) => ({ ...s, futures: `✗ Parse error: ${err.message}` }));
       }
     };
     reader.readAsText(file);
-  }, [accounts, balanceHistory, futuresStatementImportAccount, markSharedWorkspaceDirty, selectedAccount]);
+  }, [accountDisplayNames, accounts, balanceHistory, futuresStatementImportAccount, markSharedWorkspaceDirty, selectedAccount]);
 
   const handleBalancesUpload = useCallback(async (fileInput) => {
     const files = Array.isArray(fileInput) ? fileInput : [fileInput].filter(Boolean);
@@ -3669,15 +3741,32 @@ export default function App() {
   }, [accountList, selectedAccount]);
 
   useEffect(() => {
+    setAccountDisplayNames((prev) => normalizeAccountDisplayNames(prev, accountList));
+  }, [accountList]);
+
+  const updateAccountDisplayName = useCallback((accountName, displayName) => {
+    const key = String(accountName || '').trim();
+    if (!key || key === 'ALL') return;
+    const value = String(displayName || '').trim().slice(0, 48);
+    markSharedWorkspaceDirty('Renaming account display label');
+    setAccountDisplayNames((prev) => {
+      const next = { ...(prev || {}) };
+      if (value) next[key] = value;
+      else delete next[key];
+      return next;
+    });
+  }, [markSharedWorkspaceDirty]);
+
+  useEffect(() => {
     if (!sharedStateReady) return;
     const migration = migrateLegacyFuturesClearingAccount(accounts, sectorOverrides, positionAttributionOverrides);
     if (!migration.migrated) return;
-    markSharedWorkspaceDirty(`Migrating futures held account to ${formatShortAccountName(migration.targetAccount)}`);
+    markSharedWorkspaceDirty(`Migrating futures held account to ${getAccountDisplayName(migration.targetAccount, accountDisplayNames, { short: true })}`);
     setAccounts(migration.accounts);
     setSectorOverrides(migration.sectorOverrides);
     setPositionAttributionOverrides(migration.positionAttributionOverrides);
     if (selectedAccount === FUTURES_CLEARING_ACCOUNT) setSelectedAccount(migration.targetAccount || 'ALL');
-  }, [accounts, markSharedWorkspaceDirty, positionAttributionOverrides, sectorOverrides, selectedAccount, sharedStateReady]);
+  }, [accountDisplayNames, accounts, markSharedWorkspaceDirty, positionAttributionOverrides, sectorOverrides, selectedAccount, sharedStateReady]);
 
   useEffect(() => {
     let cancelled = false;
@@ -4249,7 +4338,8 @@ export default function App() {
       if (!history.length) return;
       definitions.push({
         key: getPerformanceSeriesKey(accountName, accountIndex),
-        label: accountName,
+        label: getAccountDisplayName(accountName, accountDisplayNames),
+        accountName,
         color: accountColorMap[accountName] || '#e0e0e0',
         strokeWidth: selectedAccount === accountName ? 2.5 : 1.8,
         data: filterByTimeframe(history, timeframe, performanceWindowEndDate),
@@ -4268,7 +4358,7 @@ export default function App() {
     }
 
     return definitions.filter((series) => series.data.length);
-  }, [performanceChartSelection, selectedAggregateReturnSeries, accountList, performanceModelSource.accountModels, accountColorMap, selectedAccount, spxData, timeframe, performanceWindowEndDate]);
+  }, [performanceChartSelection, selectedAggregateReturnSeries, accountList, performanceModelSource.accountModels, accountColorMap, selectedAccount, spxData, timeframe, performanceWindowEndDate, accountDisplayNames]);
 
   const performanceComparisonData = useMemo(
     () => buildNormalizedComparisonRows(performanceSeriesDefinitions),
@@ -4290,12 +4380,14 @@ export default function App() {
         ? 'Aggregate'
         : series.label === 'SPX'
           ? 'SPX'
-          : formatShortAccountName(series.label),
+          : series.accountName
+            ? getAccountDisplayName(series.accountName, accountDisplayNames, { short: true })
+            : formatShortAccountName(series.label),
       fullLabel: series.label,
       value: Number.isFinite(series.periodReturn) ? series.periodReturn : 0,
       color: series.color,
     })),
-    [performanceSeriesSummary],
+    [performanceSeriesSummary, accountDisplayNames],
   );
 
   const performanceAccountRanking = useMemo(() => accountList
@@ -4304,10 +4396,12 @@ export default function App() {
       const data = filterByTimeframe(history, timeframe, performanceWindowEndDate);
       const periodReturn = computePeriodReturn(data);
       if (!data.length || !Number.isFinite(periodReturn)) return null;
+      const displayName = getAccountDisplayName(accountName, accountDisplayNames);
       return {
         key: getPerformanceSeriesKey(accountName, accountIndex),
-        label: accountName,
-        shortLabel: formatShortAccountName(accountName),
+        label: displayName,
+        accountName,
+        shortLabel: getAccountDisplayName(accountName, accountDisplayNames, { short: true }),
         color: accountColorMap[accountName] || '#e0e0e0',
         strokeWidth: selectedAccount === accountName ? 2.5 : 1.8,
         data,
@@ -4316,23 +4410,23 @@ export default function App() {
     })
     .filter(Boolean)
     .sort((a, b) => b.periodReturn - a.periodReturn),
-    [accountList, performanceModelSource.accountModels, accountColorMap, selectedAccount, timeframe, performanceWindowEndDate],
+    [accountList, performanceModelSource.accountModels, accountColorMap, selectedAccount, timeframe, performanceWindowEndDate, accountDisplayNames],
   );
 
   const performanceFocusAccounts = useMemo(() => {
     const selectedSet = new Set(selectedPerformanceAccounts);
-    const selectedRanked = performanceAccountRanking.filter((series) => selectedSet.has(series.label));
+    const selectedRanked = performanceAccountRanking.filter((series) => selectedSet.has(series.accountName));
     if (selectedRanked.length) return selectedRanked.slice(0, 6);
 
     const picks = [];
     const addPick = (series) => {
-      if (series && !picks.some((item) => item.label === series.label)) picks.push(series);
+      if (series && !picks.some((item) => item.key === series.key)) picks.push(series);
     };
     addPick(performanceAccountRanking[0]);
     addPick(performanceAccountRanking[1]);
     addPick(performanceAccountRanking[performanceAccountRanking.length - 1]);
     if (selectedAccount !== 'ALL') {
-      addPick(performanceAccountRanking.find((series) => series.label === selectedAccount));
+      addPick(performanceAccountRanking.find((series) => series.accountName === selectedAccount));
     }
     return picks.filter(Boolean);
   }, [performanceAccountRanking, selectedPerformanceAccounts, selectedAccount]);
@@ -4809,14 +4903,14 @@ export default function App() {
         return {
           key: `position:${position.account}:${position.symbol}`,
           label: position.symbol,
-          sublabel: position.account?.split('...')[1] ? `...${position.account.split('...')[1]}` : position.account,
+          sublabel: getAccountDisplayName(position.account, accountDisplayNames, { short: true }),
           color: position.mainSector ? (SECTOR_COLORS[position.mainSector] || '#8f99a3') : '#8f99a3',
           valueLabel: fmt$(position.mktVal),
           returns: buildDailyReturnMap(history),
         };
       })
       .filter((item) => item.returns.size >= 3);
-  }, [getPositionHistorySeries, selectedPositions, timeframe]);
+  }, [accountDisplayNames, getPositionHistorySeries, selectedPositions, timeframe]);
 
   const riskCorrelationItems = useMemo(
     () => (riskMatrixMode === 'positions' ? positionCorrelationItems : sectorCorrelationItems),
@@ -5201,14 +5295,24 @@ export default function App() {
       const firstVal = hist?.[0]?.[1];
       const totalReturn = firstVal ? ((total - firstVal) / firstVal) * 100 : null;
       const today = hist?.length >= 2 ? ((hist[hist.length-1][1] - hist[hist.length-2][1]) / hist[hist.length-2][1]) * 100 : null;
-      return { name, total, cost, totalReturn, today, color: ACCOUNT_COLORS[i % ACCOUNT_COLORS.length], posCount: posData?.positions?.length || 0 };
+      return {
+        name,
+        displayName: getAccountDisplayName(name, accountDisplayNames),
+        shortName: getAccountDisplayName(name, accountDisplayNames, { short: true }),
+        total,
+        cost,
+        totalReturn,
+        today,
+        color: ACCOUNT_COLORS[i % ACCOUNT_COLORS.length],
+        posCount: posData?.positions?.length || 0,
+      };
     });
-  }, [accountList, accounts, balanceHistory]);
+  }, [accountList, accounts, balanceHistory, accountDisplayNames]);
 
   const totalPortfolioValue = useMemo(() => accountSummary.reduce((a,s) => a + (s.total||0), 0), [accountSummary]);
   const selectedAccountLabel = selectedAccount === 'ALL'
     ? 'Aggregate Portfolio'
-    : selectedAccount.replace('Limit_Liability_Company ', 'LLC ').replace('Individual ', 'Indiv ');
+    : getAccountDisplayName(selectedAccount, accountDisplayNames);
   const deskClocks = [
     { label:'New York', zone:'America/New_York' },
     { label:'London', zone:'Europe/London' },
@@ -5245,7 +5349,7 @@ export default function App() {
         : PALETTE.accentBright;
   const benchmarkFeedLabel = spxLoading ? 'Benchmarks Syncing' : spxData.length > 0 ? 'Benchmarks Live' : 'Benchmarks Pending';
   const terminalStatusTiles = [
-    { label:'Scope', value: selectedAccount === 'ALL' ? 'All Accounts' : selectedAccount.split('...')[1] ? `Acct ${selectedAccount.split('...')[1]}` : selectedAccount, tone:PALETTE.info },
+    { label:'Scope', value: selectedAccount === 'ALL' ? 'All Accounts' : getAccountDisplayName(selectedAccount, accountDisplayNames, { short: true }), tone:PALETTE.info },
     { label:'Accounts', value: String(accountList.length), tone:PALETTE.accentBright },
     { label:'Positions', value: String(selectedPositions.length), tone:PALETTE.textStrong },
     { label:'Workspace', value: sharedSyncValue, tone: sharedSyncTone },
@@ -5253,6 +5357,228 @@ export default function App() {
     { label:'Realized Rows', value: String(selectedRealizedTrades.length), tone:PALETTE.accentMuted },
     { label:'Build', value: APP_BUILD_VERSION, tone:PALETTE.textMuted },
   ];
+
+  const visualExportTables = useMemo(() => {
+    const accountLabel = (accountName) => getAccountDisplayName(accountName, accountDisplayNames);
+    const accountShortLabel = (accountName) => getAccountDisplayName(accountName, accountDisplayNames, { short: true });
+    const metricRows = [
+      { metric:'selected_scope', value:selectedAccountLabel },
+      { metric:'timeframe', value:timeframe },
+      { metric:'sector_timeframe', value:sectorTimeframe },
+      { metric:'realized_timeframe', value:realizedTimeframe },
+      { metric:'performance_accounting_mode', value:performanceAccountingMode },
+      { metric:'performance_chart_mode', value:performanceChartMode },
+      { metric:'total_portfolio_value', value:totalPortfolioValue },
+      ...(allTimeStats ? Object.entries(allTimeStats).map(([metric, value]) => ({ metric:`all_time_${metric}`, value })) : []),
+      ...(performanceStats ? Object.entries(performanceStats).map(([metric, value]) => ({ metric:`performance_${metric}`, value })) : []),
+    ];
+
+    return {
+      metadata: [
+        {
+          exported_at: new Date().toISOString(),
+          build: APP_BUILD_VERSION,
+          selected_account: selectedAccount,
+          selected_account_display: selectedAccountLabel,
+          account_count: accountList.length,
+          position_count: selectedPositions.length,
+          realized_trade_count: selectedRealizedTrades.length,
+        },
+      ],
+      dashboard_metrics: metricRows,
+      account_summary: accountSummary.map((account) => ({
+        account: account.name,
+        account_display: account.displayName,
+        account_short: account.shortName,
+        nav: account.total,
+        day_change_pct: account.today,
+        total_return_pct: account.totalReturn,
+        positions: account.posCount,
+        cost_basis: account.cost,
+        unrealized_gl: account.total - account.cost,
+      })),
+      account_display_names: accountList.map((accountName) => ({
+        account: accountName,
+        account_display: accountLabel(accountName),
+        custom_display_name: accountDisplayNames[accountName] || '',
+      })),
+      balance_history: Object.entries(balanceHistory).flatMap(([accountName, history]) =>
+        (history || []).map(([date, nav]) => ({
+          account: accountName,
+          account_display: accountLabel(accountName),
+          date,
+          nav,
+        })),
+      ),
+      overview_chart: chartData,
+      absolute_nav_chart: performanceFilteredHistory.map(([date, nav]) => ({ date, nav, scope: selectedAccountLabel })),
+      performance_comparison_chart: performanceComparisonData,
+      performance_focus_chart: performanceFocusData,
+      performance_bar_chart: performanceBarData.map((row) => ({
+        key: row.key,
+        label: row.label,
+        full_label: row.fullLabel,
+        return_pct: row.value,
+      })),
+      performance_series_summary: performanceSeriesSummary.map((series) => ({
+        key: series.key,
+        account: series.accountName || '',
+        label: series.label,
+        period_return_pct: series.periodReturn,
+        point_count: series.data?.length || 0,
+      })),
+      performance_focus_ranking: performanceFocusRankingRows.map((row, index) => ({
+        rank: index + 1,
+        account: row.accountName || '',
+        label: row.shortLabel || row.label,
+        period_return_pct: row.periodReturn,
+      })),
+      sector_attribution: sectorAttribution.map((sector) => ({
+        sector: sector.name,
+        benchmark_symbol: sector.benchmarkSymbol,
+        value: sector.value,
+        cost: sector.cost,
+        actual_weight_pct: sector.actualWeight,
+        benchmark_weight_pct: sector.benchmarkWeight,
+        target_weight_pct: sector.targetWeight,
+        active_weight_pct: sector.activeWeight,
+        relative_weight_pct: sector.relativeWeight,
+        sector_return_pct: sector.sectorReturn,
+        benchmark_return_pct: sector.benchmarkReturn,
+        decision_alpha_pct: sector.actualAllocationAlpha,
+        target_allocation_alpha_pct: sector.targetAllocationAlpha,
+        open_dollar_return: sector.openDollarReturn,
+        closed_dollar_return: sector.closedDollarReturn,
+        total_dollar_return: sector.totalDollarReturn,
+        portfolio_contribution_pct: sector.portfolioContribution,
+        positions: sector.totalOpenPositions,
+        window_start: sector.windowStartDate,
+        window_end: sector.windowEndDate,
+      })),
+      sector_chart_bars: sectorChartBars.map((sector) => ({
+        sector: sector.name,
+        actual_weight_pct: sector.actualWeight,
+        benchmark_weight_pct: sector.benchmarkWeight,
+        target_weight_pct: sector.targetWeight,
+        decision_alpha_pct: sector.actualAllocationAlphaDisplay,
+      })),
+      selected_sector_comparison_chart: sectorComparisonChart.map((row) => ({
+        ...row,
+        sector: sectorDetail?.name || selectedSector,
+        benchmark_symbol: sectorDetail?.benchmarkSymbol || '',
+      })),
+      sector_totals: Object.entries(sectorTotals).map(([metric, value]) => ({ metric, value })),
+      realized_by_sector: realizedBySector.map((row) => ({
+        sector: row.name,
+        realized_gain_loss: row.gain,
+        trade_count: row.count,
+      })),
+      realized_trades: filteredRealizedTrades.map((trade) => ({
+        symbol: trade.symbol,
+        account: trade.custodyAccount || trade.account,
+        account_display: accountShortLabel(trade.custodyAccount || trade.account),
+        desk_account: trade.attributedAccount,
+        desk_account_display: accountShortLabel(trade.attributedAccount),
+        sector: trade.mainSector || trade.sector,
+        opened_date: trade.openedDateISO || trade.openedDate,
+        closed_date: trade.closedDateISO || trade.closedDate,
+        qty: trade.qty,
+        proceeds: trade.proceeds,
+        cost: trade.cost,
+        gain_loss: trade.gain,
+        term: trade.term,
+        trade_type: trade.tradeType,
+      })),
+      positions: selectedPositions.map((position) => ({
+        symbol: position.symbol,
+        underlying: getPositionUnderlying(position),
+        account: getPositionHeldAccount(position),
+        account_display: accountShortLabel(getPositionHeldAccount(position)),
+        desk_account: getPositionDisplayAccount(position),
+        desk_account_display: accountShortLabel(getPositionDisplayAccount(position)),
+        sector: position.mainSector || position.sector,
+        asset_type: position.assetType,
+        qty: position.qty,
+        price: position.price,
+        market_value: position.mktVal,
+        cost_basis: position.costBasis,
+        gain_loss: position.gain,
+        gain_loss_pct: position.gainPct,
+        description: position.description,
+        source: position.source,
+      })),
+      risk_correlation_items: riskCorrelationItems.map((item, index) => ({
+        index,
+        key: item.key,
+        label: item.label,
+        sublabel: item.sublabel,
+        value_label: item.valueLabel,
+        observations: item.returns?.size || 0,
+      })),
+      risk_correlation_matrix: riskCorrelationMatrix.flatMap((row, rowIndex) =>
+        row.map((cell, columnIndex) => ({
+          row_key: riskCorrelationItems[rowIndex]?.key,
+          row_label: riskCorrelationItems[rowIndex]?.label,
+          column_key: riskCorrelationItems[columnIndex]?.key,
+          column_label: riskCorrelationItems[columnIndex]?.label,
+          correlation: cell.value,
+          observations: cell.observations,
+        })),
+      ),
+    };
+  }, [
+    accountDisplayNames,
+    accountList,
+    accountSummary,
+    allTimeStats,
+    balanceHistory,
+    chartData,
+    filteredRealizedTrades,
+    performanceBarData,
+    performanceChartMode,
+    performanceComparisonData,
+    performanceFilteredHistory,
+    performanceFocusData,
+    performanceFocusRankingRows,
+    performanceSeriesSummary,
+    performanceAccountingMode,
+    performanceStats,
+    realizedBySector,
+    realizedTimeframe,
+    riskCorrelationItems,
+    riskCorrelationMatrix,
+    sectorAttribution,
+    sectorChartBars,
+    sectorComparisonChart,
+    sectorDetail,
+    sectorTimeframe,
+    sectorTotals,
+    selectedAccount,
+    selectedAccountLabel,
+    selectedPositions,
+    selectedRealizedTrades.length,
+    selectedSector,
+    timeframe,
+    totalPortfolioValue,
+  ]);
+
+  const exportVisualTables = useCallback(() => {
+    const stamp = todayIsoLocal();
+    const slugScope = selectedAccount === 'ALL'
+      ? 'all-accounts'
+      : getAccountDisplayName(selectedAccount, accountDisplayNames, { short: true }).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'account';
+    const baseName = `barker-visual-tables-${slugScope}-${stamp}`;
+    downloadTextFile(
+      `${baseName}.csv`,
+      tableRowsToCombinedCsv(visualExportTables),
+      'text/csv;charset=utf-8',
+    );
+    downloadTextFile(
+      `${baseName}.json`,
+      JSON.stringify({ tables: visualExportTables }, null, 2),
+      'application/json;charset=utf-8',
+    );
+  }, [accountDisplayNames, selectedAccount, visualExportTables]);
 
   const TIMEFRAMES = ['1M','3M','6M','YTD','1Y','2Y','ALL'];
   const TABS = [
@@ -5282,6 +5608,13 @@ export default function App() {
               <div style={{ ...S.statusPill, borderColor:PALETTE.border, color:PALETTE.info }}>{selectedAccountLabel}</div>
               <div style={{ ...S.statusPill, borderColor:hexToRgba(spxData.length > 0 ? PALETTE.positive : PALETTE.warning, 0.28), color: spxData.length > 0 ? PALETTE.positive : PALETTE.warning }}>{benchmarkFeedLabel}</div>
               <div style={{ ...S.statusPill, borderColor:PALETTE.border, color: totalPortfolioValue > 0 ? PALETTE.textStrong : PALETTE.textDim, minWidth:'148px', textAlign:'right' }}>{fmt$(totalPortfolioValue)}</div>
+              <button
+                type="button"
+                onClick={exportVisualTables}
+                style={{ ...S.btn, padding:'6px 10px', fontSize:'10px', borderColor:PALETTE.borderStrong, color:PALETTE.accentBright }}
+              >
+                Export Visual Tables
+              </button>
             </div>
           </div>
           <div style={S.marketRibbon}>
@@ -5321,7 +5654,7 @@ export default function App() {
                   borderColor: selectedAccount===acc ? PALETTE.borderStrong : PALETTE.border,
                   color: selectedAccount===acc ? PALETTE.accentBright : PALETTE.textMuted,
                 }}>
-                {acc === 'ALL' ? 'ALL' : acc.split('...')[1] ? `...${acc.split('...')[1]}` : acc}
+                {acc === 'ALL' ? 'ALL' : getAccountDisplayName(acc, accountDisplayNames, { short: true })}
               </button>
             ))}
             <div style={{ marginLeft:'auto', display:'flex', gap:'8px', flexWrap:'wrap' }}>
@@ -5359,7 +5692,7 @@ export default function App() {
           <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(320px, 1fr))', gap:'12px', marginBottom:'16px' }}>
             <div style={S.card}>
               <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'12px' }}>
-                <div style={S.cardTitle}>PORTFOLIO vs SPX — {selectedAccount === 'ALL' ? 'Aggregate Portfolio' : selectedAccount}</div>
+                <div style={S.cardTitle}>PORTFOLIO vs SPX — {selectedAccountLabel}</div>
                 <div style={{ display:'flex', gap:'6px' }}>
                   {TIMEFRAMES.map(tf => (
                     <button key={tf} onClick={() => setTimeframe(tf)}
@@ -5402,7 +5735,7 @@ export default function App() {
                 <div key={acc.name} style={{ ...S.card, cursor:'pointer', borderColor: selectedAccount===acc.name ? PALETTE.borderStrong : PALETTE.borderSubtle }}
                   onClick={() => setSelectedAccount(acc.name)}>
                   <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-                    <div style={{ color: acc.color, fontSize:'11px', fontWeight:700 }}>...{acc.name.split('...')[1]}</div>
+                    <div style={{ color: acc.color, fontSize:'11px', fontWeight:700 }}>{acc.shortName}</div>
                     <div style={{ color: acc.today >= 0 ? PALETTE.positive : PALETTE.negative, fontSize:'11px' }}>{fmtPct(acc.today)}</div>
                   </div>
                   <div style={{ fontSize:'14px', fontWeight:700, color:PALETTE.textStrong, marginTop:'2px' }}>{fmt$(acc.total)}</div>
@@ -5417,14 +5750,22 @@ export default function App() {
             <div style={S.tableWrapper}>
               <table style={S.table}>
                 <thead>
-                  <tr>{['Account','NAV','Day Chg','Total Return','Positions','Cost Basis','Unrealized G/L'].map(h => <th key={h} style={S.th}>{h}</th>)}</tr>
+                  <tr>{['Account','Display Name','NAV','Day Chg','Total Return','Positions','Cost Basis','Unrealized G/L'].map(h => <th key={h} style={S.th}>{h}</th>)}</tr>
                 </thead>
                 <tbody>
                   {accountSummary.map((acc, i) => {
                     const unrealized = acc.total - acc.cost;
                     return (
                       <tr key={acc.name} style={{ cursor:'pointer' }} onClick={() => setSelectedAccount(acc.name)}>
-                        <td style={{ ...S.td }}><span style={{ color: acc.color }}>⬡</span> {acc.name.replace('Limit_Liability_Company ','LLC ').replace('Individual ','Indiv ')}</td>
+                        <td style={{ ...S.td }} title={acc.name}><span style={{ color: acc.color }}>⬡</span> {acc.displayName}</td>
+                        <td style={S.td} onClick={(e) => e.stopPropagation()}>
+                          <input
+                            value={accountDisplayNames[acc.name] || ''}
+                            onChange={(e) => updateAccountDisplayName(acc.name, e.target.value)}
+                            placeholder={formatShortAccountName(acc.name)}
+                            style={{ ...S.input, minWidth:'150px', maxWidth:'220px', padding:'5px 7px', fontSize:'11px' }}
+                          />
+                        </td>
                         <td style={{ ...S.td, fontWeight:700 }}>{fmt$(acc.total)}</td>
                         <td style={{ ...S.td, color: acc.today >= 0 ? PALETTE.positive : PALETTE.negative }}>{fmtPct(acc.today)}</td>
                         <td style={{ ...S.td, color: acc.totalReturn >= 0 ? PALETTE.positive : PALETTE.negative }}>{fmtPct(acc.totalReturn)}</td>
@@ -5536,7 +5877,7 @@ export default function App() {
                     color: performanceChartSelection.accounts?.[accountName] ? accountColorMap[accountName] || PALETTE.textStrong : PALETTE.textDim,
                   }}
                 >
-                  {accountName.split('...')[1] ? `...${accountName.split('...')[1]}` : accountName}
+                  {getAccountDisplayName(accountName, accountDisplayNames, { short: true })}
                 </button>
               ))}
             </div>
@@ -5553,7 +5894,7 @@ export default function App() {
                 <div style={{ display:'flex', gap:'14px', fontSize:'11px', flexWrap:'wrap', justifyContent:'flex-end' }}>
                   {performanceSeriesSummary.map((series) => (
                     <span key={series.key} style={{ color: series.color }}>
-                      {series.label === 'Aggregate Portfolio' ? 'Aggregate' : series.label === 'SPX' ? 'SPX' : series.label.split('...')[1] ? `...${series.label.split('...')[1]}` : series.label}
+                      {series.label === 'Aggregate Portfolio' ? 'Aggregate' : series.label}
                       : <strong>{fmtPct(series.periodReturn)}</strong>
                     </span>
                   ))}
@@ -5650,7 +5991,7 @@ export default function App() {
                       dot={false}
                       strokeWidth={series.strokeWidth}
                       strokeDasharray={series.strokeDasharray}
-                      name={series.label === 'Aggregate Portfolio' ? 'Aggregate Portfolio' : series.label === 'SPX' ? 'SPX' : series.label.replace('Limit_Liability_Company ', 'LLC ').replace('Individual ', 'Indiv ')}
+                      name={series.label}
                       connectNulls
                     />
                   ))}
@@ -5686,7 +6027,7 @@ export default function App() {
 
           {/* NAV chart (absolute) */}
           <div style={S.card}>
-            <div style={S.cardTitle}>ABSOLUTE NAV — {selectedAccount === 'ALL' ? 'Aggregate Portfolio' : selectedAccount} · {performanceAccountingMode === 'desk' ? 'Desk NAV' : 'Legal NAV'}</div>
+            <div style={S.cardTitle}>ABSOLUTE NAV — {selectedAccountLabel} · {performanceAccountingMode === 'desk' ? 'Desk NAV' : 'Legal NAV'}</div>
             <ResponsiveContainer width="100%" height={214}>
               <AreaChart data={performanceFilteredHistory.map(([d,v]) => ({ date:d, nav:v }))} margin={{ top:10, right:18, bottom:8, left:12 }}>
                 <defs>
@@ -5710,7 +6051,7 @@ export default function App() {
       {tab === 'positions' && (
         <div style={S.section}>
           <div style={{ marginBottom:'12px', color:PALETTE.textDim, fontSize:'11px' }}>
-            {positionGroupCount} grouped lines · {selectedPositions.length} total positions · {selectedAccount === 'ALL' ? 'All Accounts' : selectedAccount}
+            {positionGroupCount} grouped lines · {selectedPositions.length} total positions · {selectedAccountLabel}
           </div>
           <div style={{ ...S.card, marginBottom:'12px', background:'linear-gradient(180deg, rgba(23,26,30,0.98), rgba(11,13,16,0.98))' }}>
             <div style={{ ...S.cardTitle, color:PALETTE.accentBright, marginBottom:'6px' }}>DESK ATTRIBUTION</div>
@@ -5733,7 +6074,7 @@ export default function App() {
                     const gainPct = isGroup ? entry.totalGainPct : row?.gainPct;
                     const attributedAccountName = isGroup ? entry.attributedAccountName : getPositionDisplayAccount(row);
                     const heldAccounts = isGroup ? entry.heldAccounts : [getPositionHeldAccount(row)];
-                    const heldAccountLabel = summarizeAccountNames(heldAccounts);
+                    const heldAccountLabel = summarizeAccountNames(heldAccounts, accountDisplayNames);
                     const attributionChanged = isGroup
                       ? entry.attributionChanged
                       : getPositionDisplayAccount(row) !== getPositionHeldAccount(row);
@@ -5808,7 +6149,7 @@ export default function App() {
                           <div style={{ display:'flex', flexDirection:'column', gap:'6px' }}>
                             <div style={{ display:'flex', flexDirection:'column', gap:'2px' }}>
                               <span style={{ color: attributionChanged ? PALETTE.accentBright : PALETTE.textStrong, fontSize:'11px', fontWeight:600 }}>
-                                Desk {formatShortAccountName(attributedAccountName)}
+                                Desk {getAccountDisplayName(attributedAccountName, accountDisplayNames, { short: true })}
                               </span>
                               <span style={{ color:PALETTE.textDim, fontSize:'10px' }}>
                                 Held {heldAccountLabel}
@@ -5829,7 +6170,7 @@ export default function App() {
                                   </option>
                                   {accountList.map((accountName) => (
                                     <option key={accountName} value={accountName}>
-                                      {formatShortAccountName(accountName)}
+                                      {getAccountDisplayName(accountName, accountDisplayNames, { short: true })}
                                     </option>
                                   ))}
                                 </select>
@@ -5952,7 +6293,7 @@ export default function App() {
           <div style={{ ...S.grid(4), marginBottom:'16px' }}>
             {[
               ['Benchmark Wt', fmtPct(sectorTotals.benchmark), '#7c4dff', 'Editable baseline'],
-              ['Target Wt', fmtPct(sectorTotals.target), Math.abs(sectorTotals.target - 100) < 0.25 ? '#00d4ff' : '#ffd166', editableSectorScope ? `Configured weights for ${selectedAccount.split('...')[1] ? `...${selectedAccount.split('...')[1]}` : selectedAccount}` : 'Weighted aggregate of account-specific targets'],
+              ['Target Wt', fmtPct(sectorTotals.target), Math.abs(sectorTotals.target - 100) < 0.25 ? '#00d4ff' : '#ffd166', editableSectorScope ? `Configured weights for ${getAccountDisplayName(selectedAccount, accountDisplayNames, { short: true })}` : 'Weighted aggregate of account-specific targets'],
               ['Active Sector Wt', fmtPct(sectorTotals.actual), '#00d4ff', 'Current classified exposure'],
               ['Benchmark Return', fmtPct(sectorTotals.benchmarkReturn), sectorTotals.benchmarkReturn >= 0 ? '#00e676' : '#ff4444', `Sector benchmark aggregate for ${sectorTimeframe}`],
             ].map(([label, value, color, sub]) => (
@@ -6301,10 +6642,10 @@ export default function App() {
                         <div style={{ display:'flex', flexDirection:'column', gap:'6px' }}>
                           <div style={{ display:'flex', flexDirection:'column', gap:'2px' }}>
                             <span style={{ color: t.attributedAccount !== t.custodyAccount ? PALETTE.accentBright : PALETTE.textStrong, fontSize:'11px', fontWeight:600 }}>
-                              Desk {formatShortAccountName(t.attributedAccount)}
+                              Desk {getAccountDisplayName(t.attributedAccount, accountDisplayNames, { short: true })}
                             </span>
                             <span style={{ color:PALETTE.textDim, fontSize:'10px' }}>
-                              Held {formatShortAccountName(t.custodyAccount)}
+                              Held {getAccountDisplayName(t.custodyAccount, accountDisplayNames, { short: true })}
                             </span>
                           </div>
                           <select
@@ -6320,16 +6661,16 @@ export default function App() {
                             style={{ ...S.input, padding:'4px 6px', fontSize:'10px', minWidth:'176px' }}
                           >
                             <option value={POSITION_ATTRIBUTION_HELD}>
-                              Held Account ({formatShortAccountName(t.custodyAccount)})
+                              Held Account ({getAccountDisplayName(t.custodyAccount, accountDisplayNames, { short: true })})
                             </option>
                             {t.inheritedAccount && t.inheritedAccount !== t.custodyAccount && (
                               <option value={REALIZED_ATTRIBUTION_FOLLOW_POSITION}>
-                                Follow Position Transfer ({formatShortAccountName(t.inheritedAccount)})
+                                Follow Position Transfer ({getAccountDisplayName(t.inheritedAccount, accountDisplayNames, { short: true })})
                               </option>
                             )}
                             {accountList.map((accountName) => (
                               <option key={accountName} value={accountName}>
-                                {formatShortAccountName(accountName)}
+                                {getAccountDisplayName(accountName, accountDisplayNames, { short: true })}
                               </option>
                             ))}
                           </select>
@@ -6605,7 +6946,7 @@ export default function App() {
                 <option value={FUTURES_CLEARING_ACCOUNT}>Futures Clearing Bucket</option>
                 {accountList.map((accountName) => (
                   <option key={accountName} value={accountName}>
-                    {formatShortAccountName(accountName)}
+                    {getAccountDisplayName(accountName, accountDisplayNames, { short: true })}
                   </option>
                 ))}
               </select>
@@ -6652,7 +6993,7 @@ export default function App() {
                 <div style={{ color:'#555', fontSize:'10px', marginBottom:'6px' }}>POSITIONS</div>
                 {Object.entries(accounts).map(([name, acc]) => (
                   <div key={name} style={{ color:'#888', fontSize:'11px', marginBottom:'3px' }}>
-                    <span style={{ color:'#00d4ff' }}>...{name.split('...')[1]}</span>: {acc.positions.length} positions · {fmt$(acc.total)}
+                    <span style={{ color:'#00d4ff' }}>{getAccountDisplayName(name, accountDisplayNames, { short: true })}</span>: {acc.positions.length} positions · {fmt$(acc.total)}
                   </div>
                 ))}
                 {Object.keys(accounts).length === 0 && <div style={{ color:'#333' }}>No positions loaded</div>}
@@ -6661,7 +7002,7 @@ export default function App() {
                 <div style={{ color:'#555', fontSize:'10px', marginBottom:'6px' }}>BALANCE HISTORY</div>
                 {Object.entries(balanceHistory).map(([name, hist]) => (
                   <div key={name} style={{ color:'#888', fontSize:'11px', marginBottom:'3px' }}>
-                    <span style={{ color:'#00d4ff' }}>...{name.split('...')[1]}</span>: {hist.length} rows · {hist[0]?.[0]} → {hist[hist.length-1]?.[0]}
+                    <span style={{ color:'#00d4ff' }}>{getAccountDisplayName(name, accountDisplayNames, { short: true })}</span>: {hist.length} rows · {hist[0]?.[0]} → {hist[hist.length-1]?.[0]}
                   </div>
                 ))}
               </div>
