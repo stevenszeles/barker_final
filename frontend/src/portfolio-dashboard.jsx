@@ -255,6 +255,28 @@ function exportScalar(value) {
   return String(value);
 }
 
+function csvEscape(value) {
+  const text = exportScalar(value);
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function rowsToCsv(rows = []) {
+  if (!Array.isArray(rows) || !rows.length) return '';
+  const columns = [...new Set(rows.flatMap((row) => Object.keys(row || {})))];
+  return [
+    columns.map((column) => csvEscape(humanizeColumnName(column))).join(','),
+    ...rows.map((row) => columns.map((column) => csvEscape(row?.[column])).join(',')),
+  ].join('\n');
+}
+
+function slugifyFilename(value) {
+  return String(value || 'export')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 80) || 'export';
+}
+
 function downloadTextFile(filename, content, mimeType = 'text/plain;charset=utf-8') {
   if (typeof document === 'undefined') return;
   const blob = new Blob([content], { type: mimeType });
@@ -270,6 +292,7 @@ function downloadTextFile(filename, content, mimeType = 'text/plain;charset=utf-
 
 function humanizeColumnName(value) {
   return String(value || '')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
     .replace(/_/g, ' ')
     .replace(/\b\w/g, (char) => char.toUpperCase())
     .replace(/\bPct\b/g, '%')
@@ -4595,6 +4618,31 @@ export default function App() {
     ),
     [performanceFilteredHistory, performanceFilteredReturnSeries],
   );
+  const riskDrawdownData = useMemo(() => {
+    if (!activeHistory.length) return [];
+    const ddData = [];
+    let peak = activeHistory[0]?.[1] || 1;
+    for (const [date, val] of activeHistory) {
+      if (val > peak) peak = val;
+      ddData.push({ date, dd: peak ? ((val - peak) / peak) * 100 : 0 });
+    }
+    return filterByTimeframe(ddData.map((d) => [d.date, d.dd]), timeframe)
+      .map(([date, dd]) => ({ date, dd }));
+  }, [activeHistory, timeframe]);
+  const riskRollingVolData = useMemo(() => {
+    if (activeHistory.length < 32) return [];
+    const rolling = [];
+    for (let i = 31; i < activeHistory.length; i++) {
+      const windowRows = activeHistory.slice(i - 30, i + 1);
+      const rets = windowRows.slice(1).map((_, j) => (windowRows[j + 1][1] - windowRows[j][1]) / windowRows[j][1]);
+      const mean = rets.reduce((a, b) => a + b, 0) / rets.length;
+      const variance = rets.reduce((a, b) => a + (b - mean) ** 2, 0) / rets.length;
+      const vol = Math.sqrt(variance * 252) * 100;
+      rolling.push({ date: activeHistory[i][0], vol });
+    }
+    return filterByTimeframe(rolling.map((d) => [d.date, d.vol]), timeframe)
+      .map(([date, vol]) => ({ date, vol }));
+  }, [activeHistory, timeframe]);
 
   // Sector analytics from positions + sector ETF total return series.
   const sectorBreakdown = useMemo(() => {
@@ -5663,6 +5711,20 @@ export default function App() {
     );
   }, [accountDisplayNames, selectedAccount, visualExportTables]);
 
+  const exportCurrentVisual = useCallback((title, rows = []) => {
+    const safeRows = Array.isArray(rows) ? rows : [];
+    if (!safeRows.length) return;
+    const stamp = todayIsoLocal();
+    const scope = selectedAccount === 'ALL'
+      ? 'all-accounts'
+      : slugifyFilename(getAccountDisplayName(selectedAccount, accountDisplayNames, { short: true }));
+    downloadTextFile(
+      `${slugifyFilename(title)}-${scope}-${stamp}.csv`,
+      rowsToCsv(safeRows),
+      'text/csv;charset=utf-8',
+    );
+  }, [accountDisplayNames, selectedAccount]);
+
   const TIMEFRAMES = ['1M','3M','6M','YTD','1Y','2Y','ALL'];
   const TABS = [
     { id:'overview', label:'Overview' },
@@ -5691,13 +5753,6 @@ export default function App() {
               <div style={{ ...S.statusPill, borderColor:PALETTE.border, color:PALETTE.info }}>{selectedAccountLabel}</div>
               <div style={{ ...S.statusPill, borderColor:hexToRgba(spxData.length > 0 ? PALETTE.positive : PALETTE.warning, 0.28), color: spxData.length > 0 ? PALETTE.positive : PALETTE.warning }}>{benchmarkFeedLabel}</div>
               <div style={{ ...S.statusPill, borderColor:PALETTE.border, color: totalPortfolioValue > 0 ? PALETTE.textStrong : PALETTE.textDim, minWidth:'148px', textAlign:'right' }}>{fmt$(totalPortfolioValue)}</div>
-              <button
-                type="button"
-                onClick={exportVisualTables}
-                style={{ ...S.btn, padding:'6px 10px', fontSize:'10px', borderColor:PALETTE.borderStrong, color:PALETTE.accentBright }}
-              >
-                Export Visual Tables
-              </button>
             </div>
           </div>
           <div style={S.marketRibbon}>
@@ -5776,11 +5831,19 @@ export default function App() {
             <div style={S.card}>
               <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'12px' }}>
                 <div style={S.cardTitle}>PORTFOLIO vs SPX — {selectedAccountLabel}</div>
-                <div style={{ display:'flex', gap:'6px' }}>
+                <div style={{ display:'flex', gap:'6px', flexWrap:'wrap', justifyContent:'flex-end' }}>
                   {TIMEFRAMES.map(tf => (
                     <button key={tf} onClick={() => setTimeframe(tf)}
                       style={{ ...S.btn, ...(timeframe===tf ? S.btnActive : {}), padding:'3px 8px', fontSize:'10px' }}>{tf}</button>
                   ))}
+                  <button
+                    type="button"
+                    onClick={() => exportCurrentVisual('Portfolio vs SPX', chartData)}
+                    disabled={!chartData.length}
+                    style={{ ...S.btn, padding:'3px 8px', fontSize:'10px', borderColor:PALETTE.borderStrong, color:PALETTE.accentBright, opacity: chartData.length ? 1 : 0.45 }}
+                  >
+                    Export
+                  </button>
                 </div>
               </div>
               {chartData.length > 0 ? (
@@ -5973,6 +6036,17 @@ export default function App() {
                 {performanceChartMode === 'bar' ? 'PERIOD RETURN SNAPSHOT' : performanceChartMode === 'focus' ? 'PERFORMANCE FOCUS' : 'NORMALIZED PERFORMANCE COMPARISON'}
                 {' '}· {timeframe} · {performanceAccountingMode === 'desk' ? 'Desk NAV' : 'Legal NAV'}
               </div>
+              <button
+                type="button"
+                onClick={() => exportCurrentVisual(
+                  performanceChartMode === 'bar' ? 'Period Return Snapshot' : performanceChartMode === 'focus' ? 'Performance Focus' : 'Normalized Performance Comparison',
+                  performanceChartMode === 'bar' ? performanceBarData : performanceChartMode === 'focus' ? performanceFocusData : performanceComparisonData,
+                )}
+                disabled={!(performanceChartMode === 'bar' ? performanceBarData.length : performanceChartMode === 'focus' ? performanceFocusData.length : performanceComparisonData.length)}
+                style={{ ...S.btn, padding:'4px 10px', fontSize:'10px', borderColor:PALETTE.borderStrong, color:PALETTE.accentBright }}
+              >
+                Export
+              </button>
               {performanceChartMode !== 'focus' && performanceSeriesSummary.length > 0 && (
                 <div style={{ display:'flex', gap:'14px', fontSize:'11px', flexWrap:'wrap', justifyContent:'flex-end' }}>
                   {performanceSeriesSummary.map((series) => (
@@ -6110,7 +6184,17 @@ export default function App() {
 
           {/* NAV chart (absolute) */}
           <div style={S.card}>
-            <div style={S.cardTitle}>ABSOLUTE NAV — {selectedAccountLabel} · {performanceAccountingMode === 'desk' ? 'Desk NAV' : 'Legal NAV'}</div>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:'12px', marginBottom:'8px' }}>
+              <div style={S.cardTitle}>ABSOLUTE NAV — {selectedAccountLabel} · {performanceAccountingMode === 'desk' ? 'Desk NAV' : 'Legal NAV'}</div>
+              <button
+                type="button"
+                onClick={() => exportCurrentVisual('Absolute NAV', performanceFilteredHistory.map(([date, nav]) => ({ date, nav })))}
+                disabled={!performanceFilteredHistory.length}
+                style={{ ...S.btn, padding:'4px 10px', fontSize:'10px', borderColor:PALETTE.borderStrong, color:PALETTE.accentBright, opacity: performanceFilteredHistory.length ? 1 : 0.45 }}
+              >
+                Export
+              </button>
+            </div>
             <ResponsiveContainer width="100%" height={214}>
               <AreaChart data={performanceFilteredHistory.map(([d,v]) => ({ date:d, nav:v }))} margin={{ top:10, right:18, bottom:8, left:12 }}>
                 <defs>
@@ -6390,7 +6474,17 @@ export default function App() {
 
           <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(360px, 1fr))', gap:'16px', marginBottom:'16px' }}>
             <div style={S.card}>
-              <div style={S.cardTitle}>SECTOR WEIGHTS — ACTIVE vs TARGET</div>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:'12px', marginBottom:'8px' }}>
+                <div style={S.cardTitle}>SECTOR WEIGHTS — ACTIVE vs TARGET</div>
+                <button
+                  type="button"
+                  onClick={() => exportCurrentVisual('Sector Weights Active vs Target', sectorChartBars)}
+                  disabled={!sectorChartBars.length}
+                  style={{ ...S.btn, padding:'4px 10px', fontSize:'10px', borderColor:PALETTE.borderStrong, color:PALETTE.accentBright, opacity: sectorChartBars.length ? 1 : 0.45 }}
+                >
+                  Export
+                </button>
+              </div>
               <ResponsiveContainer width="100%" height={sectorChartHeight}>
                 <BarChart data={sectorChartBars} layout="vertical" margin={{ top:10, right:26, bottom:8, left:8 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#111" horizontal={false} />
@@ -6417,6 +6511,14 @@ export default function App() {
                   <div style={{ display:'flex', gap:'10px', fontSize:'10px', color:'#666', flexWrap:'wrap' }}>
                     <span style={{ color:'#00d4ff' }}>Open {fmt$(sectorDetail.openDollarReturn)} · Closed {fmt$(sectorDetail.closedDollarReturn)}</span>
                     <span style={{ color: sectorDetail.actualAllocationAlpha >= 0 ? '#00e676' : '#ff4444' }}>Decision Alpha {fmtPct(sectorDetail.actualAllocationAlpha)}</span>
+                    <button
+                      type="button"
+                      onClick={() => exportCurrentVisual(`${selectedSector} Sleeve Return vs Benchmark`, sectorComparisonChart)}
+                      disabled={!sectorComparisonChart.length}
+                      style={{ ...S.btn, padding:'3px 8px', fontSize:'10px', borderColor:PALETTE.borderStrong, color:PALETTE.accentBright, opacity: sectorComparisonChart.length ? 1 : 0.45 }}
+                    >
+                      Export
+                    </button>
                   </div>
                 )}
               </div>
@@ -6471,7 +6573,17 @@ export default function App() {
 
           <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(320px, 1fr))', gap:'16px', marginBottom:'16px' }}>
             <div style={S.card}>
-              <div style={S.cardTitle}>SECTOR DECISION ALPHA — SLEEVE vs BENCHMARK</div>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:'12px', marginBottom:'8px' }}>
+                <div style={S.cardTitle}>SECTOR DECISION ALPHA — SLEEVE vs BENCHMARK</div>
+                <button
+                  type="button"
+                  onClick={() => exportCurrentVisual('Sector Decision Alpha', sectorChartBars)}
+                  disabled={!sectorChartBars.length}
+                  style={{ ...S.btn, padding:'4px 10px', fontSize:'10px', borderColor:PALETTE.borderStrong, color:PALETTE.accentBright, opacity: sectorChartBars.length ? 1 : 0.45 }}
+                >
+                  Export
+                </button>
+              </div>
               <ResponsiveContainer width="100%" height={sectorChartHeight}>
                 <BarChart data={sectorChartBars} layout="vertical" margin={{ top:10, right:26, bottom:8, left:8 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#111" horizontal={false} />
@@ -6691,7 +6803,17 @@ export default function App() {
           {/* Realized by sector */}
           {realizedBySector.length > 0 && (
             <div style={{ ...S.card, marginBottom:'16px' }}>
-              <div style={S.cardTitle}>REALIZED P&L BY SECTOR</div>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:'12px', marginBottom:'8px' }}>
+                <div style={S.cardTitle}>REALIZED P&L BY SECTOR</div>
+                <button
+                  type="button"
+                  onClick={() => exportCurrentVisual('Realized P&L By Sector', realizedBySector)}
+                  disabled={!realizedBySector.length}
+                  style={{ ...S.btn, padding:'4px 10px', fontSize:'10px', borderColor:PALETTE.borderStrong, color:PALETTE.accentBright }}
+                >
+                  Export
+                </button>
+              </div>
               <ResponsiveContainer width="100%" height={realizedSectorChartHeight}>
                 <BarChart data={realizedBySector} layout="vertical" margin={{ top:10, right:26, bottom:8, left:8 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#111" horizontal={false} />
@@ -6838,6 +6960,14 @@ export default function App() {
                   <div style={{ display:'flex', gap:'6px', flexWrap:'wrap', alignItems:'center' }}>
                     <button
                       type="button"
+                      onClick={() => exportCurrentVisual('Correlation Matrix', visualExportTables.risk_correlation_matrix)}
+                      disabled={!riskCorrelationItems.length}
+                      style={{ ...S.btn, borderColor:PALETTE.borderStrong, color:PALETTE.accentBright, opacity: riskCorrelationItems.length ? 1 : 0.45 }}
+                    >
+                      Export
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => setRiskMatrixMode('sectors')}
                       style={{ ...S.btn, ...(riskMatrixMode === 'sectors' ? S.btnActive : {}) }}
                     >
@@ -6920,65 +7050,60 @@ export default function App() {
               </div>
 
               {/* Drawdown chart */}
-              {(() => {
-                const ddData = [];
-                let peak = activeHistory[0]?.[1] || 1;
-                for (const [date, val] of activeHistory) {
-                  if (val > peak) peak = val;
-                  ddData.push({ date, dd: ((val - peak) / peak) * 100 });
-                }
-                const filtered = filterByTimeframe(ddData.map(d => [d.date, d.dd]), timeframe);
-                return (
-                  <div style={{ ...S.card, marginBottom:'16px' }}>
-                    <div style={S.cardTitle}>DRAWDOWN CHART</div>
-                    <ResponsiveContainer width="100%" height={180}>
-                      <AreaChart data={filtered.map(([d,v]) => ({ date:d, dd:v }))} margin={{ top:10, right:18, bottom:8, left:10 }}>
-                        <defs>
-                          <linearGradient id="ddGrad" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor="#ff4444" stopOpacity={0.3}/>
-                            <stop offset="95%" stopColor="#ff4444" stopOpacity={0.05}/>
-                          </linearGradient>
-                        </defs>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#111" />
-                        <XAxis dataKey="date" tick={CHART_TICK_STYLE} tickFormatter={d => d.slice(0,7)} interval={getTickInterval(filtered.length)} minTickGap={24} tickMargin={8} />
-                        <YAxis width={62} tick={CHART_TICK_STYLE} tickFormatter={v => `${v.toFixed(1)}%`} tickMargin={8} />
-                        <Tooltip content={<CustomTooltip mode="pct" />} />
-                        <ReferenceLine y={0} stroke="#333" />
-                        <Area type="monotone" dataKey="dd" stroke="#ff4444" fill="url(#ddGrad)" strokeWidth={1.5} dot={false} name="Drawdown" />
-                      </AreaChart>
-                    </ResponsiveContainer>
-                  </div>
-                );
-              })()}
+              <div style={{ ...S.card, marginBottom:'16px' }}>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:'12px', marginBottom:'8px' }}>
+                  <div style={S.cardTitle}>DRAWDOWN CHART</div>
+                  <button
+                    type="button"
+                    onClick={() => exportCurrentVisual('Drawdown Chart', riskDrawdownData)}
+                    disabled={!riskDrawdownData.length}
+                    style={{ ...S.btn, padding:'4px 10px', fontSize:'10px', borderColor:PALETTE.borderStrong, color:PALETTE.accentBright, opacity: riskDrawdownData.length ? 1 : 0.45 }}
+                  >
+                    Export
+                  </button>
+                </div>
+                <ResponsiveContainer width="100%" height={180}>
+                  <AreaChart data={riskDrawdownData} margin={{ top:10, right:18, bottom:8, left:10 }}>
+                    <defs>
+                      <linearGradient id="ddGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#ff4444" stopOpacity={0.3}/>
+                        <stop offset="95%" stopColor="#ff4444" stopOpacity={0.05}/>
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#111" />
+                    <XAxis dataKey="date" tick={CHART_TICK_STYLE} tickFormatter={d => d.slice(0,7)} interval={getTickInterval(riskDrawdownData.length)} minTickGap={24} tickMargin={8} />
+                    <YAxis width={62} tick={CHART_TICK_STYLE} tickFormatter={v => `${v.toFixed(1)}%`} tickMargin={8} />
+                    <Tooltip content={<CustomTooltip mode="pct" />} />
+                    <ReferenceLine y={0} stroke="#333" />
+                    <Area type="monotone" dataKey="dd" stroke="#ff4444" fill="url(#ddGrad)" strokeWidth={1.5} dot={false} name="Drawdown" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
 
               {/* Rolling 30-day vol */}
-              {(() => {
-                if (activeHistory.length < 32) return null;
-                const rolling = [];
-                for (let i = 31; i < activeHistory.length; i++) {
-                  const window = activeHistory.slice(i-30, i+1);
-                  const rets = window.slice(1).map((_, j) => (window[j+1][1] - window[j][1]) / window[j][1]);
-                  const mean = rets.reduce((a,b)=>a+b,0)/rets.length;
-                  const variance = rets.reduce((a,b)=>a+(b-mean)**2,0)/rets.length;
-                  const vol = Math.sqrt(variance * 252) * 100;
-                  rolling.push({ date: activeHistory[i][0], vol });
-                }
-                const filtered = filterByTimeframe(rolling.map(d => [d.date, d.vol]), timeframe);
-                return (
-                  <div style={S.card}>
+              {riskRollingVolData.length > 0 && (
+                <div style={S.card}>
+                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:'12px', marginBottom:'8px' }}>
                     <div style={S.cardTitle}>ROLLING 30-DAY VOLATILITY (ANNUALIZED)</div>
-                    <ResponsiveContainer width="100%" height={180}>
-                      <LineChart data={filtered.map(([d,v]) => ({ date:d, vol:v }))} margin={{ top:10, right:18, bottom:8, left:10 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#111" />
-                        <XAxis dataKey="date" tick={CHART_TICK_STYLE} tickFormatter={d => d.slice(0,7)} interval={getTickInterval(filtered.length)} minTickGap={24} tickMargin={8} />
-                        <YAxis width={62} tick={CHART_TICK_STYLE} tickFormatter={v => `${v.toFixed(1)}%`} tickMargin={8} />
-                        <Tooltip content={<CustomTooltip mode="pct" />} />
-                        <Line type="monotone" dataKey="vol" stroke="#ffd600" dot={false} strokeWidth={2} name="30D Vol" />
-                      </LineChart>
-                    </ResponsiveContainer>
+                    <button
+                      type="button"
+                      onClick={() => exportCurrentVisual('Rolling 30 Day Volatility', riskRollingVolData)}
+                      style={{ ...S.btn, padding:'4px 10px', fontSize:'10px', borderColor:PALETTE.borderStrong, color:PALETTE.accentBright }}
+                    >
+                      Export
+                    </button>
                   </div>
-                );
-              })()}
+                  <ResponsiveContainer width="100%" height={180}>
+                    <LineChart data={riskRollingVolData} margin={{ top:10, right:18, bottom:8, left:10 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#111" />
+                      <XAxis dataKey="date" tick={CHART_TICK_STYLE} tickFormatter={d => d.slice(0,7)} interval={getTickInterval(riskRollingVolData.length)} minTickGap={24} tickMargin={8} />
+                      <YAxis width={62} tick={CHART_TICK_STYLE} tickFormatter={v => `${v.toFixed(1)}%`} tickMargin={8} />
+                      <Tooltip content={<CustomTooltip mode="pct" />} />
+                      <Line type="monotone" dataKey="vol" stroke="#ffd600" dot={false} strokeWidth={2} name="30D Vol" />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
             </>
           ) : (
             <div style={{ ...S.card, textAlign:'center', padding:'48px', color:'#333' }}>
