@@ -255,26 +255,6 @@ function exportScalar(value) {
   return String(value);
 }
 
-function csvEscape(value) {
-  const text = exportScalar(value);
-  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
-}
-
-function tableRowsToCombinedCsv(tables = {}) {
-  const tableEntries = Object.entries(tables).filter(([, rows]) => Array.isArray(rows) && rows.length);
-  const columns = [
-    'table',
-    ...new Set(tableEntries.flatMap(([, rows]) => rows.flatMap((row) => Object.keys(row || {})))),
-  ];
-  const lines = [columns.map(csvEscape).join(',')];
-  tableEntries.forEach(([tableName, rows]) => {
-    rows.forEach((row) => {
-      lines.push(columns.map((column) => csvEscape(column === 'table' ? tableName : row?.[column])).join(','));
-    });
-  });
-  return lines.join('\n');
-}
-
 function downloadTextFile(filename, content, mimeType = 'text/plain;charset=utf-8') {
   if (typeof document === 'undefined') return;
   const blob = new Blob([content], { type: mimeType });
@@ -286,6 +266,92 @@ function downloadTextFile(filename, content, mimeType = 'text/plain;charset=utf-
   link.click();
   link.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 250);
+}
+
+function humanizeColumnName(value) {
+  return String(value || '')
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase())
+    .replace(/\bPct\b/g, '%')
+    .replace(/\bGl\b/g, 'G/L')
+    .replace(/\bNav\b/g, 'NAV')
+    .replace(/\bPnl\b/g, 'P&L')
+    .replace(/\bSpx\b/g, 'SPX')
+    .replace(/\bEtf\b/g, 'ETF');
+}
+
+function excelXmlEscape(value) {
+  return exportScalar(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function excelSheetName(title, usedNames) {
+  const base = String(title || 'Table')
+    .replace(/[\[\]:*?/\\]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 31) || 'Table';
+  let name = base;
+  let index = 2;
+  while (usedNames.has(name)) {
+    const suffix = ` ${index}`;
+    name = `${base.slice(0, 31 - suffix.length)}${suffix}`;
+    index += 1;
+  }
+  usedNames.add(name);
+  return name;
+}
+
+function excelCell(value, styleId = '') {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return `<Cell${styleId ? ` ss:StyleID="${styleId}"` : ''}><Data ss:Type="Number">${value}</Data></Cell>`;
+  }
+  return `<Cell${styleId ? ` ss:StyleID="${styleId}"` : ''}><Data ss:Type="String">${excelXmlEscape(value)}</Data></Cell>`;
+}
+
+function tablesToExcelWorkbook(tables = {}, tableTitles = {}) {
+  const entries = Object.entries(tables).filter(([, rows]) => Array.isArray(rows) && rows.length);
+  const usedNames = new Set();
+  const worksheets = entries.map(([key, rows]) => {
+    const title = tableTitles[key] || humanizeColumnName(key);
+    const sheetName = excelSheetName(title, usedNames);
+    const columns = [...new Set(rows.flatMap((row) => Object.keys(row || {})))];
+    const headerRow = columns.map((column) => excelCell(humanizeColumnName(column), 'Header')).join('');
+    const dataRows = rows.map((row) => (
+      `<Row>${columns.map((column) => excelCell(row?.[column])).join('')}</Row>`
+    )).join('');
+    return `
+      <Worksheet ss:Name="${excelXmlEscape(sheetName)}">
+        <Table>
+          <Row>${excelCell(title, 'Title')}</Row>
+          <Row />
+          <Row>${headerRow}</Row>
+          ${dataRows}
+        </Table>
+      </Worksheet>`;
+  }).join('');
+
+  return `<?xml version="1.0"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+  xmlns:o="urn:schemas-microsoft-com:office:office"
+  xmlns:x="urn:schemas-microsoft-com:office:excel"
+  xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"
+  xmlns:html="http://www.w3.org/TR/REC-html40">
+  <Styles>
+    <Style ss:ID="Title">
+      <Font ss:Bold="1" ss:Size="14" />
+    </Style>
+    <Style ss:ID="Header">
+      <Font ss:Bold="1" />
+      <Interior ss:Color="#D9EAF7" ss:Pattern="Solid" />
+    </Style>
+  </Styles>
+  ${worksheets}
+</Workbook>`;
 }
 
 function clearJSONStorage(key) {
@@ -5567,16 +5633,33 @@ export default function App() {
     const slugScope = selectedAccount === 'ALL'
       ? 'all-accounts'
       : getAccountDisplayName(selectedAccount, accountDisplayNames, { short: true }).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'account';
-    const baseName = `barker-visual-tables-${slugScope}-${stamp}`;
+    const tableTitles = {
+      metadata: 'Export Notes',
+      dashboard_metrics: 'Dashboard Metrics',
+      account_summary: 'Account Summary',
+      account_display_names: 'Account Display Names',
+      balance_history: 'Balance History',
+      overview_chart: 'Overview Chart Data',
+      absolute_nav_chart: 'Absolute NAV Chart Data',
+      performance_comparison_chart: 'Performance Comparison Chart',
+      performance_focus_chart: 'Performance Focus Chart',
+      performance_bar_chart: 'Performance Bar Chart',
+      performance_series_summary: 'Performance Series Summary',
+      performance_focus_ranking: 'Performance Ranking',
+      sector_attribution: 'Sector Attribution',
+      sector_chart_bars: 'Sector Chart Bars',
+      selected_sector_comparison_chart: 'Selected Sector Chart',
+      sector_totals: 'Sector Totals',
+      realized_by_sector: 'Realized P&L By Sector',
+      realized_trades: 'Realized Trades',
+      positions: 'Positions',
+      risk_correlation_items: 'Risk Correlation Items',
+      risk_correlation_matrix: 'Risk Correlation Matrix',
+    };
     downloadTextFile(
-      `${baseName}.csv`,
-      tableRowsToCombinedCsv(visualExportTables),
-      'text/csv;charset=utf-8',
-    );
-    downloadTextFile(
-      `${baseName}.json`,
-      JSON.stringify({ tables: visualExportTables }, null, 2),
-      'application/json;charset=utf-8',
+      `barker-clean-excel-tables-${slugScope}-${stamp}.xls`,
+      tablesToExcelWorkbook(visualExportTables, tableTitles),
+      'application/vnd.ms-excel;charset=utf-8',
     );
   }, [accountDisplayNames, selectedAccount, visualExportTables]);
 
