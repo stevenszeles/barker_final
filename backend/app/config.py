@@ -103,10 +103,10 @@ class Settings:
         # Default to live-enabled so Schwab/Stooq history works out of the box.
         self.static_mode = os.environ.get("WS_STATIC_MODE", "0") == "1"
 
-        # Access control. Production defaults to protected; local development
-        # remains frictionless unless explicitly enabled.
+        # Access control. This deployment is a read-only classroom demo, so auth
+        # is off unless BARKER_AUTH_ENABLED=1 is set explicitly.
         environment_is_production = _ENVIRONMENT in {"production", "prod"} or render_runtime
-        self.auth_enabled = _env_bool("BARKER_AUTH_ENABLED", default=environment_is_production)
+        self.auth_enabled = _env_bool("BARKER_AUTH_ENABLED", default=False)
         self.auth_secret = _clean_optional(os.environ.get("BARKER_AUTH_SECRET"))
         self.admin_password = _clean_optional(os.environ.get("BARKER_ADMIN_PASSWORD"))
         self.viewer_password = _clean_optional(os.environ.get("BARKER_VIEWER_PASSWORD"))

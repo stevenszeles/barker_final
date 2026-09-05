@@ -117,6 +117,42 @@ def _instrument(symbol_raw: str, asset_type: str) -> dict[str, Any]:
     }
 
 
+def _split_position_sections(text: str) -> list[str]:
+    """Split an All-Accounts positions export into one block per account.
+
+    Schwab's single-account export has one "Symbol" header. The All-Accounts
+    export concatenates several, each introduced by a bare (unquoted) account
+    line. Parsing that as one file walks the next account's header row into the
+    position rows and fails on its "--" columns, so split it up first.
+
+    Returns one block per account, each shaped like a single-account export.
+    Single-account files come back unchanged as a one-item list.
+    """
+    lines = text.splitlines()
+    headers = [
+        index
+        for index, line in enumerate(lines)
+        if next(iter(csv.reader([line])), [""])[:1] == ["Symbol"]
+    ]
+    if len(headers) <= 1:
+        return [text]
+    # Each account block starts at the label line just above its Symbol header.
+    starts: list[int] = []
+    for header in headers:
+        cursor = header - 1
+        while cursor > 0 and not lines[cursor].strip():
+            cursor -= 1
+        starts.append(cursor)
+    title = lines[0] if lines else ""
+    blocks: list[str] = []
+    for position, start in enumerate(starts):
+        end = starts[position + 1] if position + 1 < len(starts) else len(lines)
+        body = "\n".join(lines[start:end]).strip("\n")
+        if body:
+            blocks.append(f"{title}\n\n{body}\n")
+    return blocks
+
+
 def _parse_positions(text: str, filename: str) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
     account = _account_from_text(f"{filename}\n{text[:1000]}")
     if not account:
@@ -144,6 +180,10 @@ def _parse_positions(text: str, filename: str) -> tuple[str, list[dict[str, Any]
                 filename=filename,
                 row_number=row_number,
             )
+            continue
+        # Schwab emits futures summary rows with "--" in every numeric column.
+        # They are totals, not holdings, like the cash rows handled above.
+        if symbol in {"Futures Cash", "Futures Positions Market Value"}:
             continue
         if symbol == "Positions Total":
             account_value = _required_money(
@@ -325,7 +365,33 @@ async def parse_uploads(files: list[UploadFile]) -> list[ParsedFile]:
     parsed: list[ParsedFile] = []
     for filename, text, content, file_type in raw_files:
         if file_type == "positions":
-            account, rows, metadata = _parse_positions(text, filename)
+            blocks = _split_position_sections(text)
+            for block in blocks:
+                try:
+                    account, rows, metadata = _parse_positions(block, filename)
+                except HTTPException:
+                    # An All-Accounts export lists cash-only accounts too. They
+                    # hold no positions, so skip them rather than failing the
+                    # whole upload. A single-account file still surfaces its error.
+                    if len(blocks) > 1:
+                        continue
+                    raise
+                parsed.append(
+                    ParsedFile(
+                        filename=filename,
+                        file_type=file_type,
+                        account=account,
+                        sha256=hashlib.sha256(block.encode("utf-8")).hexdigest(),
+                        byte_size=len(block.encode("utf-8")),
+                        rows=rows,
+                        metadata=metadata,
+                    )
+                )
+            if not any(item.filename == filename for item in parsed):
+                raise HTTPException(
+                    status_code=400, detail=f"No valid position rows found in {filename}"
+                )
+            continue
         elif file_type == "balances":
             account, rows, metadata = _parse_balances(text, filename)
         else:

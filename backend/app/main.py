@@ -32,11 +32,23 @@ def _is_production_runtime() -> bool:
 
 
 def _assert_persistent_storage_configured() -> None:
-    if _is_production_runtime() and not settings.db_url:
-        raise RuntimeError(
-            "DATABASE_URL is required in production. Configure a persistent Postgres database "
-            "before importing dashboard data; SQLite storage on Render is ephemeral and can reset."
+    """Postgres is preferred, but a SQLite-backed demo is explicitly allowed.
+
+    Set WS_ALLOW_EPHEMERAL_SQLITE=1 to run without a managed database. Data is
+    reseeded from the committed snapshot on each boot, which is what the
+    classroom demo wants.
+    """
+    if not _is_production_runtime() or settings.db_url:
+        return
+    if os.getenv("WS_ALLOW_EPHEMERAL_SQLITE", "0") == "1":
+        logging.getLogger(__name__).warning(
+            "Running on ephemeral SQLite storage; imported data resets when the service restarts."
         )
+        return
+    raise RuntimeError(
+        "DATABASE_URL is required in production. Configure a persistent Postgres database, "
+        "or set WS_ALLOW_EPHEMERAL_SQLITE=1 to run the demo on ephemeral SQLite."
+    )
 
 
 def _initialize_runtime_services(application: FastAPI) -> None:

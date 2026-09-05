@@ -2,42 +2,32 @@ services:
   - type: web
     name: barker-dashboard
     runtime: docker
-    plan: starter
-    autoDeployTrigger: checksPass
+    plan: free
+    autoDeploy: true
     dockerfilePath: ./Dockerfile
-    healthCheckPath: /health/ready
+    healthCheckPath: /health
     maxShutdownDelaySeconds: 30
     envVars:
       - key: ENVIRONMENT
         value: production
+      # Paste a Postgres connection string here in the Render dashboard (a free
+      # Supabase project works). Without it the service falls back to SQLite in
+      # /tmp, which free-tier Render wipes on every restart -- uploaded CSVs
+      # would not survive.
       - key: DATABASE_URL
-        fromDatabase:
-          name: barker-postgres
-          property: connectionString
+        sync: false
+      - key: WS_ALLOW_EPHEMERAL_SQLITE
+        value: "1"
+      - key: WS_DB_PATH
+        value: /tmp/workstation.db
+      # Read-only dashboard shared with a class: no sign-in step.
       - key: BARKER_AUTH_ENABLED
-        value: "1"
-      - key: BARKER_AUTH_SECRET
-        generateValue: true
-      - key: BARKER_ADMIN_PASSWORD
-        sync: false
-      - key: BARKER_VIEWER_PASSWORD
-        sync: false
-      - key: BARKER_SECURE_COOKIES
-        value: "1"
+        value: "0"
       - key: BARKER_TRADING_ENABLED
         value: "0"
       - key: WS_STATIC_MODE
         value: "1"
       - key: WS_LIVE_QUOTES
         value: "0"
-      - key: WS_DB_FALLBACK_TO_SQLITE
-        value: "0"
-      - key: WS_DB_POOL_MAX
-        value: "4"
-
-databases:
-  - name: barker-postgres
-    plan: basic-256mb
-    databaseName: barker
-    user: barker
-    ipAllowList: []
+      - key: WS_LOG_PATH
+        value: /tmp/workstation.log
