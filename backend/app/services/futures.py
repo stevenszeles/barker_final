@@ -1,7 +1,5 @@
 from typing import Dict, Any, List, Optional, Tuple
-from datetime import datetime
 from ..db import with_conn
-from ..config import settings
 from . import schwab, stooq
 
 MONTH_CODES = {
@@ -80,53 +78,6 @@ def normalize_future_quote_symbol(symbol: str) -> str:
     if not s:
         return s
     return s if s.startswith("/") else f"/{s}"
-
-
-def get_futures_ladder_demo() -> List[Dict[str, Any]]:
-    def _run(conn):
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT id, symbol, expiry, multiplier
-            FROM instruments
-            WHERE asset_class='future'
-            ORDER BY expiry
-            """,
-        )
-        return [dict(r) for r in cur.fetchall()]
-
-    rows = with_conn(_run)
-    if rows:
-        return rows
-
-    inverse_month = {v: k for k, v in MONTH_CODES.items()}
-    today = datetime.now().date()
-    base_month = today.month + 1
-    year = today.year % 100
-    if base_month > 12:
-        base_month -= 12
-        year = (today.year + 1) % 100
-
-    def _make_symbol(root: str, month: int, yy: int) -> str:
-        code = inverse_month.get(month, "F")
-        return f"{root}{code}{yy:02d}"
-
-    demo_roots = ["GC", "ES", "NQ"]
-    ladder: List[Dict[str, Any]] = []
-    for root in demo_roots:
-        symbol = _make_symbol(root, base_month, year)
-        spec = get_future_spec(symbol)
-        ladder.append(
-            {
-                "id": f"{symbol}:FUTURE",
-                "symbol": symbol,
-                "expiry": spec.get("expiry"),
-                "multiplier": spec.get("multiplier"),
-                "maintenance_margin": spec.get("maintenance_margin"),
-                "initial_margin": spec.get("initial_margin"),
-            }
-        )
-    return ladder
 
 
 def get_futures_ladder() -> List[Dict[str, Any]]:

@@ -1,7 +1,5 @@
-from typing import Dict, Any, List, Optional, Tuple
-from datetime import datetime, timedelta
-from ..db import with_conn
-from . import stooq
+from typing import Optional, Tuple
+from datetime import datetime
 
 
 def is_osi_symbol(symbol: str) -> bool:
@@ -84,58 +82,3 @@ def normalize_option_fields(
         if osi:
             return osi, (underlying or "").strip().upper(), normalized_expiry, option_type.upper(), float(strike)
     raise ValueError("Invalid option symbol. Provide OSI or underlying/expiry/type/strike.")
-
-
-def get_option_chain_demo(underlying: str) -> List[Dict[str, Any]]:
-    def _run(conn):
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT id, symbol, expiry, strike, option_type, multiplier
-            FROM instruments
-            WHERE asset_class='option' AND underlying=?
-            ORDER BY expiry, strike
-            """,
-            (underlying,),
-        )
-        return [dict(r) for r in cur.fetchall()]
-
-    rows = with_conn(_run)
-    if rows:
-        return rows
-
-    base_price = 100.0
-    try:
-        quotes = stooq.get_quotes([underlying])
-        if quotes:
-            quote = quotes[0]
-            trade = quote.get("lastTrade") or {}
-            base_price = float(trade.get("price") or base_price)
-    except Exception:
-        base_price = 100.0
-
-    step = 5.0 if base_price >= 100 else 1.0
-    center = round(base_price / step) * step
-    strikes = [center + (idx - 2.5) * step for idx in range(6)]
-    expiry = (datetime.now().date() + timedelta(days=30)).isoformat()
-    synthetic: List[Dict[str, Any]] = []
-    for strike in strikes:
-        for opt_type in ("CALL", "PUT"):
-            mark = max(0.1, abs(base_price - strike) * 0.02 + 0.5)
-            bid = max(mark - 0.05, 0.01)
-            ask = mark + 0.05
-            symbol = build_osi_symbol(underlying, expiry, opt_type, strike)
-            synthetic.append(
-                {
-                    "id": f"{symbol}:OPTION",
-                    "symbol": symbol,
-                    "expiry": expiry,
-                    "strike": float(strike),
-                    "option_type": opt_type,
-                    "multiplier": 100,
-                    "bid": round(bid, 2),
-                    "ask": round(ask, 2),
-                    "mark": round(mark, 2),
-                }
-            )
-    return synthetic

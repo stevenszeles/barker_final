@@ -7,7 +7,7 @@ import pandas as pd
 from ..config import settings
 from . import legacy_engine as engine
 
-STAMP_SOURCE = "demo" if settings.demo_mode else "local" if settings.marketdata_only else "schwab"
+STAMP_SOURCE = "static" if settings.static_mode else "local" if settings.marketdata_only else "schwab"
 TRADING_DAYS = 252.0
 RISK_FREE_ANNUAL = 0.02
 
@@ -79,7 +79,9 @@ def _greek_exposures(positions: List[Dict[str, Any]]) -> Dict[str, float]:
         px = _safe_float(row.get("price"), 0.0)
         mult = _safe_float(row.get("multiplier"), 1.0) or 1.0
         notion = qty * px * mult
-        delta_exp += _safe_float(row.get("delta"), 0.0) * notion
+        asset_class = str(row.get("asset_class") or "equity").lower()
+        default_delta = 1.0 if asset_class in {"equity", "future"} else 0.0
+        delta_exp += _safe_float(row.get("delta"), default_delta) * notion
         gamma_exp += _safe_float(row.get("gamma"), 0.0) * qty * mult
         theta_exp += _safe_float(row.get("theta"), 0.0) * qty * mult
         vega_exp += _safe_float(row.get("vega"), 0.0) * qty * mult
@@ -116,6 +118,8 @@ def _build_nav_frame(limit: int = 900) -> pd.DataFrame:
         bench_index = pd.Series(np.nan, index=df.index)
 
     out = pd.DataFrame({"date": df["date"], "portfolio_index": portfolio_index, "bench_index": bench_index})
+    out.attrs["return_method"] = str(points[-1].get("return_method") or "unknown")
+    out.attrs["data_quality"] = str(points[-1].get("data_quality") or "unknown")
     out["portfolio_ret"] = out["portfolio_index"].pct_change()
     out["bench_ret"] = out["bench_index"].pct_change()
     return out
@@ -154,7 +158,14 @@ def _return_stats(nav_df: pd.DataFrame) -> Dict[str, float]:
     downside = port[port < 0]
     down_daily = float(downside.std(ddof=1)) if len(downside) > 1 else 0.0
 
-    years = max(len(port) / TRADING_DAYS, 1e-9)
+    years = len(port) / TRADING_DAYS
+    try:
+        observed_dates = pd.to_datetime(nav_df.loc[port.index, "date"], errors="coerce").dropna()
+        if len(observed_dates) >= 2:
+            years = max((observed_dates.iloc[-1] - observed_dates.iloc[0]).days / 365.25, 1.0 / TRADING_DAYS)
+    except Exception:
+        pass
+    years = max(years, 1e-9)
     total_growth = float(np.prod(1.0 + port.to_numpy(dtype=float)))
     if total_growth > 0:
         stats["annualized_return"] = float(total_growth ** (1.0 / years) - 1.0)
@@ -242,7 +253,7 @@ def _build_metrics(snapshot: Dict[str, Any], nav_df: pd.DataFrame) -> List[Dict[
         _metric_row("win_rate", ret_stats["win_rate"]),
         _metric_row("best_day_return", ret_stats["best_day_return"]),
         _metric_row("worst_day_return", ret_stats["worst_day_return"]),
-        _metric_row("delta", (net / gross) if gross else 0.0),
+        _metric_row("net_to_gross_ratio", (net / gross) if gross else 0.0),
         _metric_row("delta_exposure", greeks["delta_exposure"]),
         _metric_row("gamma_exposure", greeks["gamma_exposure"]),
         _metric_row("theta_exposure", greeks["theta_exposure"]),
@@ -261,36 +272,7 @@ def _build_metrics(snapshot: Dict[str, Any], nav_df: pd.DataFrame) -> List[Dict[
     return metrics
 
 
-def _top_sector_labels(positions: List[Dict[str, Any]], max_count: int = 4) -> List[str]:
-    agg: Dict[str, float] = {}
-    for row in positions:
-        sector = str(row.get("sector") or "").strip()
-        if not sector:
-            continue
-        agg[sector] = agg.get(sector, 0.0) + abs(_safe_float(row.get("market_value"), 0.0))
-    ranked = sorted(agg.items(), key=lambda kv: kv[1], reverse=True)
-    return [name for name, _ in ranked[:max_count]]
-
-
-def _series_from_sector(sector: str, limit: int = 700) -> pd.Series:
-    points = engine.get_sector_series(sector=sector, limit=limit, source="auto", account=None) or []
-    if not points:
-        return pd.Series(dtype=float, name=sector)
-    df = pd.DataFrame(points)
-    if df.empty:
-        return pd.Series(dtype=float, name=sector)
-    df["date"] = df["date"].astype(str)
-    df["sector"] = pd.to_numeric(df["sector"], errors="coerce")
-    df = df.dropna(subset=["sector"]).sort_values("date").drop_duplicates("date", keep="last")
-    if df.empty:
-        return pd.Series(dtype=float, name=sector)
-    idx = 1.0 + (df["sector"].astype(float) / 100.0)
-    ret = idx.pct_change()
-    out = pd.Series(ret.to_numpy(dtype=float), index=df["date"].tolist(), name=sector).dropna()
-    return out
-
-
-def _correlation_payload(nav_df: pd.DataFrame, positions: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _correlation_payload(nav_df: pd.DataFrame) -> Dict[str, Any]:
     empty = {"labels": [], "matrix": [], "observations": 0}
     if nav_df is None or nav_df.empty:
         return empty
@@ -301,11 +283,6 @@ def _correlation_payload(nav_df: pd.DataFrame, positions: List[Dict[str, Any]]) 
     b = pd.Series(nav_df["bench_ret"].to_numpy(dtype=float), index=nav_df["date"].astype(str).tolist(), name="SPX").dropna()
     if len(b):
         series_map["SPX"] = b
-
-    for sector in _top_sector_labels(positions, max_count=4):
-        s = _series_from_sector(sector, limit=700)
-        if len(s) >= 20:
-            series_map[sector] = s
 
     if len(series_map) < 2:
         return empty
@@ -371,8 +348,10 @@ def get_risk_profile() -> Dict[str, Any]:
     nav_df = _build_nav_frame(limit=900)
     metrics = _build_metrics(snapshot, nav_df)
     return {
-        "stamp": _stamp(),
+        "stamp": snapshot.get("stamp") or _stamp(),
+        "return_method": nav_df.attrs.get("return_method", "unknown"),
+        "data_quality": nav_df.attrs.get("data_quality", "unknown"),
         "metrics": metrics,
-        "correlation": _correlation_payload(nav_df, positions),
+        "correlation": _correlation_payload(nav_df),
         "rolling": _rolling_payload(nav_df),
     }

@@ -1,10 +1,11 @@
 import logging
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 import httpx
 from typing import Optional
 from pydantic import BaseModel
 from ..schemas import TradeBlotter, TradeImpact
 from ..services.trades import get_blotter, preview_trade, submit_trade, submit_multi, cancel_trade, replace_trade
+from ..security import Identity, require_admin
 
 router = APIRouter(prefix="/trade", tags=["trade"])
 logger = logging.getLogger(__name__)
@@ -100,7 +101,7 @@ def preview(payload: TradePayload):
 
 
 @router.post("/submit")
-def submit(payload: TradePayload):
+def submit(payload: TradePayload, _identity: Identity = Depends(require_admin)):
     try:
         return submit_trade(payload.model_dump())
     except Exception as exc:
@@ -108,7 +109,7 @@ def submit(payload: TradePayload):
 
 
 @router.post("/submit-multi")
-def submit_multi_legs(payload: MultiLegPayload):
+def submit_multi_legs(payload: MultiLegPayload, _identity: Identity = Depends(require_admin)):
     try:
         return submit_multi(payload.model_dump())
     except Exception as exc:
@@ -116,12 +117,12 @@ def submit_multi_legs(payload: MultiLegPayload):
 
 
 @router.post("/cancel")
-def cancel(payload: CancelPayload):
+def cancel(payload: CancelPayload, _identity: Identity = Depends(require_admin)):
     return cancel_trade(payload.trade_id)
 
 
 @router.post("/replace")
-def replace(payload: ReplacePayload):
+def replace(payload: ReplacePayload, _identity: Identity = Depends(require_admin)):
     data = payload.model_dump()
     original_trade_id = data.pop("original_trade_id")
     return replace_trade(original_trade_id, data)

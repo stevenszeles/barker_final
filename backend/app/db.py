@@ -9,11 +9,14 @@ from datetime import datetime
 try:
     import psycopg2
     import psycopg2.extras
+    import psycopg2.pool
 except Exception:  # pragma: no cover - optional dependency
     psycopg2 = None
 from .config import settings
 
 _LOCK = threading.RLock()
+_POOL_LOCK = threading.Lock()
+_POSTGRES_POOL = None
 logger = logging.getLogger(__name__)
 _SQLITE_FALLBACK_ACTIVE = False
 _LAST_CONNECTION_ERROR = None
@@ -191,8 +194,10 @@ class _DBCursor:
 
 
 class _DBConn:
-    def __init__(self, conn):
+    def __init__(self, conn, release=None):
         self._conn = conn
+        self._release = release
+        self._closed = False
 
     def cursor(self):
         return _DBCursor(self._conn.cursor())
@@ -200,7 +205,15 @@ class _DBConn:
     def commit(self):
         return self._conn.commit()
 
+    def rollback(self):
+        return self._conn.rollback()
+
     def close(self):
+        if self._closed:
+            return None
+        self._closed = True
+        if self._release is not None:
+            return self._release(self._conn)
         return self._conn.close()
 
     def execute(self, *args, **kwargs):
@@ -793,11 +806,39 @@ def ensure_schema() -> None:
     conn.close()
 
 
+def _get_postgres_pool():
+    global _POSTGRES_POOL, _LAST_CONNECTION_ERROR
+    if _POSTGRES_POOL is not None:
+        return _POSTGRES_POOL
+    with _POOL_LOCK:
+        if _POSTGRES_POOL is not None:
+            return _POSTGRES_POOL
+        if psycopg2 is None:
+            raise RuntimeError("psycopg2 is required for Postgres. Install backend requirements.")
+        _POSTGRES_POOL = psycopg2.pool.ThreadedConnectionPool(
+            minconn=settings.db_pool_min,
+            maxconn=settings.db_pool_max,
+            dsn=settings.db_url,
+            cursor_factory=psycopg2.extras.RealDictCursor,
+            connect_timeout=5,
+            options=f"-c statement_timeout={int(settings.db_statement_timeout_ms)}",
+        )
+        _LAST_CONNECTION_ERROR = None
+        return _POSTGRES_POOL
+
+
+def close_pool() -> None:
+    global _POSTGRES_POOL
+    with _POOL_LOCK:
+        pool = _POSTGRES_POOL
+        _POSTGRES_POOL = None
+    if pool is not None:
+        pool.closeall()
+
+
 def connect():
     global _SQLITE_FALLBACK_ACTIVE, _LAST_CONNECTION_ERROR
     if _is_postgres():
-        if psycopg2 is None:
-            raise RuntimeError("psycopg2 is required for Postgres. Install backend requirements.")
         if not _SQLITE_FALLBACK_ACTIVE:
             default_attempts = "2" if getattr(settings, "db_fallback_to_sqlite", False) else "5"
             max_attempts = max(1, int(os.getenv("WS_DB_CONNECT_ATTEMPTS", default_attempts)))
@@ -805,10 +846,19 @@ def connect():
             last_error = None
             for attempt in range(1, max_attempts + 1):
                 try:
-                    conn = psycopg2.connect(settings.db_url, cursor_factory=psycopg2.extras.RealDictCursor)
+                    pool = _get_postgres_pool()
+                    conn = pool.getconn()
+                    if conn.closed:
+                        pool.putconn(conn, close=True)
+                        conn = pool.getconn()
+                    if conn.status != psycopg2.extensions.STATUS_READY:
+                        conn.rollback()
                     _LAST_CONNECTION_ERROR = None
-                    return _DBConn(conn)
-                except psycopg2.OperationalError as exc:
+                    return _DBConn(
+                        conn,
+                        release=lambda raw_conn: _release_postgres_connection(pool, raw_conn),
+                    )
+                except (psycopg2.OperationalError, psycopg2.pool.PoolError) as exc:
                     last_error = exc
                     if attempt >= max_attempts:
                         break
@@ -842,10 +892,38 @@ def connect():
     return _DBConn(conn)
 
 
+def _release_postgres_connection(pool, conn) -> None:
+    try:
+        if not conn.closed and conn.status != psycopg2.extensions.STATUS_READY:
+            conn.rollback()
+        pool.putconn(conn, close=bool(conn.closed))
+    except Exception:
+        try:
+            pool.putconn(conn, close=True)
+        except Exception:
+            pass
+
+
 def with_conn(fn):
+    if _is_postgres():
+        conn = connect()
+        try:
+            return fn(conn)
+        finally:
+            conn.close()
     with _LOCK:
         conn = connect()
         try:
             return fn(conn)
         finally:
             conn.close()
+
+
+def database_ping() -> bool:
+    def _run(conn):
+        cur = conn.cursor()
+        cur.execute("SELECT 1")
+        row = cur.fetchone()
+        return bool(row)
+
+    return bool(with_conn(_run))

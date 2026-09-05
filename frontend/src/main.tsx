@@ -1,13 +1,23 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import App from "./portfolio-dashboard.jsx";
-import "./render-dashboard.css";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import App from "./App";
+import { SessionProvider } from "./auth";
+import "./styles.css";
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: 1,
+      refetchOnWindowFocus: true,
+      gcTime: 10 * 60_000,
+    },
+    mutations: { retry: false },
+  },
+});
 
 class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { error: Error | null }> {
-  constructor(props: { children: React.ReactNode }) {
-    super(props);
-    this.state = { error: null };
-  }
+  state: { error: Error | null } = { error: null };
 
   static getDerivedStateFromError(error: Error) {
     return { error };
@@ -16,11 +26,12 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { err
   render() {
     if (this.state.error) {
       return (
-        <div style={{ padding: 12, color: "#ffb3b3", fontFamily: "monospace", fontSize: 12, whiteSpace: "pre-wrap" }}>
-          UI Error: {this.state.error.message}
-          {"\n"}
-          {this.state.error.stack}
-        </div>
+        <main className="fatal-error">
+          <span className="brand__mark">B</span>
+          <h1>The workstation encountered an unexpected error.</h1>
+          <p>No portfolio data was changed. Reload the application to return to the last validated state.</p>
+          <button className="button button--primary" onClick={() => window.location.reload()}>Reload workstation</button>
+        </main>
       );
     }
     return this.props.children;
@@ -30,7 +41,11 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { err
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <ErrorBoundary>
-      <App />
+      <QueryClientProvider client={queryClient}>
+        <SessionProvider>
+          <App />
+        </SessionProvider>
+      </QueryClientProvider>
     </ErrorBoundary>
-  </React.StrictMode>
+  </React.StrictMode>,
 );

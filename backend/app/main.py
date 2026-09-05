@@ -1,16 +1,16 @@
+from contextlib import asynccontextmanager
 import logging
 import os
-import threading
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from .config import settings
 from .routers import portfolio, risk, trades, status
-from .routers import auth, broker, market, positions, admin, stooq_proxy
-from .workers import start_workers
-from .db import ensure_schema, storage_diagnostics
-from .bootstrap_seed import seed_demo_portfolio_if_empty
+from .routers import auth, broker, market, positions, admin, stooq_proxy, session
+from .db import close_pool, database_ping, ensure_schema, storage_diagnostics
+from .migrations import apply_migrations
+from .security import require_admin, require_viewer, validate_security_configuration
 
 _log_path = settings.log_path
 try:
@@ -26,13 +26,6 @@ except Exception:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     logging.getLogger(__name__).warning("Failed to initialize file logging at %s.", _log_path)
 
-app = FastAPI(title="Workstation", docs_url=None, redoc_url=None)
-app.state.startup_ready = False
-app.state.startup_degraded = False
-app.state.startup_error = None
-app.state.startup_initializing = False
-
-
 def _is_production_runtime() -> bool:
     env = os.getenv("ENVIRONMENT", "").strip().lower()
     return env in {"production", "prod"} or bool(os.getenv("RENDER"))
@@ -46,30 +39,37 @@ def _assert_persistent_storage_configured() -> None:
         )
 
 
-def _initialize_runtime_services() -> None:
-    app.state.startup_initializing = True
+def _initialize_runtime_services(application: FastAPI) -> None:
+    application.state.startup_initializing = True
     try:
-        ensure_schema()
-        app.state.startup_ready = True
-        app.state.startup_degraded = False
-        app.state.startup_error = None
-        # Demo seed can be expensive; keep disabled by default in deployed envs.
-        if os.getenv("WS_SEED_DEMO", "0") == "1":
-            seed_demo_portfolio_if_empty()
-        if os.getenv("VERCEL", "0") != "1":
-            start_workers()
-    except Exception as exc:  # pragma: no cover - startup hardening path
-        app.state.startup_ready = False
-        app.state.startup_degraded = True
-        app.state.startup_error = str(exc)
-        logging.getLogger(__name__).exception("Startup degraded: database initialization failed.")
+        validate_security_configuration()
+        if settings.migrate_on_startup:
+            ensure_schema()
+            apply_migrations()
+        elif not database_ping():
+            raise RuntimeError("Database is unavailable after the migration command completed")
+        application.state.startup_ready = True
+        application.state.startup_degraded = False
+        application.state.startup_error = None
     finally:
-        app.state.startup_initializing = False
+        application.state.startup_initializing = False
 
 
-def _is_local_origin(origin: str) -> bool:
-    lowered = (origin or "").lower()
-    return "localhost" in lowered or "127.0.0.1" in lowered
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    _assert_persistent_storage_configured()
+    _initialize_runtime_services(application)
+    try:
+        yield
+    finally:
+        close_pool()
+
+
+app = FastAPI(title="Barker Portfolio Workstation", docs_url=None, redoc_url=None, lifespan=lifespan)
+app.state.startup_ready = False
+app.state.startup_degraded = False
+app.state.startup_error = None
+app.state.startup_initializing = False
 
 
 allow_all = os.getenv("WS_ALLOW_ALL_ORIGINS", "0") == "1"
@@ -90,11 +90,6 @@ if render_host:
 # De-dupe while preserving order
 allowed_origins = list(dict.fromkeys(allowed_origins))
 
-if not allow_all and settings.static_mode:
-    # If only local origins are configured (or none), default to allow-all in static mode.
-    if not allowed_origins or all(_is_local_origin(origin) for origin in allowed_origins):
-        allow_all = True
-
 if allow_all:
     allowed_origins = ["*"]
 
@@ -102,21 +97,24 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
     allow_credentials=False if allow_all else True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization"],
     max_age=600,
 )
 
-app.include_router(portfolio.router, prefix=settings.api_prefix)
-app.include_router(risk.router, prefix=settings.api_prefix)
-app.include_router(trades.router, prefix=settings.api_prefix)
-app.include_router(status.router, prefix=settings.api_prefix)
-app.include_router(auth.router, prefix=settings.api_prefix)
-app.include_router(broker.router, prefix=settings.api_prefix)
-app.include_router(market.router, prefix=settings.api_prefix)
-app.include_router(stooq_proxy.router, prefix=settings.api_prefix)
-app.include_router(positions.router, prefix=settings.api_prefix)
-app.include_router(admin.router, prefix=settings.api_prefix)
+viewer_dependencies = [Depends(require_viewer)]
+admin_dependencies = [Depends(require_admin)]
+app.include_router(session.router, prefix=settings.api_prefix)
+app.include_router(portfolio.router, prefix=settings.api_prefix, dependencies=viewer_dependencies)
+app.include_router(risk.router, prefix=settings.api_prefix, dependencies=viewer_dependencies)
+app.include_router(trades.router, prefix=settings.api_prefix, dependencies=viewer_dependencies)
+app.include_router(status.router, prefix=settings.api_prefix, dependencies=viewer_dependencies)
+app.include_router(auth.router, prefix=settings.api_prefix, dependencies=admin_dependencies)
+app.include_router(broker.router, prefix=settings.api_prefix, dependencies=admin_dependencies)
+app.include_router(market.router, prefix=settings.api_prefix, dependencies=viewer_dependencies)
+app.include_router(stooq_proxy.router, prefix=settings.api_prefix, dependencies=viewer_dependencies)
+app.include_router(positions.router, prefix=settings.api_prefix, dependencies=viewer_dependencies)
+app.include_router(admin.router, prefix=settings.api_prefix, dependencies=admin_dependencies)
 
 STATIC_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "dist")
@@ -124,17 +122,31 @@ STATIC_DIR = os.path.abspath(
 
 
 @app.get("/health")
-def health():
+@app.get("/health/ready")
+def health(response: Response):
     storage = storage_diagnostics()
-    status = "degraded" if app.state.startup_degraded or storage.get("fallback_active") else "ok"
+    db_ready = False
+    if app.state.startup_ready:
+        try:
+            db_ready = database_ping()
+        except Exception:
+            db_ready = False
+    status = "degraded" if app.state.startup_degraded or storage.get("fallback_active") or not db_ready else "ok"
+    if status != "ok":
+        response.status_code = 503
     return {
         "status": status,
-        "db": "ready" if app.state.startup_ready else "unavailable",
+        "db": "ready" if db_ready else "unavailable",
         "initializing": bool(app.state.startup_initializing),
         "startup_error": app.state.startup_error,
         "db_backend": storage.get("active_backend"),
         "db_fallback_active": storage.get("fallback_active"),
     }
+
+
+@app.get("/health/live")
+def liveness():
+    return {"status": "ok"}
 
 
 @app.get("/version")
@@ -151,13 +163,6 @@ def version():
         "db_backend": storage.get("active_backend"),
         "db_fallback_active": storage.get("fallback_active"),
     }
-
-
-@app.on_event("startup")
-def _startup():
-    _assert_persistent_storage_configured()
-    thread = threading.Thread(target=_initialize_runtime_services, name="runtime-init", daemon=True)
-    thread.start()
 
 
 if os.path.isdir(STATIC_DIR):

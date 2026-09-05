@@ -1,8 +1,9 @@
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 from typing import Optional
 
 from ..services import portfolio
+from ..security import Identity, require_admin
 
 router = APIRouter(prefix="/positions", tags=["positions"])
 
@@ -38,6 +39,10 @@ class BulkPayload(BaseModel):
     account: Optional[str] = None
 
 
+class SectorPayload(BaseModel):
+    sector: str = Field(max_length=80)
+
+
 @router.get("")
 def list_positions(account: Optional[str] = None):
     try:
@@ -47,7 +52,7 @@ def list_positions(account: Optional[str] = None):
 
 
 @router.post("")
-def upsert(payload: PositionPayload):
+def upsert(payload: PositionPayload, _identity: Identity = Depends(require_admin)):
     try:
         data = payload.model_dump(exclude_unset=True)
         if (not data.get("owner")) and data.get("label"):
@@ -61,7 +66,7 @@ def upsert(payload: PositionPayload):
 
 
 @router.delete("/{instrument_id}")
-def delete(instrument_id: str, account: Optional[str] = None):
+def delete(instrument_id: str, account: Optional[str] = None, _identity: Identity = Depends(require_admin)):
     try:
         portfolio.delete_position(instrument_id, account=account)
         return {"ok": True}
@@ -78,7 +83,7 @@ def get_cash():
 
 
 @router.post("/cash")
-def set_cash(payload: CashPayload):
+def set_cash(payload: CashPayload, _identity: Identity = Depends(require_admin)):
     try:
         if payload.account and payload.account.upper() != "ALL":
             portfolio.set_account_cash(payload.account, payload.cash)
@@ -92,7 +97,7 @@ def set_cash(payload: CashPayload):
 
 
 @router.post("/bulk")
-def bulk_upsert(payload: BulkPayload):
+def bulk_upsert(payload: BulkPayload, _identity: Identity = Depends(require_admin)):
     try:
         account_override = payload.account
         use_override = bool(account_override) and account_override.upper() != "ALL"
@@ -118,3 +123,46 @@ def bulk_upsert(payload: BulkPayload):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.patch("/{instrument_id}/sector")
+def update_sector(
+    instrument_id: str,
+    payload: SectorPayload,
+    account: str,
+    _identity: Identity = Depends(require_admin),
+):
+    sector = payload.sector.strip() or "Unassigned"
+
+    def _run(conn):
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT instruments.symbol
+            FROM positions
+            JOIN instruments ON instruments.id=positions.instrument_id
+            WHERE positions.account=? AND positions.instrument_id=?
+            """,
+            (account, instrument_id),
+        )
+        row = cur.fetchone()
+        if not row:
+            return 0
+        symbol = row[0]
+        cur.execute(
+            "UPDATE positions SET sector=? WHERE account=? AND instrument_id=?",
+            (sector, account, instrument_id),
+        )
+        updated = int(cur.rowcount or 0)
+        cur.execute(
+            "UPDATE trades SET sector=? WHERE account=? AND (instrument_id=? OR symbol=?)",
+            (sector, account, instrument_id, symbol),
+        )
+        conn.commit()
+        return updated
+
+    from ..db import with_conn
+
+    if with_conn(_run) == 0:
+        raise HTTPException(status_code=404, detail="Position not found")
+    return {"ok": True, "account": account, "instrument_id": instrument_id, "sector": sector}

@@ -1,7 +1,37 @@
 from typing import Optional, Dict, Any
+import base64
+import hashlib
 import time
 
+from cryptography.fernet import Fernet, InvalidToken
+
+from ..config import settings
 from ..db import with_conn
+
+
+def _fernet() -> Fernet:
+    secret = settings.auth_secret or settings.schwab.client_secret or "local-development-token-key"
+    key = base64.urlsafe_b64encode(hashlib.sha256(secret.encode("utf-8")).digest())
+    return Fernet(key)
+
+
+def _encrypt(value: str) -> str:
+    if not value:
+        return ""
+    return "enc:v1:" + _fernet().encrypt(value.encode("utf-8")).decode("ascii")
+
+
+def _decrypt(value: str) -> str:
+    if not value:
+        return ""
+    if not value.startswith("enc:v1:"):
+        # Backward-compatible read for existing installations. The next token
+        # refresh rewrites it encrypted.
+        return value
+    try:
+        return _fernet().decrypt(value.removeprefix("enc:v1:").encode("ascii")).decode("utf-8")
+    except InvalidToken as exc:
+        raise RuntimeError("Stored OAuth token cannot be decrypted with the configured application secret") from exc
 
 
 def get_token(provider: str) -> Optional[Dict[str, Any]]:
@@ -15,8 +45,8 @@ def get_token(provider: str) -> Optional[Dict[str, Any]]:
         if not row:
             return None
         return {
-            "access_token": row[0],
-            "refresh_token": row[1],
+            "access_token": _decrypt(row[0]),
+            "refresh_token": _decrypt(row[1]),
             "expires_at": row[2],
             "scope": row[3],
         }
@@ -38,7 +68,7 @@ def save_token(provider: str, access_token: str, refresh_token: str, expires_in:
                 expires_at=excluded.expires_at,
                 scope=excluded.scope
             """,
-            (provider, access_token, refresh_token, expires_at, scope),
+            (provider, _encrypt(access_token), _encrypt(refresh_token), expires_at, scope),
         )
         conn.commit()
 

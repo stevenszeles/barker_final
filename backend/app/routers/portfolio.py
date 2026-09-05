@@ -3,10 +3,15 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Response
 import httpx
 from ..schemas import Snapshot, NavPoint
-from ..services.portfolio import get_snapshot, get_nav_series, get_sector_series
+from ..services.portfolio import get_accounts, get_snapshot, get_nav_series, get_sector_series
 
 router = APIRouter(prefix="/portfolio", tags=["portfolio"])
 logger = logging.getLogger(__name__)
+
+
+@router.get("/accounts")
+def accounts():
+    return {"accounts": get_accounts()}
 
 
 def _raise_portfolio_error(exc: Exception) -> None:

@@ -2,22 +2,42 @@ services:
   - type: web
     name: barker-dashboard
     runtime: docker
-    plan: free
-    autoDeploy: true
+    plan: starter
+    autoDeployTrigger: checksPass
     dockerfilePath: ./Dockerfile
-    healthCheckPath: /health
+    healthCheckPath: /health/ready
+    maxShutdownDelaySeconds: 30
     envVars:
       - key: ENVIRONMENT
         value: production
       - key: DATABASE_URL
+        fromDatabase:
+          name: barker-postgres
+          property: connectionString
+      - key: BARKER_AUTH_ENABLED
+        value: "1"
+      - key: BARKER_AUTH_SECRET
+        generateValue: true
+      - key: BARKER_ADMIN_PASSWORD
         sync: false
-      - key: WS_SEED_DEMO
+      - key: BARKER_VIEWER_PASSWORD
+        sync: false
+      - key: BARKER_SECURE_COOKIES
+        value: "1"
+      - key: BARKER_TRADING_ENABLED
         value: "0"
       - key: WS_STATIC_MODE
-        value: "0"
+        value: "1"
       - key: WS_LIVE_QUOTES
         value: "0"
       - key: WS_DB_FALLBACK_TO_SQLITE
         value: "0"
-      - key: WS_ALLOW_ALL_ORIGINS
-        value: "1"
+      - key: WS_DB_POOL_MAX
+        value: "4"
+
+databases:
+  - name: barker-postgres
+    plan: basic-256mb
+    databaseName: barker
+    user: barker
+    ipAllowList: []

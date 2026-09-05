@@ -11,15 +11,10 @@ def get_status() -> List[Dict[str, str]]:
         schwab_token = get_token("schwab")
     except Exception:
         schwab_token = None
-    schwab_ok = bool(schwab_token) and not settings.demo_mode
+    schwab_ok = bool(schwab_token)
     if settings.static_mode:
         source_portfolio = "static"
         source_market = "static"
-        portfolio_ok = True
-        market_ok = True
-    elif settings.demo_mode:
-        source_portfolio = "demo"
-        source_market = "demo"
         portfolio_ok = True
         market_ok = True
     elif settings.polygon.api_key:

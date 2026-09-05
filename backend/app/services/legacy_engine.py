@@ -1226,7 +1226,8 @@ def _load_positions_df(account: Optional[str]) -> pd.DataFrame:
         cur = conn.cursor()
         cur.execute(
             f"""
-            SELECT p.account, p.instrument_id, p.qty, p.price, p.market_value, p.avg_cost, p.sector,
+            SELECT p.account, p.instrument_id, p.qty, p.price, p.market_value, p.avg_cost,
+                   p.day_pnl, p.total_pnl, p.day_pnl_pct, p.total_pnl_pct, p.sector,
                    p.owner, p.entry_date, p.strategy, p.strategy_id, p.strategy_name,
                    i.symbol, i.asset_class, i.underlying, i.expiry, i.strike, i.option_type, i.multiplier
             FROM positions p
@@ -1253,6 +1254,8 @@ def _load_positions_df(account: Optional[str]) -> pd.DataFrame:
     df["avg_cost"] = pd.to_numeric(df["avg_cost"], errors="coerce").fillna(0.0)
     df["price"] = pd.to_numeric(df["price"], errors="coerce").fillna(0.0)
     df["market_value"] = pd.to_numeric(df["market_value"], errors="coerce").fillna(0.0)
+    for column in ("day_pnl", "total_pnl", "day_pnl_pct", "total_pnl_pct"):
+        df[column] = pd.to_numeric(df[column], errors="coerce").fillna(0.0)
     df["multiplier"] = pd.to_numeric(df["multiplier"], errors="coerce").fillna(1.0)
     df["asset_class"] = df["asset_class"].fillna("equity").astype(str).str.lower()
     df["underlying"] = df["underlying"].fillna("").astype(str).str.upper()
@@ -1353,13 +1356,20 @@ def build_positions_live(pricing_date_iso: str, start_date_iso: str, account: Op
         if prev is None or prev <= 0:
             prev = last
         prices.append(last)
-        mv = qty * last * mult
-        tot = qty * (last - avg_cost) * mult
-        dpnl = qty * (last - prev) * mult
+        if settings.static_mode:
+            tot = float(row.get("total_pnl") or 0.0)
+            dpnl = float(row.get("day_pnl") or 0.0)
+            total_pct = float(row.get("total_pnl_pct") or 0.0)
+            day_pct = float(row.get("day_pnl_pct") or 0.0)
+        else:
+            tot = qty * (last - avg_cost) * mult
+            dpnl = qty * (last - prev) * mult
+            total_pct = ((last / avg_cost) - 1.0) * 100.0 if avg_cost else 0.0
+            day_pct = ((last / prev) - 1.0) * 100.0 if prev else 0.0
         total_pnl.append(tot)
         day_pnl.append(dpnl)
-        total_pnl_pct.append(((last / avg_cost) - 1.0) * 100.0 if avg_cost else 0.0)
-        day_pnl_pct.append(((last / prev) - 1.0) * 100.0 if prev else 0.0)
+        total_pnl_pct.append(total_pct)
+        day_pnl_pct.append(day_pct)
 
     out = pos.copy()
     out["price"] = prices
@@ -1408,42 +1418,6 @@ def _set_nav_cache(limit: int, account: Optional[str], data: List[Dict[str, Any]
 
 def _clear_nav_cache() -> None:
     NAV_CACHE.clear()
-
-
-def _extend_nav_points_with_benchmark(
-    points: List[Dict[str, Any]],
-    bench_map: Dict[str, float],
-    limit: int,
-) -> List[Dict[str, Any]]:
-    if not points:
-        return []
-    if not bench_map:
-        return points[-int(limit):]
-
-    latest_point = points[-1]
-    last_date = parse_iso_date(latest_point.get("date"))
-    if not last_date:
-        return points[-int(limit):]
-
-    last_nav = float(latest_point.get("nav") or 0.0)
-    last_twr_raw = latest_point.get("twr")
-    try:
-        last_twr = float(last_twr_raw) if last_twr_raw is not None else None
-    except Exception:
-        last_twr = None
-
-    for bench_date in sorted(d for d in bench_map.keys() if d > last_date):
-        bench_val = float(bench_map.get(bench_date) or 0.0)
-        if bench_val <= 0:
-            continue
-        points.append({
-            "date": bench_date,
-            "nav": last_nav,
-            "bench": bench_val,
-            "twr": last_twr,
-        })
-
-    return points[-int(limit):]
 
 
 def _fallback_business_dates(start_iso: str, end_iso: str) -> List[str]:
@@ -1910,16 +1884,17 @@ def get_nav_series(limit: int = 120, account: Optional[str] = None) -> List[Dict
                 "nav": float(row["nav"]),
                 "bench": float(bench_val),
                 "twr": twr_val,
+                "return_method": "cash_flow_adjusted" if twr_val is not None else "unknown",
+                "data_quality": "complete" if twr_val is not None else "estimated",
             }
         )
-    points = _extend_nav_points_with_benchmark(points, bench_map, limit)
+    points = points[-int(limit):]
     _set_nav_cache(limit, account, points)
     return points
 
 
 def _get_nav_series_from_snapshots(limit: int = 120, account: Optional[str] = None) -> List[Dict[str, Any]]:
     label = _account_label(account)
-    ensure_benchmark_cache_current(start_date=_get_bench_start())
 
     def _load_cached_bench_rows(cur) -> List[Dict[str, Any]]:
         bench = normalize_benchmark_symbol(_get_benchmark())
@@ -2048,19 +2023,13 @@ def _get_nav_series_from_snapshots(limit: int = 120, account: Optional[str] = No
     bench_idx = 0
 
     points = []
-    # Prefer benchmark history from price_cache. Stored snapshot bench values are
-    # only a fallback when no cached benchmark history is available at all.
+    # Benchmark history is authoritative only when it came from price_cache.
+    # Legacy snapshot benchmark values may have been synthesized, so exposing
+    # them would create a plausible-looking but unverifiable comparison.
     last_live_bench_raw: Optional[float] = None
-    last_stored_bench_raw: Optional[float] = None
-    base_nav: Optional[float] = None
     for row in rows:
         d = str(row.get("date") or "")
         nav_val = float(row.get("nav") or 0.0)
-        bench_raw = row.get("bench")
-        try:
-            bench_raw_num = float(bench_raw) if bench_raw is not None else None
-        except Exception:
-            bench_raw_num = None
 
         while bench_idx < len(bench_dates) and bench_dates[bench_idx] <= d:
             raw = bench_map.get(bench_dates[bench_idx])
@@ -2071,42 +2040,22 @@ def _get_nav_series_from_snapshots(limit: int = 120, account: Optional[str] = No
         if last_live_bench_raw is not None and last_live_bench_raw > 0:
             effective_bench = float(last_live_bench_raw)
         else:
-            if bench_raw_num is not None and bench_raw_num > 0:
-                last_stored_bench_raw = bench_raw_num
-            effective_bench = (
-                float(last_stored_bench_raw)
-                if last_stored_bench_raw is not None and last_stored_bench_raw > 0
-                else None
-            )
-
-        if base_nav is None and abs(nav_val) > 1e-12:
-            base_nav = float(nav_val)
-        twr_index = 1.0 if base_nav is None else float(nav_val) / float(base_nav)
+            effective_bench = None
 
         points.append({
             "date": d,
             "nav": nav_val,
             # bench: raw price for chart normalization; None becomes nav in chart
             "bench": effective_bench,
-            "twr": float(twr_index),
+            # Custodian balance snapshots do not contain external cash-flow
+            # information. Calling NAV/base NAV a time-weighted return would
+            # misclassify deposits and withdrawals as investment performance.
+            "twr": None,
+            "return_method": "nav_change_only",
+            "data_quality": "estimated",
         })
 
-    fallback_bench = None
-    for p in points:
-        val = p.get("bench")
-        if val is not None and float(val) > 0:
-            fallback_bench = float(val)
-            break
-    if fallback_bench is None:
-        for p in points:
-            p["bench"] = float(p["nav"])
-    else:
-        for p in points:
-            val = p.get("bench")
-            if val is None or float(val) <= 0:
-                p["bench"] = float(fallback_bench)
-
-    return _extend_nav_points_with_benchmark(points, bench_map, limit)
+    return points[-int(limit):]
 
 
 # ----------------------------
@@ -2540,7 +2489,7 @@ def _stamp() -> Dict[str, Any]:
     if settings.static_mode:
         source = "static"
     else:
-        source = "demo" if settings.demo_mode else "local" if settings.marketdata_only else "schwab"
+        source = "local" if settings.marketdata_only else "schwab"
     return {"asof": now_ts_str(), "source": source, "method_version": settings.method_version}
 
 
@@ -2917,13 +2866,6 @@ def close_expired_options(account: Optional[str] = None) -> int:
 
 
 def get_snapshot(account: Optional[str] = None) -> Dict[str, Any]:
-    bench = _get_benchmark()
-    bench_series = pd.DataFrame()
-    # In import-heavy deployments with live quotes disabled, avoid network-bound
-    # benchmark refresh in snapshot reads.
-    if settings.static_mode or settings.live_quotes:
-        bench_series = get_bench_series(bench)
-    bench_asof = str(bench_series["d"].iloc[-1]) if bench_series is not None and len(bench_series) else today_str()
     live_date = today_str()
 
     positions_live = build_positions_live(live_date, _get_bench_start(), account=account)
@@ -2959,46 +2901,23 @@ def get_snapshot(account: Optional[str] = None) -> Dict[str, Any]:
     cash_avail = compute_cash_available(cash_total, positions_live)
 
     day_pnl = 0.0
-    total_pnl = 0.0
+    unrealized_pnl = 0.0
+    if positions_live is not None and not positions_live.empty:
+        try:
+            day_pnl = float(positions_live["day_pnl"].astype(float).sum())
+        except Exception:
+            day_pnl = 0.0
+        try:
+            unrealized_pnl = float(positions_live["total_pnl"].astype(float).sum())
+        except Exception:
+            unrealized_pnl = 0.0
+
+    snapshot_asof = live_date
     if settings.static_mode:
         snap_points = _get_nav_series_from_snapshots(limit=4000, account=account)
         if snap_points:
-            nav_values = []
-            for p in snap_points:
-                try:
-                    nav_values.append(float(p.get("nav") or 0.0))
-                except Exception:
-                    continue
-            if nav_values:
-                nav_live = float(nav_values[-1])
-                prev_nav = float(nav_values[-2]) if len(nav_values) > 1 else float(nav_values[-1])
-                base_nav = next((float(v) for v in nav_values if abs(float(v)) > 1e-12), float(nav_values[0]))
-                day_pnl = float(nav_live - prev_nav)
-                total_pnl = float(nav_live - base_nav)
-    else:
-        if positions_live is not None and not positions_live.empty:
-            try:
-                day_pnl = float(positions_live["day_pnl"].astype(float).sum())
-            except Exception:
-                day_pnl = 0.0
-
-        # Total PnL should reflect realized + unrealized, not cash inflows/outflows.
-        unreal_pnl = 0.0
-        if positions_live is not None and not positions_live.empty:
-            try:
-                unreal_pnl = float(positions_live["total_pnl"].astype(float).sum())
-            except Exception:
-                unreal_pnl = 0.0
-
-        def _realized(conn):
-            where, params = _account_where(conn, account)
-            cur = conn.cursor()
-            cur.execute(f"SELECT COALESCE(SUM(realized_pl),0) as total FROM trades WHERE {where}", params)
-            row = cur.fetchone()
-            return float(row.get("total") if isinstance(row, dict) else row[0] or 0.0)
-
-        realized_pnl = with_conn(_realized)
-        total_pnl = float(unreal_pnl + realized_pnl)
+            nav_live = float(snap_points[-1].get("nav") or nav_live)
+            snapshot_asof = str(snap_points[-1].get("date") or live_date)
 
     gross = float(np.sum(np.abs(positions_live["market_value"].astype(float).to_numpy()))) if not positions_live.empty else 0.0
     net = float(np.sum(positions_live["market_value"].astype(float).to_numpy())) if not positions_live.empty else 0.0
@@ -3012,12 +2931,17 @@ def get_snapshot(account: Optional[str] = None) -> Dict[str, Any]:
         "missing_assets": [str(r["symbol"]).upper() for _, r in positions_live.iterrows() if float(r.get("price") or 0) <= 0],
     }
 
+    stamp = _stamp()
+    if settings.static_mode:
+        stamp["asof"] = snapshot_asof
+        stamp["source"] = "imported"
+
     return {
-        "stamp": _stamp(),
+        "stamp": stamp,
         "nlv": float(nav_live),
         "cash": float(cash_total),
         "day_pnl": float(day_pnl),
-        "total_pnl": float(total_pnl),
+        "total_pnl": float(unrealized_pnl),
         "buying_power": float(cash_avail),
         "margin_required": float(max(cash_total - cash_avail, 0.0)),
         "margin_available": float(cash_avail),

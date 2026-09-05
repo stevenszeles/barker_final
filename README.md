@@ -1,95 +1,157 @@
-# Portfolio Dashboard (Simplified, Reliable Build)
+# Barker Portfolio Workstation
 
-This build focuses on what matters most:
+Barker is a shared portfolio dashboard for a student investment group. An administrator uploads the three Schwab exports the group already receives—positions, balance history, and realized lot detail—and every member sees the same validated portfolio from any browser.
 
-- Track total, account-level, and portfolio-level performance
-- Compare portfolios against each other and benchmark indices
-- Show practical risk metrics (volatility, Sharpe, drawdown, VaR, beta)
-- Keep the codebase readable and maintainable
+It is intentionally a small system:
 
-## Stack
+- one React application;
+- one FastAPI service;
+- one relational database;
+- one Docker image;
+- one supported production target.
 
-- Backend: FastAPI (`/Users/stevenszeles/Downloads/barker_final/backend/app`)
-- Frontend: React + TypeScript + Lightweight Charts (`/Users/stevenszeles/Downloads/barker_final/frontend/src`)
-- Primary storage: SQLite by default or Postgres via `DATABASE_URL`
-- Demo seed data only: `/Users/stevenszeles/Downloads/barker_final/data/portfolio_data.json`
+The database is authoritative. The browser never reconstructs the portfolio, parses brokerage files, or synchronizes a private JSON copy.
+
+## What members can do
+
+- Review total and account-level NAV, cash, exposure, daily P/L, and allocations.
+- Search holdings and maintain sector classifications.
+- Compare imported NAV history with cached benchmark history.
+- Review realized activity and portfolio risk diagnostics.
+- Share a read-only login while limiting imports and settings to administrators.
+
+Order placement is compiled into the API for future use but disabled by default with `BARKER_TRADING_ENABLED=0`.
+
+## How data moves
+
+```text
+Schwab CSV files
+      |
+      v
+validate and normalize
+      |
+      v
+single database transaction ----> import audit history
+      |
+      +--> accounts / positions / instruments
+      +--> NAV snapshots
+      +--> realized trades
+      |
+      v
+read-only portfolio projections
+      |
+      v
+React Query cache --> workstation views
+```
+
+All files in an upload are committed together. A malformed file rolls the whole batch back. File hashes make repeated uploads idempotent.
+
+Imported balance history is displayed as `nav_change_only` unless independently recorded cash flows support a true time-weighted return. This avoids presenting deposits or withdrawals as investment performance.
+
+## Architecture
+
+| Boundary | Responsibility |
+| --- | --- |
+| `backend/app/importing.py` | Brokerage detection, parsing, normalization, atomic persistence, duplicate protection |
+| `backend/app/migrations.py` | Versioned operational schema changes |
+| `backend/app/db.py` | SQLite/PostgreSQL adapter, PostgreSQL pool, transaction and health boundaries |
+| `backend/app/routers/` | Role-protected HTTP contracts |
+| `backend/app/services/` | Portfolio projections, market adapters, analytics, and risk calculations |
+| `frontend/src/pages/` | Lazy-loaded workstation modules |
+| `frontend/src/hooks/` | Query ownership and caching policy |
+| `frontend/src/services/api.ts` | The single browser/API transport |
+
+`legacy_engine.py` remains the compatibility analytics core behind the service boundary. New product features should enter through a focused service and typed route rather than adding UI logic or another import path.
+
+### Core tables
+
+- `accounts`, `instruments`, `positions`
+- `nav_snapshots`, `cash_flows`, `trades`
+- `price_cache`, `daily_positions`, `risk_metrics`
+- `schema_migrations`
+- `import_batches`, `import_files`
+- `jobs`, `calculation_runs`
+
+SQLite is suitable for one local instance. Production requires PostgreSQL; the application fails startup instead of silently falling back to an ephemeral database.
 
 ## Run locally
 
+Docker is the shortest path:
+
 ```bash
-cd /Users/stevenszeles/Downloads/barker_final
-docker compose down --remove-orphans
+cp .env.template .env
 docker compose up --build -d
 ```
 
-Open: `http://localhost:8080`
+Open <http://localhost:8080>. Local data is kept in the `barker-data` Docker volume. Authentication is off in the local template.
 
-## Closed/Realized Sector Categorization
+For separate backend/frontend development:
 
-1. Import positions and balance history first (so account + sector context exists).
-2. Import realized gain/loss CSVs in Admin.
-3. In **Admin → Closed / Realized Categorization**:
-   - choose account,
-   - choose sector (and optional symbol),
-   - click **Assign Sector to Realized Trades**.
-4. Use **Auto-Classify from Position Labels** to tag unassigned realized rows from existing position sector mappings.
-5. In **Activity**, keep `Closed` enabled and use each trade row’s **Sector** dropdown for one-off overrides.
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-dev.txt
+python -m backend.migrate
+uvicorn backend.app.main:app --reload
+```
 
-## Key API endpoints
+```bash
+cd frontend
+npm ci
+npm run dev
+```
 
-- `GET /health`
-- `GET /version`
-- `GET /api/portfolio/snapshot`
-- `GET /api/portfolio/nav?limit=120&account=ALL`
-- `GET /api/risk/summary`
-- `GET /api/status/components`
-- `POST /api/admin/import-positions`
-- `POST /api/admin/import-balances`
-- `POST /api/admin/import-transactions`
+The Vite server runs at <http://localhost:5173> and proxies `/api` to the backend.
 
-## Data model
+## First portfolio update
 
-Primary app data lives in the database, not in a JSON file:
+1. Sign in with the administrator password.
+2. Open **Import & Admin**.
+3. Select the positions, balances, and realized lot CSVs together.
+4. Review the parsed account and row counts, then import.
+5. Re-uploading the same exports is safe; they are reported as duplicates.
 
-- `accounts`: current cash / account anchors
-- `positions`: current holdings
-- `nav_snapshots`: historical NAV and benchmark values
-- `price_cache`: cached benchmark and symbol history
-- `trades`: blotter / realized / transaction analytics
+The sample `...562` exports were verified as one atomic batch: 41 positions, 731 balance points, and 195 realized lots, reconciling to $107,159.46 cash and $373,434.99 account value.
 
-Edit `/Users/stevenszeles/Downloads/barker_final/data/portfolio_data.json` only if you are using demo seeding via `WS_SEED_DEMO=1`:
+## Production on Render
 
-- `benchmarks`: default benchmark symbols for overlay
-- `accounts[]`: top-level account containers
-- `portfolios[]`: logical sleeves/strategies within each account
-- `positions[]`: `{symbol, shares, avg_cost}` for each holding
-- `cash`: cash balance per portfolio
+`render.yaml` is the supported deployment definition. It provisions:
 
-For the primary import-driven workflow, use the Admin tab to import positions, balances, and realized trades.
+- a non-sleeping Starter web service;
+- a private paid PostgreSQL database;
+- generated session-signing material;
+- readiness checks against the database;
+- deployments only after CI passes.
 
-## Reliability approach
+Before the first deploy, set `BARKER_ADMIN_PASSWORD`. Set `BARKER_VIEWER_PASSWORD` to provide a read-only group login. The Docker entrypoint applies migrations before starting the API, so a migration failure prevents the release from becoming healthy.
 
-- Market history uses Stooq where available
-- If a symbol history is unavailable or throttled, deterministic fallback history is used so dashboard remains functional
-- Portfolio analytics still render even during data-source issues
+The API and frontend share an origin; broad production CORS is neither required nor enabled.
 
-## Deployment
+## Verification
 
-Current Docker image serves both API and frontend in one service. Deploy this container to Railway/Render and expose container port `8000`.
+```bash
+pip install -r requirements-dev.txt
+python -m compileall -q backend
+pytest backend/tests -q
+pip-audit -r requirements.txt
 
-For Render production stability:
-- Set `DATABASE_URL` to your Render Postgres connection string (required for persistent imports).
-- Set `WS_LIVE_QUOTES=0` (reduces background market-data load).
-- Keep `WS_DB_FALLBACK_TO_SQLITE=0` in production. SQLite on Render is ephemeral and can lose imported dashboard data after a restart or redeploy.
+cd frontend
+npm ci
+npm run typecheck
+npm run build
+npm audit --audit-level=high
+```
 
-## Full System Context
+Readiness is `GET /health/ready`; liveness is `GET /health/live`.
 
-For the best single-file handoff for Claude or any repo-aware coding assistant, start with:
+## Adding a feature
 
-`/Users/stevenszeles/Downloads/barker_final/CLAUDE_COMPLETE_PROJECT_CONTEXT.md`
+Use the existing boundaries:
 
-Supporting context docs:
+1. Add or version the database shape in `migrations.py`.
+2. Implement calculation or domain behavior in a small service.
+3. expose a role-appropriate typed route;
+4. add a query hook and lazy page/component;
+5. cover the financial invariant and API authorization in tests.
 
-- `/Users/stevenszeles/Downloads/barker_final/SYSTEM_CONTEXT_GUIDE.md`
-- `/Users/stevenszeles/Downloads/barker_final/CODEBASE_CONTEXT_FOR_CLAUDE_VSCODE.md`
-- `/Users/stevenszeles/Downloads/barker_final/CLAUDE_RENDER_IMPORT_CONTEXT_2026-03-07.md`
+Do not add a second browser-side source of truth, file parser, deployment platform, or implicit live-data dependency.

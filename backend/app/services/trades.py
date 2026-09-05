@@ -6,7 +6,7 @@ from ..config import settings
 from . import legacy_engine as engine
 
 
-STAMP_SOURCE = "demo" if settings.demo_mode else "local" if settings.marketdata_only else "schwab"
+STAMP_SOURCE = "static" if settings.static_mode else "local" if settings.marketdata_only else "schwab"
 
 
 def _stamp():

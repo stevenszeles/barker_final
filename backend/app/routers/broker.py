@@ -10,8 +10,6 @@ logger = logging.getLogger(__name__)
 
 
 def _require_config():
-    if settings.demo_mode:
-        raise HTTPException(status_code=400, detail="Demo mode enabled; Schwab live data disabled")
     if not settings.schwab.client_id or not settings.schwab.client_secret:
         raise HTTPException(status_code=400, detail="Schwab credentials missing")
 
@@ -78,6 +76,11 @@ def preview_order(payload: dict):
 @router.post("/orders/place")
 def place_order(payload: dict):
     _require_config()
+    if not settings.trading_enabled:
+        raise HTTPException(
+            status_code=403,
+            detail="Live order placement is disabled. Set BARKER_TRADING_ENABLED=1 only after operational review.",
+        )
     try:
         return schwab.place_order(None, payload)
     except Exception as exc:

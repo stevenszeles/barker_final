@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 from typing import Optional
 
 # Load .env from repo root for local/dev runs (no-op if missing)
-# Avoid loading .env in production so platform env vars (Render/Railway) are authoritative.
+# Avoid loading .env in production so platform environment variables are authoritative.
 _ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
 _ENVIRONMENT = os.environ.get("ENVIRONMENT", "").strip().lower()
 if _ENVIRONMENT not in {"production", "prod"}:
@@ -74,25 +74,53 @@ class Settings:
             bool((os.environ.get(name) or "").strip())
             for name in ("RENDER", "RENDER_SERVICE_ID", "RENDER_EXTERNAL_URL", "RENDER_EXTERNAL_HOSTNAME")
         )
-        vercel_runtime = bool((os.environ.get("VERCEL") or "").strip())
-
         # API prefix
         self.api_prefix = os.environ.get("WS_API_PREFIX", "/api")
 
         # Database configuration
         self.db_url = _clean_optional(os.environ.get("DATABASE_URL") or os.environ.get("WS_DATABASE_URL"))
-        default_db_path = "/tmp/workstation.db" if vercel_runtime else str(Path.home() / "workstation.db")
+        default_db_path = str(Path.home() / "workstation.db")
         self.db_path = os.environ.get("WS_DB_PATH", default_db_path)
         self.db_fallback_to_sqlite = _env_bool("WS_DB_FALLBACK_TO_SQLITE", default=False)
+        try:
+            self.db_pool_min = max(1, int(os.environ.get("WS_DB_POOL_MIN", "1")))
+        except Exception:
+            self.db_pool_min = 1
+        try:
+            self.db_pool_max = max(self.db_pool_min, int(os.environ.get("WS_DB_POOL_MAX", "8")))
+        except Exception:
+            self.db_pool_max = max(self.db_pool_min, 8)
+        try:
+            self.db_statement_timeout_ms = max(1000, int(os.environ.get("WS_DB_STATEMENT_TIMEOUT_MS", "15000")))
+        except Exception:
+            self.db_statement_timeout_ms = 15000
 
         # Mode configuration
-        self.demo_mode = os.environ.get("WS_DEMO_MODE", "0") == "1"
         self.marketdata_only = os.environ.get("WS_MARKETDATA_ONLY", "0") == "1"
         # Live quote toggle (kept separate from marketdata_only)
         self.live_quotes = os.environ.get("WS_LIVE_QUOTES", "1") == "1"
         # Static mode: disable live market data and rely only on uploaded balances/positions.
         # Default to live-enabled so Schwab/Stooq history works out of the box.
         self.static_mode = os.environ.get("WS_STATIC_MODE", "0") == "1"
+
+        # Access control. Production defaults to protected; local development
+        # remains frictionless unless explicitly enabled.
+        environment_is_production = _ENVIRONMENT in {"production", "prod"} or render_runtime
+        self.auth_enabled = _env_bool("BARKER_AUTH_ENABLED", default=environment_is_production)
+        self.auth_secret = _clean_optional(os.environ.get("BARKER_AUTH_SECRET"))
+        self.admin_password = _clean_optional(os.environ.get("BARKER_ADMIN_PASSWORD"))
+        self.viewer_password = _clean_optional(os.environ.get("BARKER_VIEWER_PASSWORD"))
+        self.secure_cookies = _env_bool("BARKER_SECURE_COOKIES", default=environment_is_production)
+        try:
+            self.session_hours = max(1, int(os.environ.get("BARKER_SESSION_HOURS", "12")))
+        except Exception:
+            self.session_hours = 12
+        self.trading_enabled = _env_bool("BARKER_TRADING_ENABLED", default=False)
+        self.migrate_on_startup = _env_bool("BARKER_MIGRATE_ON_STARTUP", default=True)
+        try:
+            self.max_upload_bytes = max(1024, int(os.environ.get("BARKER_MAX_UPLOAD_BYTES", str(10 * 1024 * 1024))))
+        except Exception:
+            self.max_upload_bytes = 10 * 1024 * 1024
 
         # Logging / method metadata
         self.log_path = os.environ.get("WS_LOG_PATH", "workstation.log")

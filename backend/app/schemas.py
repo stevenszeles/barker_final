@@ -52,8 +52,10 @@ class Snapshot(BaseModel):
 class NavPoint(BaseModel):
     date: str
     nav: float
-    bench: float
+    bench: Optional[float] = None
     twr: Optional[float] = None
+    return_method: str = "unknown"
+    data_quality: str = "complete"
 
 
 class RiskMetric(BaseModel):

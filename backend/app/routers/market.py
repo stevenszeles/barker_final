@@ -8,7 +8,6 @@ import httpx
 
 from ..config import settings
 from ..services import polygon, schwab, stooq, openfigi
-from ..services import options as options_service
 from ..services import futures as futures_service
 
 router = APIRouter(prefix="/market", tags=["market"])
@@ -46,8 +45,6 @@ def _map_tickers_to_requested(tickers: list[dict], symbol_map: Dict[str, str]) -
 
 
 def _require_polygon():
-    if settings.demo_mode:
-        raise HTTPException(status_code=400, detail="Demo mode enabled; live market data disabled")
     if not settings.polygon.api_key:
         raise HTTPException(status_code=400, detail="Polygon API key missing")
 
@@ -137,8 +134,6 @@ def previous_close(symbol: str):
 def market_status():
     if settings.static_mode:
         return {"market": "static", "source": "static"}
-    if settings.demo_mode:
-        raise HTTPException(status_code=400, detail="Demo mode enabled; live market data disabled")
     if settings.marketdata_only:
         return {"market": "unknown", "source": "stooq"}
     if settings.polygon.api_key:
@@ -153,16 +148,11 @@ def market_status():
 def options_chain(underlying: str):
     if settings.static_mode:
         return {"underlying": underlying, "contracts": []}
-    if settings.demo_mode:
-        return {"underlying": underlying, "contracts": options_service.get_option_chain_demo(underlying.upper())}
     if settings.marketdata_only:
         try:
             chain = schwab.get_option_chain(underlying.upper())
             return chain
         except Exception:
-            demo = options_service.get_option_chain_demo(underlying.upper())
-            if demo:
-                return {"underlying": underlying, "contracts": demo}
             raise HTTPException(status_code=503, detail="Options chain unavailable (Schwab not connected)")
     _require_polygon()
     try:
@@ -182,29 +172,6 @@ def option_marks(symbols: str):
         return {}
     if settings.static_mode:
         return {}
-    if settings.demo_mode:
-        marks: Dict[str, float] = {}
-        by_underlying: Dict[str, List[str]] = {}
-        for sym in sym_list:
-            parsed = options_service.parse_osi_symbol(sym)
-            if not parsed:
-                continue
-            underlying = parsed[0]
-            by_underlying.setdefault(underlying, []).append(sym)
-        for underlying, symbols in by_underlying.items():
-            chain = options_service.get_option_chain_demo(underlying)
-            for contract in chain or []:
-                symbol = (contract.get("symbol") or "").upper()
-                if symbol in symbols:
-                    mark = contract.get("mark") or contract.get("last")
-                    if mark is None:
-                        bid = contract.get("bid")
-                        ask = contract.get("ask")
-                        if bid is not None and ask is not None:
-                            mark = (float(bid) + float(ask)) / 2.0
-                    if mark is not None:
-                        marks[symbol] = float(mark)
-        return marks
     try:
         return schwab.get_option_marks(sym_list)
     except Exception as exc:
@@ -216,8 +183,6 @@ def option_marks(symbols: str):
 def futures_ladder():
     if settings.static_mode:
         return {"contracts": []}
-    if settings.demo_mode:
-        return {"contracts": futures_service.get_futures_ladder_demo()}
     return {"contracts": futures_service.get_futures_ladder()}
 
 
@@ -226,10 +191,6 @@ async def stream(websocket: WebSocket):
     await websocket.accept()
     if settings.static_mode:
         await websocket.send_text(json.dumps({"type": "error", "message": "Static mode enabled"}))
-        await websocket.close()
-        return
-    if settings.demo_mode:
-        await websocket.send_text(json.dumps({"type": "error", "message": "Demo mode enabled"}))
         await websocket.close()
         return
     if settings.marketdata_only:
