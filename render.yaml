@@ -8,26 +8,8 @@ services:
     healthCheckPath: /health
     maxShutdownDelaySeconds: 30
     envVars:
-      - key: ENVIRONMENT
-        value: production
-      # Paste a Postgres connection string here in the Render dashboard (a free
-      # Supabase project works). Without it the service falls back to SQLite in
-      # /tmp, which free-tier Render wipes on every restart -- uploaded CSVs
-      # would not survive.
+      # Optional. Point this at a Postgres instance and uploaded CSVs survive
+      # restarts. Left unset, the app runs on SQLite, which the free plan wipes
+      # whenever the service restarts.
       - key: DATABASE_URL
         sync: false
-      - key: WS_ALLOW_EPHEMERAL_SQLITE
-        value: "1"
-      - key: WS_DB_PATH
-        value: /tmp/workstation.db
-      # Read-only dashboard shared with a class: no sign-in step.
-      - key: BARKER_AUTH_ENABLED
-        value: "0"
-      - key: BARKER_TRADING_ENABLED
-        value: "0"
-      - key: WS_STATIC_MODE
-        value: "1"
-      - key: WS_LIVE_QUOTES
-        value: "0"
-      - key: WS_LOG_PATH
-        value: /tmp/workstation.log

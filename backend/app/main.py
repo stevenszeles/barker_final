@@ -31,23 +31,19 @@ def _is_production_runtime() -> bool:
     return env in {"production", "prod"} or bool(os.getenv("RENDER"))
 
 
-def _assert_persistent_storage_configured() -> None:
-    """Postgres is preferred, but a SQLite-backed demo is explicitly allowed.
+def _warn_if_storage_is_ephemeral() -> None:
+    """Boot with no configuration at all, and say so when storage won't persist.
 
-    Set WS_ALLOW_EPHEMERAL_SQLITE=1 to run without a managed database. Data is
-    reseeded from the committed snapshot on each boot, which is what the
-    classroom demo wants.
+    Set DATABASE_URL to a Postgres instance and uploads survive restarts. Without
+    it the app still runs on SQLite, which is fine for a demo but is wiped
+    whenever the host restarts the service.
     """
     if not _is_production_runtime() or settings.db_url:
         return
-    if os.getenv("WS_ALLOW_EPHEMERAL_SQLITE", "0") == "1":
-        logging.getLogger(__name__).warning(
-            "Running on ephemeral SQLite storage; imported data resets when the service restarts."
-        )
-        return
-    raise RuntimeError(
-        "DATABASE_URL is required in production. Configure a persistent Postgres database, "
-        "or set WS_ALLOW_EPHEMERAL_SQLITE=1 to run the demo on ephemeral SQLite."
+    logging.getLogger(__name__).warning(
+        "No DATABASE_URL set; running on SQLite at %s. Uploaded data is lost when "
+        "the service restarts. Set DATABASE_URL to a Postgres instance to persist it.",
+        settings.db_path,
     )
 
 
@@ -69,7 +65,7 @@ def _initialize_runtime_services(application: FastAPI) -> None:
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
-    _assert_persistent_storage_configured()
+    _warn_if_storage_is_ephemeral()
     _initialize_runtime_services(application)
     try:
         yield
