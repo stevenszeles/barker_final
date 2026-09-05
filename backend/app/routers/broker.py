@@ -62,26 +62,3 @@ def orders():
         return schwab.get_orders()
     except Exception as exc:
         _raise_schwab_error(exc)
-
-
-@router.post("/orders/preview")
-def preview_order(payload: dict):
-    _require_config()
-    try:
-        return schwab.preview_order(None, payload)
-    except Exception as exc:
-        _raise_schwab_error(exc)
-
-
-@router.post("/orders/place")
-def place_order(payload: dict):
-    _require_config()
-    if not settings.trading_enabled:
-        raise HTTPException(
-            status_code=403,
-            detail="Live order placement is disabled. Set BARKER_TRADING_ENABLED=1 only after operational review.",
-        )
-    try:
-        return schwab.place_order(None, payload)
-    except Exception as exc:
-        _raise_schwab_error(exc)
