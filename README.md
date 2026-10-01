@@ -1,6 +1,6 @@
 # Barker Portfolio Workstation
 
-Barker is a shared portfolio dashboard for a student investment group. An administrator uploads the three Schwab exports the group already receives—positions, balance history, and realized lot detail—and every member sees the same validated portfolio from any browser.
+Barker is a shared portfolio dashboard for a student investment group. Schwab exports—positions (single-account or All-Accounts), balance history, and realized lot detail—are uploaded once, and every member sees the same validated portfolio from any browser.
 
 It is intentionally a small system:
 
@@ -18,9 +18,9 @@ The database is authoritative. The browser never reconstructs the portfolio, par
 - Search holdings and maintain sector classifications.
 - Compare imported NAV history with cached benchmark history.
 - Review realized activity and portfolio risk diagnostics.
-- Share a read-only login while limiting imports and settings to administrators.
+- Optionally share a read-only login while limiting imports and settings to administrators (see [Access control](#access-control)).
 
-Order placement is compiled into the API for future use but disabled by default with `BARKER_TRADING_ENABLED=0`.
+Barker does not place orders. The optional Schwab API connection is read-only: accounts, positions, balances, and existing orders. `BARKER_TRADING_ENABLED` is still read and reported in admin settings but no longer controls any endpoint.
 
 ## How data moves
 
@@ -44,7 +44,7 @@ read-only portfolio projections
 React Query cache --> workstation views
 ```
 
-All files in an upload are committed together. A malformed file rolls the whole batch back. File hashes make repeated uploads idempotent.
+All files in an upload are committed together. All-Accounts positions exports are split into one block per account; cash-only accounts and futures summary rows (`--` in every numeric column) are skipped. A malformed file rolls the whole batch back. File hashes make repeated uploads idempotent.
 
 Imported balance history is displayed as `nav_change_only` unless independently recorded cash flows support a true time-weighted return. This avoids presenting deposits or withdrawals as investment performance.
 
@@ -72,7 +72,7 @@ Imported balance history is displayed as `nav_change_only` unless independently 
 - `import_batches`, `import_files`
 - `jobs`, `calculation_runs`
 
-SQLite is suitable for one local instance. Production requires PostgreSQL; the application fails startup instead of silently falling back to an ephemeral database.
+When `DATABASE_URL` is set the app uses PostgreSQL. Without it the app boots on SQLite with no other configuration; on a host without persistent disk (such as Render's free plan) that database, and every upload in it, is lost on restart, and a warning is logged at startup. Set `DATABASE_URL` whenever uploads must survive a restart.
 
 ## Run locally
 
@@ -83,7 +83,7 @@ cp .env.template .env
 docker compose up --build -d
 ```
 
-Open <http://localhost:8080>. Local data is kept in the `barker-data` Docker volume. Authentication is off in the local template.
+Open <http://localhost:8080>. Local data is kept in the `barker-data` Docker volume. Authentication is off by default.
 
 For separate backend/frontend development:
 
@@ -105,7 +105,7 @@ The Vite server runs at <http://localhost:5173> and proxies `/api` to the backen
 
 ## First portfolio update
 
-1. Sign in with the administrator password.
+1. If authentication is enabled, sign in with the administrator password.
 2. Open **Import & Admin**.
 3. Select the positions, balances, and realized lot CSVs together.
 4. Review the parsed account and row counts, then import.
@@ -115,17 +115,26 @@ The sample `...562` exports were verified as one atomic batch: 41 positions, 731
 
 ## Production on Render
 
-`render.yaml` is the supported deployment definition. It provisions:
+`render.yaml` is the supported deployment definition. It provisions one Docker web service on the free plan with `autoDeploy: true`; deploys are not gated on CI. Render's health check uses `GET /health`.
 
-- a non-sleeping Starter web service;
-- a private paid PostgreSQL database;
-- generated session-signing material;
-- readiness checks against the database;
-- deployments only after CI passes.
+The service needs no environment variables to boot. The one optional variable in `render.yaml` is `DATABASE_URL`: point it at a PostgreSQL instance so uploads survive restarts. Without it the service runs on SQLite, which the free plan wipes whenever the service restarts or redeploys, so data must be re-uploaded.
 
-Before the first deploy, set `BARKER_ADMIN_PASSWORD`. Set `BARKER_VIEWER_PASSWORD` to provide a read-only group login. The Docker entrypoint applies migrations before starting the API, so a migration failure prevents the release from becoming healthy.
+The Docker entrypoint applies migrations before starting the API, so a migration failure prevents the release from becoming healthy.
 
 The API and frontend share an origin; broad production CORS is neither required nor enabled.
+
+## Access control
+
+Authentication is off unless `BARKER_AUTH_ENABLED=1`. While it is off there is no sign-in step and every visitor is treated as an administrator, including access to imports, settings, and the Schwab connection routes.
+
+To enable it, set:
+
+- `BARKER_AUTH_ENABLED=1`;
+- `BARKER_AUTH_SECRET` (at least 32 characters);
+- `BARKER_ADMIN_PASSWORD` (at least 12 characters);
+- optionally `BARKER_VIEWER_PASSWORD` (at least 12 characters, different from the admin password) for a read-only group login.
+
+Startup fails if authentication is enabled and any of these requirements are not met. Sessions last `BARKER_SESSION_HOURS` (default 12).
 
 ## Verification
 
