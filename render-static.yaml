@@ -8,6 +8,8 @@ services:
     staticPublishPath: dist
     autoDeploy: false
     envVars:
+      - key: SKIP_INSTALL_DEPS
+        value: "true"
       - key: VITE_STATIC_MODE
         value: "1"
     headers:
