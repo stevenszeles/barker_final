@@ -205,8 +205,8 @@ const ACCOUNT_COLORS = [
   '#756f7f',
   '#8f8a6f',
 ];
-const APP_BUILD_VERSION = "2026.04.16.1";
-const APP_STATE_STORAGE_KEY = `portfolio-dashboard.app-state.${APP_BUILD_VERSION}`;
+const APP_STORAGE_SCHEMA_VERSION = "2026.04.16.1";
+const APP_STATE_STORAGE_KEY = `portfolio-dashboard.app-state.${APP_STORAGE_SCHEMA_VERSION}`;
 const LEGACY_APP_STATE_STORAGE_KEYS = [
   "portfolio-dashboard.app-state.2026.04.02.1",
   "portfolio-dashboard.app-state.2026.04.01.3",
@@ -2964,20 +2964,6 @@ const S = {
     boxShadow:`0 10px 20px ${hexToRgba('#000000', 0.14)}`,
     fontFamily:"'IBM Plex Sans Condensed', 'IBM Plex Sans', sans-serif",
   },
-  marketRibbon: {
-    display:'grid',
-    gridTemplateColumns:'repeat(auto-fit, minmax(144px, 1fr))',
-    gap:'10px',
-    padding:'14px 24px 20px',
-  },
-  marketTile: {
-    background:'linear-gradient(180deg, rgba(31,35,40,0.96), rgba(10,12,14,0.96))',
-    border:`1px solid ${PALETTE.borderSubtle}`,
-    borderTop:`1px solid ${PALETTE.borderStrong}`,
-    borderRadius:'18px',
-    padding:'12px 14px',
-    boxShadow:`inset 0 1px 0 ${hexToRgba('#ffffff', 0.03)}, 0 12px 24px rgba(0,0,0,0.16)`,
-  },
   tabs: {
     display:'flex',
     gap:'10px',
@@ -3204,17 +3190,6 @@ function correlationColor(value) {
   return `rgba(199, 105, 92, ${0.14 + Math.abs(clamped) * 0.34})`;
 }
 
-function formatDeskTime(timeZone, options = {}) {
-  return new Intl.DateTimeFormat('en-US', {
-    timeZone,
-    hour:'2-digit',
-    minute:'2-digit',
-    second:'2-digit',
-    hour12:false,
-    ...options,
-  }).format(new Date());
-}
-
 // ─── TOOLTIP ──────────────────────────────────────────────────────────────────
 const CustomTooltip = ({ active, payload, label, mode='pct' }) => {
   if (!active || !payload?.length) return null;
@@ -3281,7 +3256,7 @@ export default function App() {
   const [realizedTradeAttributionOverrides, setRealizedTradeAttributionOverrides] = useState(sharedSeedRef.current.realizedTradeAttributionOverrides);
   const [positionTransferEffectiveDates, setPositionTransferEffectiveDates] = useState(sharedSeedRef.current.positionTransferEffectiveDates);
   const [futuresPnlSnapshots, setFuturesPnlSnapshots] = useState(sharedSeedRef.current.futuresPnlSnapshots);
-  const [performanceAccountingMode, setPerformanceAccountingMode] = useState(persisted.performanceAccountingMode || 'desk');
+  const performanceAccountingMode = 'legal';
   const [performanceChartMode, setPerformanceChartMode] = useState(persisted.performanceChartMode || 'focus');
   const [futuresStatementImportAccount, setFuturesStatementImportAccount] = useState(FUTURES_STATEMENT_ACCOUNT_AUTO);
   const [performanceChartSelection, setPerformanceChartSelection] = useState(() =>
@@ -3401,6 +3376,7 @@ export default function App() {
   useEffect(() => { loadBenchmarks(); }, [loadBenchmarks]);
 
   useEffect(() => {
+    if (import.meta.env.VITE_STATIC_MODE === '1') return;
     const refreshSPX = () => {
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       loadBenchmarks({ forceRefresh: true, spxOnly: true });
@@ -3488,7 +3464,7 @@ export default function App() {
   }, [fetchSharedDashboardState]);
 
   useEffect(() => {
-    if (!sharedStateReady) return undefined;
+    if (!sharedStateReady || import.meta.env.VITE_STATIC_MODE === '1') return undefined;
     let cancelled = false;
     let timeoutId = null;
 
@@ -3635,42 +3611,6 @@ export default function App() {
   useEffect(() => {
     saveJSONStorage(SECURITY_HISTORY_STORAGE_KEY, securityHistoryData);
   }, [securityHistoryData]);
-
-  const resetAllData = useCallback(() => {
-    const confirmed = typeof window === "undefined"
-      ? true
-      : window.confirm("Delete all uploaded accounts, balance history, realized trades, saved weights, and cached benchmark data?");
-    if (!confirmed) return;
-
-    markSharedWorkspaceDirty('Clearing shared workspace');
-    setAccounts({});
-    setBalanceHistory({});
-    setRealizedTrades([]);
-    setAccountDisplayNames({});
-    setUploadStatus({});
-    setSelectedAccount('ALL');
-    setSectorTargetsByAccount({});
-    setSectorOverrides({});
-    setPositionAttributionOverrides({});
-    setRealizedTradeAttributionOverrides({});
-    setPositionTransferEffectiveDates({});
-    setFuturesPnlSnapshots({});
-    setSpxData([]);
-    setSectorBenchmarkData({});
-    setSecurityHistoryData({});
-    setSecurityHistoryLoading(false);
-    setSelectedSector(SP500_SECTORS[0].name);
-    setRiskMatrixMode('sectors');
-    setShowBenchmark(true);
-    setTimeframe('1Y');
-    setSectorTimeframe('1Y');
-    setRealizedTimeframe('YTD');
-    setPerformanceChartSelection(normalizePerformanceChartSelection(null, [], true));
-    clearJSONStorage(APP_STATE_STORAGE_KEY);
-    LEGACY_APP_STATE_STORAGE_KEYS.forEach(clearJSONStorage);
-    clearJSONStorage(MARKET_CACHE_STORAGE_KEY);
-    clearJSONStorage(SECURITY_HISTORY_STORAGE_KEY);
-  }, [markSharedWorkspaceDirty]);
 
   // File upload handlers
   const handlePositionsUpload = useCallback((file) => {
@@ -5446,12 +5386,6 @@ export default function App() {
   const selectedAccountLabel = selectedAccount === 'ALL'
     ? 'Aggregate Portfolio'
     : getAccountDisplayName(selectedAccount, accountDisplayNames);
-  const deskClocks = [
-    { label:'New York', zone:'America/New_York' },
-    { label:'London', zone:'Europe/London' },
-    { label:'Hong Kong', zone:'Asia/Hong_Kong' },
-    { label:'UTC', zone:'UTC' },
-  ];
   const sharedSyncTone = !sharedStateReady
     ? PALETTE.warning
     : /failed|unavailable|conflict/i.test(sharedSyncStatus)
@@ -5459,38 +5393,6 @@ export default function App() {
       : /saving|loading|publishing|refreshing|clearing|pending|detected|merging/i.test(sharedSyncStatus)
         ? PALETTE.warning
         : PALETTE.positive;
-  const sharedSyncValue = !sharedStateReady
-    ? 'Booting'
-    : /failed|unavailable|conflict/i.test(sharedSyncStatus)
-      ? 'Error'
-      : /saving|loading|publishing|refreshing|clearing|pending|detected|merging/i.test(sharedSyncStatus)
-        ? 'Syncing'
-        : 'Shared';
-  const workspaceBadgeLabel = !sharedStateReady
-    ? 'Workspace Booting'
-    : sharedSyncValue === 'Error'
-      ? 'Workspace Attention'
-      : sharedSyncValue === 'Syncing'
-        ? 'Workspace Syncing'
-        : 'Workspace Live';
-  const workspaceBadgeTone = !sharedStateReady
-    ? PALETTE.warning
-    : sharedSyncValue === 'Error'
-      ? PALETTE.negative
-      : sharedSyncValue === 'Syncing'
-        ? PALETTE.warning
-        : PALETTE.accentBright;
-  const benchmarkFeedLabel = import.meta.env.VITE_STATIC_MODE === '1' && !spxLoading ? 'Published Benchmarks' : spxLoading ? 'Benchmarks Syncing' : spxData.length > 0 ? 'Benchmarks Live' : 'Benchmarks Pending';
-  const terminalStatusTiles = [
-    { label:'Scope', value: selectedAccount === 'ALL' ? 'All Accounts' : getAccountDisplayName(selectedAccount, accountDisplayNames, { short: true }), tone:PALETTE.info },
-    { label:'Accounts', value: String(accountList.length), tone:PALETTE.accentBright },
-    { label:'Positions', value: String(selectedPositions.length), tone:PALETTE.textStrong },
-    { label:'Workspace', value: sharedSyncValue, tone: sharedSyncTone },
-    { label:'Benchmarks', value: spxLoading ? 'Syncing' : spxData.length > 0 ? 'Live' : 'Offline', tone: spxLoading ? PALETTE.warning : spxData.length > 0 ? PALETTE.positive : PALETTE.negative },
-    { label:'Realized Rows', value: String(selectedRealizedTrades.length), tone:PALETTE.accentMuted },
-    { label:'Build', value: APP_BUILD_VERSION, tone:PALETTE.textMuted },
-  ];
-
   const visualExportTables = useMemo(() => {
     const accountLabel = (accountName) => getAccountDisplayName(accountName, accountDisplayNames);
     const accountShortLabel = (accountName) => getAccountDisplayName(accountName, accountDisplayNames, { short: true });
@@ -5510,7 +5412,6 @@ export default function App() {
       metadata: [
         {
           exported_at: new Date().toISOString(),
-          build: APP_BUILD_VERSION,
           selected_account: selectedAccount,
           selected_account_display: selectedAccountLabel,
           account_count: accountList.length,
@@ -5752,7 +5653,7 @@ export default function App() {
     { id:'sectors', label:'Sectors' },
     { id:'realized', label:'Realized P&L' },
     { id:'risk', label:'Risk' },
-    { id:'upload', label:'Upload Data' },
+    { id:'upload', label:'Data & Settings' },
   ];
 
   return (
@@ -5764,30 +5665,12 @@ export default function App() {
             <div style={{ display:'flex', alignItems:'center', gap:'18px', flexWrap:'wrap' }}>
               <div style={S.logo}>Barker Capital Desk</div>
               <div style={S.headerMeta}>Multi-Account Portfolio Command Center</div>
-              <div style={{ ...S.statusPill, borderColor:hexToRgba(workspaceBadgeTone, 0.34), color:workspaceBadgeTone }}>{workspaceBadgeLabel}</div>
             </div>
             <div style={{ display:'flex', alignItems:'center', gap:'10px', flexWrap:'wrap', justifyContent:'flex-end' }}>
-              <div style={{ ...S.statusPill, color:PALETTE.textMuted }}>{import.meta.env.VITE_STATIC_MODE === '1' ? `Updated as of: ${sharedStateUpdatedAt?.slice(0, 10) || 'Loading…'} · Known flows adjusted; history unverified` : new Date().toLocaleDateString('en-US',{weekday:'short',year:'numeric',month:'short',day:'numeric'})}</div>
-              <div style={{ ...S.statusPill, borderColor:PALETTE.border, color:PALETTE.textMuted }}>Build {APP_BUILD_VERSION}</div>
-              <div style={{ ...S.statusPill, borderColor:PALETTE.border, color:PALETTE.info }}>{selectedAccountLabel}</div>
-              <div style={{ ...S.statusPill, borderColor:hexToRgba(spxData.length > 0 ? PALETTE.positive : PALETTE.warning, 0.28), color: spxData.length > 0 ? PALETTE.positive : PALETTE.warning }}>{benchmarkFeedLabel}</div>
-              <div style={{ ...S.statusPill, borderColor:PALETTE.border, color: totalPortfolioValue > 0 ? PALETTE.textStrong : PALETTE.textDim, minWidth:'148px', textAlign:'right' }}>{fmt$(totalPortfolioValue)}</div>
+              <div style={{ ...S.statusPill, color:PALETTE.textMuted }}>{import.meta.env.VITE_STATIC_MODE === '1' ? `Updated as of: ${sharedStateUpdatedAt?.slice(0, 10) || 'Loading…'}` : new Date().toLocaleDateString('en-US',{weekday:'short',year:'numeric',month:'short',day:'numeric'})}</div>
             </div>
           </div>
-          <div style={S.marketRibbon}>
-            {deskClocks.map((clock) => (
-              <div key={clock.label} style={S.marketTile}>
-                <div style={{ color:PALETTE.textDim, fontSize:'9px', letterSpacing:'1.5px', textTransform:'uppercase', marginBottom:'4px', fontFamily:"'IBM Plex Sans Condensed', 'IBM Plex Sans', sans-serif" }}>{clock.label}</div>
-                <div style={{ color:PALETTE.textStrong, fontSize:'18px', fontWeight:700, letterSpacing:'0.8px', fontFamily:"'IBM Plex Mono', monospace" }}>{formatDeskTime(clock.zone)}</div>
-              </div>
-            ))}
-            {terminalStatusTiles.map((tile) => (
-              <div key={tile.label} style={{ ...S.marketTile, borderTopColor: hexToRgba(tile.tone, 0.4) }}>
-                <div style={{ color:'#7b8188', fontSize:'9px', letterSpacing:'1.5px', textTransform:'uppercase', marginBottom:'4px' }}>{tile.label}</div>
-                <div style={{ color: tile.tone, fontSize:'18px', fontWeight:700 }}>{tile.value}</div>
-              </div>
-            ))}
-          </div>
+
         </div>
 
         {/* ── TABS ── */}
@@ -5800,7 +5683,7 @@ export default function App() {
         {/* ── ACCOUNT SELECTOR ── */}
         {tab !== 'upload' && (
           <div style={S.selectorBar}>
-            <span style={S.selectorLabel}>Desk Scope</span>
+            <span style={S.selectorLabel}>Account</span>
             {['ALL', ...accountList].map(acc => (
               <button key={acc} onClick={() => setSelectedAccount(acc)}
                 style={{
@@ -5814,11 +5697,7 @@ export default function App() {
                 {acc === 'ALL' ? 'ALL' : getAccountDisplayName(acc, accountDisplayNames, { short: true })}
               </button>
             ))}
-            <div style={{ marginLeft:'auto', display:'flex', gap:'8px', flexWrap:'wrap' }}>
-              <div style={{ ...S.statusPill, color:PALETTE.textMuted }}>Chart TF {timeframe}</div>
-              <div style={{ ...S.statusPill, color:PALETTE.textMuted }}>{selectedPositions.length} Live Positions</div>
-              <div style={{ ...S.statusPill, color: spxData.length > 0 ? PALETTE.positive : PALETTE.warning }}>{benchmarkFeedLabel}</div>
-            </div>
+
           </div>
         )}
 
@@ -5963,7 +5842,7 @@ export default function App() {
               <div>
                 <div style={S.cardTitle}>CHART SERIES</div>
                 <div style={{ color:PALETTE.textDim, fontSize:'11px' }}>
-                  Toggle between legal broker NAV and desk-attributed NAV, then add or remove account lines independently from the dashboard account filter.
+                  Add or remove account lines independently from the dashboard account filter. Known cash flows are adjusted using assumed end-of-day timing; other historical flows remain unverified.
                 </div>
               </div>
               <div style={{ display:'flex', gap:'6px', flexWrap:'wrap' }}>
@@ -5988,31 +5867,10 @@ export default function App() {
                 >
                   Bar View
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setPerformanceAccountingMode('desk')}
-                  style={{ ...S.btn, ...(performanceAccountingMode === 'desk' ? S.btnActive : {}), padding:'4px 10px', fontSize:'10px', borderColor:PALETTE.accentBright, color:PALETTE.accentBright }}
-                >
-                  Desk NAV
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPerformanceAccountingMode('legal')}
-                  style={{ ...S.btn, ...(performanceAccountingMode === 'legal' ? S.btnActive : {}), padding:'4px 10px', fontSize:'10px' }}
-                >
-                  Legal NAV
-                </button>
                 <button type="button" onClick={() => setAllPerformanceAccounts(true)} style={{ ...S.btn, padding:'4px 10px', fontSize:'10px' }}>All Accounts</button>
                 <button type="button" onClick={() => setAllPerformanceAccounts(false)} style={{ ...S.btn, padding:'4px 10px', fontSize:'10px' }}>Clear Accounts</button>
               </div>
             </div>
-            {performanceAccountingMode === 'desk' && deskPerformanceModel.transferCount > 0 && (
-              <div style={{ color:PALETTE.textDim, fontSize:'10px', marginBottom:'10px' }}>
-                Desk NAV reallocates routed P/L from {deskPerformanceModel.transferCount} routed holdings
-                {' '}({deskPerformanceModel.openTransferCount || 0} open · {deskPerformanceModel.closedTransferCount || 0} closed).
-                {' '}Futures snapshot carry: {deskPerformanceModel.snapshotBackedCount || 0} · direct price history: {deskPerformanceModel.priceBackedCount} · account-return fallback: {deskPerformanceModel.accountBackedCount} · linear carry fallback: {deskPerformanceModel.linearCount || 0} · flat fallback: {deskPerformanceModel.flatCount}
-              </div>
-            )}
             <div style={{ display:'flex', gap:'8px', flexWrap:'wrap' }}>
               <button
                 type="button"
@@ -6053,7 +5911,7 @@ export default function App() {
             <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'12px' }}>
               <div style={S.cardTitle}>
                 {performanceChartMode === 'bar' ? 'PERIOD RETURN SNAPSHOT' : performanceChartMode === 'focus' ? 'PERFORMANCE FOCUS' : 'NORMALIZED PERFORMANCE COMPARISON'}
-                {' '}· {timeframe} · {performanceAccountingMode === 'desk' ? 'Desk NAV' : 'Legal NAV'}
+                {' '}· {timeframe} · {'NAV'}
               </div>
               <button
                 type="button"
@@ -6204,7 +6062,7 @@ export default function App() {
           {/* NAV chart (absolute) */}
           <div style={S.card}>
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:'12px', marginBottom:'8px' }}>
-              <div style={S.cardTitle}>ABSOLUTE NAV — {selectedAccountLabel} · {performanceAccountingMode === 'desk' ? 'Desk NAV' : 'Legal NAV'}</div>
+              <div style={S.cardTitle}>ABSOLUTE NAV — {selectedAccountLabel} · {'NAV'}</div>
               <button
                 type="button"
                 onClick={() => exportCurrentVisual('Absolute NAV', performanceFilteredHistory.map(([date, nav]) => ({ date, nav })))}
@@ -7060,10 +6918,10 @@ export default function App() {
             </button>
             <button
               type="button"
-              onClick={resetAllData}
+              onClick={() => window.location.reload()}
               style={{ ...S.btn, borderColor:'#ff4444', color:'#ff4444' }}
             >
-              Reset All Data
+              Reload Published Data
             </button>
           </div>
 
@@ -7105,7 +6963,7 @@ export default function App() {
               },
               {
                 key: 'futures', label: 'FUTURES STATEMENT FILE', hint: 'AccountStatement_*.csv',
-                desc: 'Export from Schwab account statement CSV. Imports the Futures and Futures Options sections as supplemental live positions and falls back to Profits and Losses when Schwab omits the dedicated Futures block.',
+                desc: 'Export from Schwab account statement CSV. Imports the Futures and Futures Options sections as supplemental positions and falls back to Profits and Losses when Schwab omits the dedicated Futures block.',
                 handler: handleFuturesStatementUpload, accept: '.csv,.CSV',
                 fields: ['Futures: Symbol', 'SPC', 'Qty', 'Trade Price', 'Mark', 'P/L Day', 'Profits and Losses: Symbol', 'P/L Open'],
               },

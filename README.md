@@ -258,3 +258,15 @@ in Desktop/Dashboard CSV. Each entry requires account, date and signed amount;
 internal transfer legs share a transfer_id and must net to zero. Calculations assume
 end-of-day flows. The dataset is explicitly labeled partial: other deposits,
 withdrawals or in-kind flows must be supplied before claiming complete TWR accuracy.
+
+## Static interface cleanup
+
+The static dashboard keeps a single updated-as-of date and removes the market
+clocks, build labels, duplicate portfolio/status tiles, live/shared badges and
+redundant Desk/Legal NAV controls. A single account-based NAV view remains, with
+Focus/Line/Bar views, account overlays, analysis pages and exports intact.
+Cash-flow completeness is explained in Performance rather than in the header.
+Data & Settings retains session previews and sector-settings export; Reload
+Published Data restores the shared snapshot. Static server polling is disabled.
+Unused legacy frontend entry points, styling, adapters and duplicate data files
+have been removed after verifying they were not imported by the active dashboard.
