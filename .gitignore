@@ -95,3 +95,7 @@ Thumbs.db
 # SQLite journaling files
 *.db-shm
 *.db-wal
+
+# Frontend source utilities are application code
+!frontend/src/lib/
+!frontend/src/lib/**
