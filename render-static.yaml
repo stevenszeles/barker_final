@@ -3,8 +3,9 @@ services:
   - type: web
     name: barker-portfolio-static
     runtime: static
-    buildCommand: cd frontend && npm ci && npm run build:static
-    staticPublishPath: frontend/dist
+    rootDir: frontend
+    buildCommand: npm ci && npm run build:static
+    staticPublishPath: dist
     autoDeploy: false
     envVars:
       - key: VITE_STATIC_MODE
