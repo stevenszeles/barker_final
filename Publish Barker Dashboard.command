@@ -1,7 +1,7 @@
 #!/bin/zsh
 set -euo pipefail
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
-cd "$(dirname "$0")"
+cd "$(dirname "${0:A}")"
 if [[ ! -x .venv-publish/bin/python ]]; then
   python3.11 -m venv .venv-publish
   .venv-publish/bin/python -m pip install -r requirements-publish.txt

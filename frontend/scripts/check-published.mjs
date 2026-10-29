@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 const read=name=>JSON.parse(readFileSync(new URL(`../public/data/${name}.json`,import.meta.url),'utf8'));
-const data=read('portfolio'),workspace=read('workspace'),market=read('market');
+const data=read('nav-history'),workspace=read('workspace'),market=read('market');
 if (!workspace.as_of || Number.isNaN(Date.parse(workspace.as_of)) || workspace.as_of!==data.as_of) throw new Error('Publication dates must match');
 const accounts=Object.keys(workspace.state?.accounts ?? {});
 if (!accounts.length) throw new Error('A populated portfolio is required');

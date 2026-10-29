@@ -22,7 +22,7 @@ if (import.meta.env.VITE_STATIC_MODE === '1') {
     const url = new URL(config.url ?? '', location.origin);
     for (const [key,value] of Object.entries(config.params ?? {})) url.searchParams.set(key,String(value));
     const account = url.searchParams.get('account') || 'ALL';
-    const response = await nativeFetch('/data/portfolio.json', {cache:'no-cache'});
+    const response = await nativeFetch('/data/nav-history.json', {cache:'no-cache'});
     if (!response.ok) throw new Error('Published analysis is unavailable');
     const snapshot = await response.json();
     const key = url.pathname === '/portfolio/nav' ? `${url.pathname}?account=${account}` : url.pathname;
