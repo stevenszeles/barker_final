@@ -117,8 +117,8 @@ The sample `...562` exports were verified as one atomic batch: 41 positions, 731
 
 `render.yaml` is the supported deployment definition. It provisions:
 
-- a non-sleeping Starter web service;
-- a private paid PostgreSQL database;
+- a free web service that wakes on requests;
+- an externally supplied PostgreSQL connection (for example, Neon Free);
 - generated session-signing material;
 - readiness checks against the database;
 - manual deployments after CI passes.
@@ -162,9 +162,11 @@ Production refuses database access unless DATABASE_URL uses PostgreSQL and
 WS_DB_FALLBACK_TO_SQLITE=0. A database outage therefore fails requests instead of
 accepting writes into temporary storage. Local SQLite and Docker volumes still work.
 
-The Blueprint selects paid Render Postgres, which includes automatic point-in-time
-recovery: https://render.com/docs/postgresql-backups . Check the Recovery page for
-the available recovery window and export backups there for longer retention.
+The Blueprint keeps Render hosting free and does not provision a paid database.
+Create a free Neon PostgreSQL project and set its TLS connection string as Render's
+DATABASE_URL secret. Keep WS_DB_FALLBACK_TO_SQLITE=0. Database storage survives
+Render restarts; both services may sleep and have free-tier quotas. Review current
+limits at https://neon.com/pricing and retain exports independently for recovery.
 
 Before changing an existing deployment's DATABASE_URL, export its existing data.
 A new database starts empty; this configuration does not transfer existing records.
