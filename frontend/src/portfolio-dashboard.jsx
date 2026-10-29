@@ -2838,11 +2838,15 @@ async function warmBenchmarkService() {
   }
 }
 
+let publishedMarketDataPromise;
+
 async function loadBenchmarkHistorySeries(symbol, { days = 3650, retries = 1, forceRefresh = false } = {}) {
   if (import.meta.env.VITE_STATIC_MODE === "1") {
-    const response = await fetch("/data/market.json");
-    if (!response.ok) throw new Error("Published benchmark history is unavailable");
-    const market = await response.json();
+    publishedMarketDataPromise ??= fetch("/data/market.json").then(response => {
+      if (!response.ok) throw new Error("Published benchmark history is unavailable");
+      return response.json();
+    }).catch(error => { publishedMarketDataPromise = undefined; throw error; });
+    const market = await publishedMarketDataPromise;
     if (!market[symbol]?.length) throw new Error(`No published history for ${symbol}`);
     return market[symbol].slice(-days);
   }
@@ -5468,7 +5472,7 @@ export default function App() {
       : sharedSyncValue === 'Syncing'
         ? PALETTE.warning
         : PALETTE.accentBright;
-  const benchmarkFeedLabel = spxLoading ? 'Benchmarks Syncing' : spxData.length > 0 ? 'Benchmarks Live' : 'Benchmarks Pending';
+  const benchmarkFeedLabel = import.meta.env.VITE_STATIC_MODE === '1' && !spxLoading ? 'Published Benchmarks' : spxLoading ? 'Benchmarks Syncing' : spxData.length > 0 ? 'Benchmarks Live' : 'Benchmarks Pending';
   const terminalStatusTiles = [
     { label:'Scope', value: selectedAccount === 'ALL' ? 'All Accounts' : getAccountDisplayName(selectedAccount, accountDisplayNames, { short: true }), tone:PALETTE.info },
     { label:'Accounts', value: String(accountList.length), tone:PALETTE.accentBright },
@@ -7125,8 +7129,9 @@ export default function App() {
         <div style={S.section}>
           <div style={{ display:'flex', justifyContent:'space-between', gap:'12px', alignItems:'flex-start', marginBottom:'20px', flexWrap:'wrap' }}>
             <div style={{ color:'#555', fontSize:'11px', lineHeight:'1.6', maxWidth:'780px' }}>
-              Upload Schwab export files to update the shared portfolio workspace. Uploaded balances, positions, realized P&amp;L, and sector configuration are saved to the backend so every viewer sees the same portfolio after one daily refresh.
-              Files can be re-uploaded at any time to refresh the shared state.
+              {import.meta.env.VITE_STATIC_MODE === '1'
+                ? 'Published snapshot. Uploads and edits here are temporary previews; they do not update the shared website. To update everyone’s portfolio, place the CSVs in Desktop → Dashboard CSV and run Publish Barker Dashboard. Export any analysis you want to keep before reloading.'
+                : 'Upload Schwab export files to update the shared portfolio workspace. Uploaded balances, positions, realized P&L, and sector configuration are saved to the backend so every viewer sees the same portfolio after one daily refresh. Files can be re-uploaded at any time to refresh the shared state.'}
               <div style={{ color: sharedSyncTone, marginTop:'6px', fontWeight:600 }}>
                 {import.meta.env.VITE_STATIC_MODE === "1" ? "Portfolio updated as of: " : "Workspace sync: "}{import.meta.env.VITE_STATIC_MODE === "1" ? sharedStateUpdatedAt?.slice(0, 10) : sharedSyncStatus}{import.meta.env.VITE_STATIC_MODE !== "1" && sharedStateUpdatedAt ? ` · ${new Date(sharedStateUpdatedAt).toLocaleString()}` : ''}
               </div>

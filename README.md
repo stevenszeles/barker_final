@@ -216,3 +216,24 @@ Published JSON is accessible to website visitors. Do not commit credentials or r
 brokerage files. Review account identifiers and portfolio contents before publishing;
 static mode does not provide private access or a meaningful browser-only login.
 No real portfolio snapshot is included automatically.
+
+## Daily publication — original dashboard
+
+Place the current brokerage exports in `Desktop/Dashboard CSV`, replacing older
+copies of the same export. Double-click `Publish Barker Dashboard.command` in this
+repository. The first run installs its local publishing dependencies. Subsequent
+runs parse the CSVs with the original dashboard's parsers, reconcile all holdings,
+account totals/cash/cost, balance histories and realized gains independently,
+refresh frozen market history through the data date, build, commit only the four
+published data files, and push to GitHub. Render automatically deploys the update.
+A failed preparation restores the prior data files and does not push.
+
+The original styles, chart components and portfolio calculations are retained.
+The website's upload/edit controls provide temporary browser previews. They do
+not save centrally; the Upload Data explanation states this explicitly. Reloading
+loads the published snapshot. The publication date stays fixed until a new update.
+
+The data verification report is `frontend/public/data/verification.json`.
+Positions totals are intraday brokerage values; the latest balance-history point
+is the separate end-of-day history value. Differences between these two exports
+are retained, not silently forced to agree. Published JSON is public to visitors.

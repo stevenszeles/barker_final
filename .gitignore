@@ -99,3 +99,5 @@ Thumbs.db
 # Frontend source utilities are application code
 !frontend/src/lib/
 !frontend/src/lib/**
+
+.venv-publish/
