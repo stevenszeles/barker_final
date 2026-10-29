@@ -392,6 +392,15 @@ async def parse_uploads(files: list[UploadFile]) -> list[ParsedFile]:
                     status_code=400, detail=f"No valid position rows found in {filename}"
                 )
             continue
+        elif file_type == "realized":
+            for block in _split_position_sections(text):
+                account, rows, metadata = _parse_realized(block, filename, account_hint)
+                parsed.append(ParsedFile(
+                    filename=filename, file_type=file_type, account=account,
+                    sha256=hashlib.sha256(block.encode("utf-8")).hexdigest(),
+                    byte_size=len(block.encode("utf-8")), rows=rows, metadata=metadata,
+                ))
+            continue
         elif file_type == "balances":
             account, rows, metadata = _parse_balances(text, filename)
         else:

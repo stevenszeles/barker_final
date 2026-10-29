@@ -186,3 +186,17 @@ def test_static_snapshot_uses_position_pnl_and_import_asof(isolated_database, mo
     assert snapshot["day_pnl"] == pytest.approx(25.0)
     assert snapshot["total_pnl"] == pytest.approx(500.0)
     assert snapshot["net_exposure"] == pytest.approx(1.0)
+
+
+def test_combined_realized_file_keeps_account_ownership():
+    import csv
+    import io
+    original = _realized_file().file.read().decode()
+    lines = original.splitlines()
+    header = next(i for i, line in enumerate(lines) if 'Closed Date' in line)
+    body = '\n'.join(lines[header:])
+    combined = 'Realized Gain/Loss - Lot Details for All_Accounts\nLimit Liability Company ...013\n' + body + '\nLimit Liability Company ...562\n' + body
+    parsed = asyncio.run(parse_uploads([_upload('All_Accounts_GainLoss_Realized_Details.csv', combined)]))
+    assert {item.account for item in parsed} == {'Limit_Liability_Company ...013', 'Limit_Liability_Company ...562'}
+    assert len(parsed) == 2
+    assert parsed[0].rows[0]['trade_id'] != parsed[1].rows[0]['trade_id']
