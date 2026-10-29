@@ -4660,7 +4660,7 @@ export default function App() {
   // Sector analytics from positions + sector ETF total return series.
   const sectorBreakdown = useMemo(() => {
     const sectors = Object.fromEntries(
-      ALL_SECTORS.map(({ name, etf }) => [name, { value: 0, netValue: 0, cost: 0, etfValue: 0, alphaValue: 0, etf, positions: [], trades: [] }]),
+      ALL_SECTORS.map(({ name, etf }) => [name, { value: 0, netValue: 0, cost: 0, etfValue: 0, alphaValue: 0, netEtfValue: 0, netAlphaValue: 0, etf, positions: [], trades: [] }]),
     );
 
     for (const position of selectedPositions) {
@@ -4671,8 +4671,8 @@ export default function App() {
       bucket.value += absValue;
       bucket.netValue += Number(position.mktVal) || 0;
       bucket.cost += absCost;
-      if (position.isSectorETF) bucket.etfValue += absValue;
-      else bucket.alphaValue += absValue;
+      if (position.isSectorETF) { bucket.etfValue += absValue; bucket.netEtfValue += Number(position.mktVal)||0; }
+      else { bucket.alphaValue += absValue; bucket.netAlphaValue += Number(position.mktVal)||0; }
       bucket.positions.push(position);
     }
 
@@ -4699,8 +4699,8 @@ export default function App() {
       const actualWeight=rawWeight ?? 0;
       const activeWeight=rawActive ?? 0;
       const relativeWeight = actualWeight - benchmarkWeight;
-      const actualEtfWeight = currentAccountValue > 0 ? (sectors[name].etfValue / currentAccountValue) * 100 : 0;
-      const actualAlphaWeight = currentAccountValue > 0 ? (sectors[name].alphaValue / currentAccountValue) * 100 : 0;
+      const actualEtfWeight = currentAccountValue > 0 ? (sectors[name].netEtfValue / currentAccountValue) * 100 : 0;
+      const actualAlphaWeight = currentAccountValue > 0 ? (sectors[name].netAlphaValue / currentAccountValue) * 100 : 0;
       const windowStartDate = sectorAccountHistory[0]?.[0] || benchmarkSeries[0]?.[0] || activeHistory[0]?.[0] || null;
       const windowEndDate = sectorAccountHistory[sectorAccountHistory.length - 1]?.[0] || benchmarkSeries[benchmarkSeries.length - 1]?.[0] || activeHistory[activeHistory.length - 1]?.[0] || null;
       const targetDollarBase = sectorStartAccountValue * (targetWeight / 100);
@@ -6636,7 +6636,7 @@ export default function App() {
             <div style={S.tableWrapper}>
               <table style={S.table}>
                 <thead>
-                  <tr>{['Sector','Benchmark','Est. Sleeve P/L %','Bench %','Actual Wt','Invested Wt','Benchmark Wt','Active (pp)','Target Wt','ETF / Alpha','Target 70/30','Wtd Bench','Wtd Active','Target α','Decision α','Benchmark Input','Target Input','Target Bias','Positions'].map(h => <th key={h} style={S.th}>{h}</th>)}</tr>
+                  <tr>{['Sector','Benchmark','Est. Sleeve P/L %','Bench %','Actual Wt','Invested Wt','Benchmark Wt','Active (pp)','Target Wt','ETF / Alpha','Target 70/30','Wtd Bench','Wtd Portfolio','Target α','Decision α','Benchmark Input','Target Input','Target Bias','Positions'].map(h => <th key={h} style={S.th}>{h}</th>)}</tr>
                 </thead>
                 <tbody>
                   {sectorAttribution.map(s => (
