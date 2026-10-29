@@ -91,3 +91,7 @@ Thumbs.db
 .DS_Store
 .vercel
 .env*.local
+
+# SQLite journaling files
+*.db-shm
+*.db-wal

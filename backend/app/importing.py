@@ -232,7 +232,7 @@ def _parse_positions(text: str, filename: str) -> tuple[str, list[dict[str, Any]
                 "description": str(row.get("Description") or "").strip(),
             }
         )
-    if not rows:
+    if not rows and cash <= 0:
         raise HTTPException(status_code=400, detail=f"No valid position rows found in {filename}")
     if account_value <= 0:
         raise HTTPException(status_code=400, detail=f"Positions total is missing or invalid in {filename}")

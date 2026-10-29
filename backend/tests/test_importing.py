@@ -200,3 +200,14 @@ def test_combined_realized_file_keeps_account_ownership():
     assert {item.account for item in parsed} == {'Limit_Liability_Company ...013', 'Limit_Liability_Company ...562'}
     assert len(parsed) == 2
     assert parsed[0].rows[0]['trade_id'] != parsed[1].rows[0]['trade_id']
+
+
+def test_cash_only_positions_are_imported(isolated_database):
+    text = _position_file().file.read().decode()
+    text = '\n'.join(line for line in text.splitlines() if not line.startswith('AAPL,'))
+    text = text.replace('"$3,000.00"', '"$1,000.00"')
+    parsed = asyncio.run(parse_uploads([_upload('cash-only-positions.csv', text)]))
+    assert len(parsed) == 1
+    assert parsed[0].rows == []
+    assert parsed[0].metadata['cash'] == 1000
+    assert import_batch(parsed, actor='test')['ok']
