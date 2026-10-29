@@ -10,3 +10,8 @@ for (const account of ['ALL', ...accounts.map((row) => row.account)]) {
 }
 if (!data.responses['/risk/profile']) throw new Error('Risk analysis is missing');
 console.log(`Verified published data as of ${data.as_of}`);
+
+const workspace = JSON.parse(readFileSync(new URL('../public/data/workspace.json', import.meta.url), 'utf8'));
+const market = JSON.parse(readFileSync(new URL('../public/data/market.json', import.meta.url), 'utf8'));
+if (workspace.as_of !== data.as_of || !Object.keys(workspace.state?.accounts ?? {}).length) throw new Error('Original dashboard workspace is missing or dated incorrectly');
+if (!market['^GSPC']?.length) throw new Error('Published benchmark history is missing');
