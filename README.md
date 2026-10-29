@@ -179,3 +179,40 @@ browser. Test recovery by restoring to a separate database and verifying the sam
 records before switching connections. Retain original brokerage exports separately.
 These hosted checks require access to the live Render account and are not implied
 by passing local tests.
+
+## Static website (no running API or database)
+
+The existing analysis pages can use a published snapshot instead of API requests.
+Export from the authoritative local database using Python 3.11 and the installed
+backend requirements:
+
+```sh
+python -m backend.export_static --database /absolute/path/portfolio.db --as-of 2026-10-29
+cd frontend
+npm ci
+npm run build:static
+```
+
+Use the actual portfolio data date for `--as-of`, not the publication date. The
+exporter copies the source database consistently before running existing analysis;
+it does not modify the original. It fails rather than replace the published file
+if an analysis endpoint fails. It exports every account plus the aggregate view,
+positions, NAV/benchmark history, realized activity, and portfolio risk. No quotes
+are refreshed during export. Keep cached benchmark history in the source database.
+
+The header shows the fixed portfolio date. Browser searches, account filters and
+charts remain interactive. Static mode is read-only: import/admin and sector editing
+are unavailable, and no session API or background API is required. Missing data
+shows an error and prevents a static production build.
+
+Create a **Render Static Site** using `render-static.yaml` as the Blueprint path,
+or set build command `cd frontend && npm ci && npm run build:static` and publish
+folder `frontend/dist`. It is a separate service type from the existing Docker app;
+leave the old site intact until the static site is verified. Hash navigation needs
+no server rewrite. Publish new data by exporting and committing
+`frontend/public/data/portfolio.json`, then deploying again.
+
+Published JSON is accessible to website visitors. Do not commit credentials or raw
+brokerage files. Review account identifiers and portfolio contents before publishing;
+static mode does not provide private access or a meaningful browser-only login.
+No real portfolio snapshot is included automatically.

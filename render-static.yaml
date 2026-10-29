@@ -1,0 +1,15 @@
+# Create a Render Static Site with this Blueprint, or use the same build settings.
+services:
+  - type: web
+    name: barker-portfolio-static
+    runtime: static
+    buildCommand: cd frontend && npm ci && npm run build:static
+    staticPublishPath: frontend/dist
+    autoDeploy: false
+    envVars:
+      - key: VITE_STATIC_MODE
+        value: "1"
+    headers:
+      - path: /data/*
+        name: Cache-Control
+        value: no-cache

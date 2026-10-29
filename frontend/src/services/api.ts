@@ -1,10 +1,16 @@
 import axios from "axios";
+import { staticMode, publishedResponse } from "./published";
 
 export const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL ?? "/api",
   timeout: 15_000,
   withCredentials: true,
   headers: { Accept: "application/json" },
+});
+
+api.interceptors.request.use((config) => {
+  if (staticMode) throw new Error("This published dashboard is read-only. Updates require a new publication.");
+  return config;
 });
 
 api.interceptors.response.use(
@@ -25,6 +31,7 @@ api.interceptors.response.use(
 );
 
 export async function getJSON<T>(path: string, params?: Record<string, unknown>): Promise<T> {
+  if (staticMode) return await publishedResponse(path, params) as T;
   const response = await api.get<T>(path, { params });
   return response.data;
 }

@@ -1,4 +1,5 @@
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import { staticMode, loadPublished } from "../services/published";
 import { useSession } from "../auth";
 
 const navigation = [
@@ -21,6 +22,10 @@ const titles: Record<string, { title: string; detail: string }> = {
 
 export function AppShell({ path, children }: { path: string; children: ReactNode }) {
   const { session, logout } = useSession();
+  const [asOf, setAsOf] = useState("Loading published date…");
+  useEffect(() => {
+    if (staticMode) loadPublished().then((data) => setAsOf(data.as_of)).catch(() => setAsOf("Snapshot unavailable"));
+  }, []);
   const heading = titles[path] ?? titles["/"];
 
   return (
@@ -45,16 +50,16 @@ export function AppShell({ path, children }: { path: string; children: ReactNode
             ))}
         </nav>
         <div className="sidebar__footer">
-          <div className="connection"><span className="status-dot status-dot--good" />Protected · {session.role}</div>
-          <button className="text-button" onClick={logout}>Sign out</button>
+          <div className="connection"><span className="status-dot status-dot--good" />{staticMode ? "Published portfolio" : `Protected · ${session.role}`}</div>
+          {!staticMode && <button className="text-button" onClick={logout}>Sign out</button>}
         </div>
       </aside>
       <section className="workspace">
         <header className="topbar">
-          <div><h1>{heading.title}</h1><p>{heading.detail}</p></div>
+          <div><h1>{heading.title}</h1><p>{heading.detail}</p>{staticMode && <p className="published-asof">Portfolio updated as of: {asOf}</p>}</div>
           <div className="topbar__status">
-            <span className="market-pill"><span className="status-dot status-dot--good" />System online</span>
-            <span>{new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span>
+            <span className="market-pill"><span className="status-dot status-dot--good" />{staticMode ? "Published snapshot" : "System online"}</span>
+            <span>{staticMode ? `Portfolio updated as of: ${asOf}` : new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span>
           </div>
         </header>
         <main className="content">{children}</main>

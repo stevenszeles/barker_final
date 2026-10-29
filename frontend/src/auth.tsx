@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { staticMode } from "./services/published";
 import { api } from "./services/api";
 import type { Session } from "./types";
 import { LoadingState } from "./components/QueryState";
@@ -83,14 +84,16 @@ function Login({ onSuccess }: { onSuccess: (session: Session) => void }) {
 }
 
 export function SessionProvider({ children }: { children: ReactNode }) {
-  const [session, setSession] = useState<Session | null>(null);
+  const [session, setSession] = useState<Session | null>(staticMode ? { authenticated: true, auth_enabled: false, role: "viewer", subject: "published" } : null);
 
   async function refresh() {
+    if (staticMode) return;
     const response = await api.get<Session>("/session");
     setSession(response.data);
   }
 
   async function logout() {
+    if (staticMode) return;
     await api.post("/session/logout");
     setSession((current) => ({
       authenticated: false,
