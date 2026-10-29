@@ -103,10 +103,9 @@ class Settings:
         # Default to live-enabled so Schwab/Stooq history works out of the box.
         self.static_mode = os.environ.get("WS_STATIC_MODE", "0") == "1"
 
-        # Access control. This deployment is a read-only classroom demo, so auth
-        # is off unless BARKER_AUTH_ENABLED=1 is set explicitly.
+        # Local development can run without login; hosted deployments require it by default.
         environment_is_production = _ENVIRONMENT in {"production", "prod"} or render_runtime
-        self.auth_enabled = _env_bool("BARKER_AUTH_ENABLED", default=False)
+        self.auth_enabled = _env_bool("BARKER_AUTH_ENABLED", default=environment_is_production)
         self.auth_secret = _clean_optional(os.environ.get("BARKER_AUTH_SECRET"))
         self.admin_password = _clean_optional(os.environ.get("BARKER_ADMIN_PASSWORD"))
         self.viewer_password = _clean_optional(os.environ.get("BARKER_VIEWER_PASSWORD"))
@@ -189,3 +188,17 @@ class Settings:
 
 
 settings = Settings()
+
+
+def validate_storage_configuration() -> None:
+    """Reject temporary or split storage before any production database access."""
+    production = os.environ.get("ENVIRONMENT", "").strip().lower() in {"production", "prod"} or any(
+        os.environ.get(name) for name in
+        ("RENDER", "RENDER_SERVICE_ID", "RENDER_EXTERNAL_URL", "RENDER_EXTERNAL_HOSTNAME")
+    )
+    if not production:
+        return
+    if not settings.db_url or not settings.db_url.startswith(("postgres://", "postgresql://")):
+        raise RuntimeError("Production requires a PostgreSQL DATABASE_URL; temporary SQLite storage is disabled")
+    if settings.db_fallback_to_sqlite:
+        raise RuntimeError("Production requires WS_DB_FALLBACK_TO_SQLITE=0; saves must use PostgreSQL")

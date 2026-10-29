@@ -12,7 +12,7 @@ try:
     import psycopg2.pool
 except Exception:  # pragma: no cover - optional dependency
     psycopg2 = None
-from .config import settings
+from .config import settings, validate_storage_configuration
 
 _LOCK = threading.RLock()
 _POOL_LOCK = threading.Lock()
@@ -837,6 +837,7 @@ def close_pool() -> None:
 
 
 def connect():
+    validate_storage_configuration()
     global _SQLITE_FALLBACK_ACTIVE, _LAST_CONNECTION_ERROR
     if _is_postgres():
         if not _SQLITE_FALLBACK_ACTIVE:

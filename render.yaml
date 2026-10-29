@@ -2,14 +2,34 @@ services:
   - type: web
     name: barker-dashboard
     runtime: docker
-    plan: free
-    autoDeploy: true
+    plan: starter
+    autoDeploy: false
     dockerfilePath: ./Dockerfile
-    healthCheckPath: /health
+    healthCheckPath: /health/ready
     maxShutdownDelaySeconds: 30
     envVars:
-      # Optional. Point this at a Postgres instance and uploaded CSVs survive
-      # restarts. Left unset, the app runs on SQLite, which the free plan wipes
-      # whenever the service restarts.
+      - key: ENVIRONMENT
+        value: production
       - key: DATABASE_URL
+        fromDatabase:
+          name: barker-db
+          property: connectionString
+      - key: WS_DB_FALLBACK_TO_SQLITE
+        value: "0"
+      - key: BARKER_AUTH_ENABLED
+        value: "1"
+      - key: BARKER_SECURE_COOKIES
+        value: "1"
+      - key: BARKER_AUTH_SECRET
+        generateValue: true
+      - key: BARKER_ADMIN_PASSWORD
         sync: false
+      - key: BARKER_VIEWER_PASSWORD
+        sync: false
+
+databases:
+  - name: barker-db
+    plan: basic-256mb
+    databaseName: barker
+    user: barker
+    ipAllowList: []

@@ -121,7 +121,7 @@ The sample `...562` exports were verified as one atomic batch: 41 positions, 731
 - a private paid PostgreSQL database;
 - generated session-signing material;
 - readiness checks against the database;
-- deployments only after CI passes.
+- manual deployments after CI passes.
 
 Before the first deploy, set `BARKER_ADMIN_PASSWORD`. Set `BARKER_VIEWER_PASSWORD` to provide a read-only group login. The Docker entrypoint applies migrations before starting the API, so a migration failure prevents the release from becoming healthy.
 
@@ -155,3 +155,25 @@ Use the existing boundaries:
 5. cover the financial invariant and API authorization in tests.
 
 Do not add a second browser-side source of truth, file parser, deployment platform, or implicit live-data dependency.
+
+## Persistence and recovery
+
+Production refuses database access unless DATABASE_URL uses PostgreSQL and
+WS_DB_FALLBACK_TO_SQLITE=0. A database outage therefore fails requests instead of
+accepting writes into temporary storage. Local SQLite and Docker volumes still work.
+
+The Blueprint selects paid Render Postgres, which includes automatic point-in-time
+recovery: https://render.com/docs/postgresql-backups . Check the Recovery page for
+the available recovery window and export backups there for longer retention.
+
+Before changing an existing deployment's DATABASE_URL, export its existing data.
+A new database starts empty; this configuration does not transfer existing records.
+Set an administrator password of at least 12 characters before deploying. A viewer
+password is optional and must differ from the administrator password.
+
+Deployment acceptance: import a known CSV batch, record account values and import
+history, restart and redeploy, and confirm both remain unchanged from another
+browser. Test recovery by restoring to a separate database and verifying the same
+records before switching connections. Retain original brokerage exports separately.
+These hosted checks require access to the live Render account and are not implied
+by passing local tests.

@@ -5,7 +5,7 @@ from fastapi import Depends, FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from .config import settings
+from .config import settings, validate_storage_configuration
 from .routers import portfolio, risk, trades, status
 from .routers import auth, broker, market, positions, admin, stooq_proxy, session
 from .db import close_pool, database_ping, ensure_schema, storage_diagnostics
@@ -26,30 +26,10 @@ except Exception:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     logging.getLogger(__name__).warning("Failed to initialize file logging at %s.", _log_path)
 
-def _is_production_runtime() -> bool:
-    env = os.getenv("ENVIRONMENT", "").strip().lower()
-    return env in {"production", "prod"} or bool(os.getenv("RENDER"))
-
-
-def _warn_if_storage_is_ephemeral() -> None:
-    """Boot with no configuration at all, and say so when storage won't persist.
-
-    Set DATABASE_URL to a Postgres instance and uploads survive restarts. Without
-    it the app still runs on SQLite, which is fine for a demo but is wiped
-    whenever the host restarts the service.
-    """
-    if not _is_production_runtime() or settings.db_url:
-        return
-    logging.getLogger(__name__).warning(
-        "No DATABASE_URL set; running on SQLite at %s. Uploaded data is lost when "
-        "the service restarts. Set DATABASE_URL to a Postgres instance to persist it.",
-        settings.db_path,
-    )
-
-
 def _initialize_runtime_services(application: FastAPI) -> None:
     application.state.startup_initializing = True
     try:
+        validate_storage_configuration()
         validate_security_configuration()
         if settings.migrate_on_startup:
             ensure_schema()
@@ -65,7 +45,6 @@ def _initialize_runtime_services(application: FastAPI) -> None:
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
-    _warn_if_storage_is_ephemeral()
     _initialize_runtime_services(application)
     try:
         yield
