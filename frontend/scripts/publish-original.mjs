@@ -2,6 +2,7 @@ import { build } from 'esbuild';
 import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import path from 'node:path';
+import { adjustKnownCashFlows } from '../src/services/analytics.js';
 const folder = process.argv[2];
 if (!folder) throw new Error('CSV folder is required');
 const source = await readFile('src/portfolio-dashboard.jsx', 'utf8');
@@ -28,14 +29,29 @@ const asOf=dates.at(-1);
 if (positionsAsOf!==asOf) throw new Error('Positions and balance exports have different dates');
 if (Object.values(balanceHistory).some(rows=>rows.at(-1)?.[0]!==asOf)) throw new Error('Balance exports have different latest dates; provide one consistent daily batch');
 if (!Object.keys(accounts).length || !asOf || !realizedTrades.length) throw new Error('Incomplete publication');
-const state=parsers.buildSharedDashboardStatePayload({accounts,balanceHistory,realizedTrades});
+let settings={};
+try { settings=JSON.parse(await readFile('public/data/workspace.json','utf8')).state || {}; } catch {}
+try { settings={...settings,...JSON.parse(await readFile(path.join(folder,'publication-settings.json'),'utf8'))}; } catch (error) { if (error.code!=='ENOENT') throw error; }
+const sectorByUnderlying=new Map();
+for (const [name,account] of Object.entries(accounts)) for (const position of account.positions) if (position.mainSector) sectorByUnderlying.set(`${name}::${position.baseSymbol}`,position.mainSector);
+realizedTrades=realizedTrades.map(trade=> { const sector=sectorByUnderlying.get(`${trade.account}::${trade.baseSym}`); return !trade.mainSector && sector ? {...trade,mainSector:sector,sector} : trade; });
+const state=parsers.buildSharedDashboardStatePayload({...settings,accounts,balanceHistory,realizedTrades,positionAttributionOverrides:{},realizedTradeAttributionOverrides:{},positionTransferEffectiveDates:{}});
 await mkdir('public/data',{recursive:true});
 await writeFile('public/data/workspace.json',JSON.stringify({state,updated_at:asOf+'T00:00:00Z',as_of:asOf,version:Number(asOf.replaceAll('-',''))}));
 console.log(`Original dashboard snapshot: ${Object.keys(accounts).length} accounts, ${realizedTrades.length} trades, as of ${asOf}`);
 
+let flowConfig=JSON.parse(await readFile('public/data/cash-flows.json','utf8'));
+try { flowConfig=JSON.parse(await readFile(path.join(folder,'cash-flows.json'),'utf8')); } catch(error) { if(error.code!=='ENOENT') throw error; }
+await writeFile('public/data/cash-flows.json',JSON.stringify(flowConfig,null,2)+'\n');
+for (const flow of flowConfig.flows) {
+ if (!accounts[flow.account] || !Number.isFinite(flow.amount) || !balanceHistory[flow.account]?.some(([date])=>date===flow.date)) throw new Error('Cash flow must match an account and valuation date');
+}
+const transfers=new Map();
+for (const flow of flowConfig.flows) if (flow.transfer_id) transfers.set(flow.transfer_id,(transfers.get(flow.transfer_id)||0)+flow.amount);
+if ([...transfers.values()].some(value=>Math.abs(value)>0.001)) throw new Error('Internal transfer legs must net to zero');
 const responses = {};
 for (const account of ['ALL', ...new Set([...Object.keys(accounts),...Object.keys(balanceHistory)])]) {
  const history=account==='ALL' ? parsers.buildAggregateHistory(balanceHistory) : balanceHistory[account] || [];
- responses[`/portfolio/nav?account=${account}`]=history.map(([date,nav])=>({date,nav,bench:null,twr:null}));
+ responses[`/portfolio/nav?account=${account}`]=adjustKnownCashFlows(history,flowConfig.flows.filter(flow=>account==='ALL'||flow.account===account));
 }
 await writeFile('public/data/nav-history.json', JSON.stringify({as_of:asOf,responses}));

@@ -20,4 +20,4 @@ Data as of 2026-10-29. All source comparisons passed.
 Position exports are intraday; balance exports are end-of-day history. Their differences are retained.
 All holdings quantities, market values and cost bases, complete balance histories, and realized totals were independently reconciled.
 
-Existing analytics limitations: NAV-based returns can include deposits and withdrawals because these exports do not identify cash flows. The original overview unrealized G/L formula subtracts position cost from account NAV and therefore includes cash; this audit does not certify that figure as investment profit. Sector overrides, entry dates and attribution settings are not supplied by these CSVs.
+Existing analytics limitations: NAV-based returns can include deposits and withdrawals because these exports do not identify cash flows. Overview unrealized G/L uses position market values minus position cost bases; cash is excluded. Known cash flows are adjusted using assumed end-of-day timing; cash-flow coverage remains partial until the full history is confirmed. Sector overrides, entry dates and attribution settings are not supplied by these CSVs.

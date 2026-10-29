@@ -1,0 +1,18 @@
+{
+  "coverage": "partial",
+  "timing": "end_of_day_assumed",
+  "flows": [
+    {
+      "account": "Limit_Liability_Company ...662",
+      "date": "2026-10-28",
+      "amount": -10000,
+      "transfer_id": "journal-662-288-20261028"
+    },
+    {
+      "account": "Limit_Liability_Company ...288",
+      "date": "2026-10-28",
+      "amount": 10000,
+      "transfer_id": "journal-662-288-20261028"
+    }
+  ]
+}

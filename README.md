@@ -237,3 +237,24 @@ The data verification report is `frontend/public/data/verification.json`.
 Positions totals are intraday brokerage values; the latest balance-history point
 is the separate end-of-day history value. Differences between these two exports
 are retained, not silently forced to agree. Published JSON is public to visitors.
+
+## Sector settings and cash flows
+
+Sector assignment uses a manual override first, the brokerage Sector column next,
+and the underlying-symbol mapping last. Unresolved holdings stay unclassified.
+In Upload Data, export sector settings as `publication-settings.json`, move that
+file into Desktop/Dashboard CSV, and run the publishing shortcut. Published settings
+are retained on later imports. Website edits remain session previews.
+
+Actual weight is signed sector market value divided by NAV. Invested weight divides
+by gross invested market value excluding cash. Active weight is actual NAV weight
+minus benchmark weight, in percentage points. Cash underweights remain visible;
+option premiums are not delta-adjusted exposures. Incomplete derivative history
+is not treated as a measured sector return.
+
+The recorded October 28 journal moves $10,000 from ...662 to ...288 and nets to zero
+for the combined portfolio. Cash flows can also be supplied as `cash-flows.json`
+in Desktop/Dashboard CSV. Each entry requires account, date and signed amount;
+internal transfer legs share a transfer_id and must net to zero. Calculations assume
+end-of-day flows. The dataset is explicitly labeled partial: other deposits,
+withdrawals or in-kind flows must be supplied before claiming complete TWR accuracy.

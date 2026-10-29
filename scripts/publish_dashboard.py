@@ -12,7 +12,7 @@ from verify_publication import verify
 
 ROOT=Path(__file__).resolve().parents[1]
 DATA=ROOT/'frontend/public/data'
-FILES=['workspace.json','nav-history.json','market.json','verification.json','verification.md']
+FILES=['cash-flows.json','workspace.json','nav-history.json','market.json','verification.json','verification.md']
 
 
 def run(args, cwd=ROOT):

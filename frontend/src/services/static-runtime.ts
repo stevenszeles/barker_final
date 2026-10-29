@@ -6,13 +6,17 @@ if (import.meta.env.VITE_STATIC_MODE === '1') {
     if (!r.ok) throw new Error('Published workspace is unavailable');
     return r.json();
   });
+  let preview: unknown = null;
   window.fetch = async (input, init) => {
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, location.href);
     if (url.origin === location.origin && url.pathname === '/api/admin/shared-dashboard-state') {
       if ((init?.method ?? 'GET').toUpperCase() !== 'GET') {
-        return new Response(JSON.stringify({ detail:'Published snapshot is read-only. Publish a new snapshot to share updates.' }), {status:409,headers:{'Content-Type':'application/json'}});
+        const original=await workspace;
+        const body=JSON.parse(String(init?.body || '{}'));
+        preview={...original,state:body.state,version:(body.base_version || original.version)+1,preview:true};
+        return new Response(JSON.stringify(preview), {headers:{'Content-Type':'application/json'}});
       }
-      return new Response(JSON.stringify(await workspace), {headers:{'Content-Type':'application/json'}});
+      return new Response(JSON.stringify(preview || await workspace), {headers:{'Content-Type':'application/json'}});
     }
     if (url.origin === location.origin && url.pathname === '/health') return new Response('{}', {headers:{'Content-Type':'application/json'}});
     return nativeFetch(input, init);
