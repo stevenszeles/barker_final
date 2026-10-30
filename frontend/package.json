@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "build:static": "node scripts/check-published.mjs && VITE_STATIC_MODE=1 vite build",
     "typecheck": "tsc --noEmit",
-    "test:analytics": "node --test tests/analytics.test.mjs"
+    "test:analytics": "node --test tests/*.test.mjs"
   },
   "dependencies": {
     "@tanstack/react-table": "^8.20.5",

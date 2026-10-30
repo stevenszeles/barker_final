@@ -270,3 +270,15 @@ Data & Settings retains session previews and sector-settings export; Reload
 Published Data restores the shared snapshot. Static server polling is disabled.
 Unused legacy frontend entry points, styling, adapters and duplicate data files
 have been removed after verifying they were not imported by the active dashboard.
+
+## Account return charts
+
+In Performance, Clear All deselects every account, Aggregate and SPX in all views.
+Click account buttons to add/remove lines; selected buttons have checkmarks, filled
+colors, accessible pressed states, and their return for the selected period.
+Select All Accounts selects accounts without adding aggregate or benchmark lines.
+Focus, Line and Bar views use the same selection; no best/worst accounts are added
+automatically. Use a timeframe preset or enter From/To dates and click Apply Dates.
+Custom dates and selections are retained in browser preferences. Details and NAV
+follow the selected account or selected-account group, not another page's scope.
+Missing returns remain unavailable rather than being presented as zero.

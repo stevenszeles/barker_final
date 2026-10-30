@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine, Area, AreaChart, BarChart, Bar, Cell } from "recharts";
 import { api } from "./services/api";
+import { accountSelection, dateRange, selectedDefinitions } from "./services/chart-selection";
 import { sectorWeights } from "./services/analytics";
 
 // ─── SEED DATA: Account ...013 balance history (May 2024 – Mar 2026) ──────────
@@ -3257,10 +3258,14 @@ export default function App() {
   const [positionTransferEffectiveDates, setPositionTransferEffectiveDates] = useState(sharedSeedRef.current.positionTransferEffectiveDates);
   const [futuresPnlSnapshots, setFuturesPnlSnapshots] = useState(sharedSeedRef.current.futuresPnlSnapshots);
   const performanceAccountingMode = 'legal';
+  const chartStartInput=useRef(null);
+  const chartEndInput=useRef(null);
+  const [chartStart, setChartStart] = useState(persisted.chartStart || '');
+  const [chartEnd, setChartEnd] = useState(persisted.chartEnd || '');
   const [performanceChartMode, setPerformanceChartMode] = useState(persisted.performanceChartMode || 'focus');
   const [futuresStatementImportAccount, setFuturesStatementImportAccount] = useState(FUTURES_STATEMENT_ACCOUNT_AUTO);
   const [performanceChartSelection, setPerformanceChartSelection] = useState(() =>
-    normalizePerformanceChartSelection(persisted.performanceChartSelection, [], persisted.showBenchmark ?? true),
+    ({...normalizePerformanceChartSelection(persisted.performanceChartSelection, [], persisted.showBenchmark ?? true),accounts:persisted.performanceChartSelection?.accounts || {}}),
   );
   const [legalNavPointsByAccount, setLegalNavPointsByAccount] = useState({});
   const [sharedStateReady, setSharedStateReady] = useState(false);
@@ -3586,6 +3591,8 @@ export default function App() {
   useEffect(() => {
     saveJSONStorage(APP_STATE_STORAGE_KEY, {
       timeframe,
+      chartStart,
+      chartEnd,
       sectorTimeframe,
       realizedTimeframe,
       accounts,
@@ -3606,7 +3613,7 @@ export default function App() {
       performanceChartMode,
       performanceChartSelection,
     });
-  }, [timeframe, sectorTimeframe, realizedTimeframe, accountDisplayNames, accounts, balanceHistory, futuresPnlSnapshots, realizedTrades, selectedAccount, showBenchmark, selectedSector, riskMatrixMode, sectorTargetsByAccount, sectorOverrides, positionAttributionOverrides, positionTransferEffectiveDates, realizedTradeAttributionOverrides, performanceAccountingMode, performanceChartMode, performanceChartSelection]);
+  }, [timeframe, chartStart, chartEnd, sectorTimeframe, realizedTimeframe, accountDisplayNames, accounts, balanceHistory, futuresPnlSnapshots, realizedTrades, selectedAccount, showBenchmark, selectedSector, riskMatrixMode, sectorTargetsByAccount, sectorOverrides, positionAttributionOverrides, positionTransferEffectiveDates, realizedTradeAttributionOverrides, performanceAccountingMode, performanceChartMode, performanceChartSelection]);
 
   useEffect(() => {
     saveJSONStorage(SECURITY_HISTORY_STORAGE_KEY, securityHistoryData);
@@ -3754,6 +3761,7 @@ export default function App() {
   );
 
   useEffect(() => {
+    if (!accountList.length) return;
     setPerformanceChartSelection((prev) => {
       const normalized = normalizePerformanceChartSelection(prev, accountList, prev?.spx ?? showBenchmark);
       const sameAggregate = normalized.aggregate === prev?.aggregate;
@@ -4154,7 +4162,7 @@ export default function App() {
   const legalAggregatePerformanceModel = useMemo(
     () => buildAggregatePerformanceModel(
       legalPerformanceModelsByAccount,
-      selectedPerformanceAccounts.length ? selectedPerformanceAccounts : accountList,
+      accountList,
     ),
     [accountList, legalPerformanceModelsByAccount, selectedPerformanceAccounts],
   );
@@ -4305,7 +4313,7 @@ export default function App() {
       ? legalAggregatePerformanceModel
       : buildAggregatePerformanceModel(
           accountModels,
-          selectedPerformanceAccounts.length ? selectedPerformanceAccounts : accountList,
+          accountList,
         );
 
     return {
@@ -4340,10 +4348,18 @@ export default function App() {
     [deskPerformanceModel.accountModels, deskPerformanceModel.activeModel, deskPerformanceModel.aggregateModel, legalActivePerformanceModel, legalAggregatePerformanceModel, legalPerformanceModelsByAccount, performanceAccountingMode],
   );
 
-  const performanceActiveHistory = performanceModelSource.activeModel?.navSeries || [];
-  const performanceActiveReturnSeries = performanceModelSource.activeModel?.twrSeries || [];
-  const selectedAggregateHistory = performanceModelSource.aggregateModel?.navSeries || [];
-  const selectedAggregateReturnSeries = performanceModelSource.aggregateModel?.twrSeries || [];
+  const chartDetailModel = useMemo(() => {
+    if (performanceChartSelection.aggregate) return legalAggregatePerformanceModel;
+    if (selectedPerformanceAccounts.length === 1) return legalPerformanceModelsByAccount[selectedPerformanceAccounts[0]];
+    if (selectedPerformanceAccounts.length > 1) return buildAggregatePerformanceModel(legalPerformanceModelsByAccount, selectedPerformanceAccounts);
+    return {navSeries:[],twrSeries:[]};
+  }, [performanceChartSelection.aggregate, selectedPerformanceAccounts, legalAggregatePerformanceModel, legalPerformanceModelsByAccount]);
+  const chartDetailLabel = performanceChartSelection.aggregate ? 'Aggregate Portfolio' : selectedPerformanceAccounts.length===1 ? getAccountDisplayName(selectedPerformanceAccounts[0],accountDisplayNames) : 'Selected Accounts';
+  const performanceActiveHistory = chartDetailModel?.navSeries || [];
+  const performanceActiveReturnSeries = chartDetailModel?.twrSeries || [];
+  const selectedAggregateHistory = legalAggregatePerformanceModel?.navSeries || [];
+  const selectedAggregateReturnSeries = legalAggregatePerformanceModel?.twrSeries || [];
+  const filterChartSeries = useCallback((series, period, end) => period==='CUSTOM' ? dateRange(series,chartStart,chartEnd) : filterByTimeframe(series,period,end), [chartStart,chartEnd]);
 
   const performanceWindowEndDate = comparisonEndDate;
 
@@ -4353,12 +4369,12 @@ export default function App() {
   );
 
   const performanceFilteredHistory = useMemo(
-    () => filterByTimeframe(performanceActiveHistory, timeframe, performanceComparisonEndDate),
-    [performanceActiveHistory, timeframe, performanceComparisonEndDate],
+    () => filterChartSeries(performanceActiveHistory, timeframe, performanceComparisonEndDate),
+    [performanceActiveHistory, timeframe, performanceComparisonEndDate, filterChartSeries],
   );
   const performanceFilteredReturnSeries = useMemo(
-    () => filterByTimeframe(performanceActiveReturnSeries, timeframe, performanceComparisonEndDate),
-    [performanceActiveReturnSeries, timeframe, performanceComparisonEndDate],
+    () => filterChartSeries(performanceActiveReturnSeries, timeframe, performanceComparisonEndDate),
+    [performanceActiveReturnSeries, timeframe, performanceComparisonEndDate, filterChartSeries],
   );
 
   const performanceSeriesDefinitions = useMemo(() => {
@@ -4370,7 +4386,7 @@ export default function App() {
         label: 'Aggregate Portfolio',
         color: PALETTE.portfolio,
         strokeWidth: 2.25,
-        data: filterByTimeframe(selectedAggregateReturnSeries, timeframe, performanceWindowEndDate),
+        data: filterChartSeries(selectedAggregateReturnSeries, timeframe, performanceWindowEndDate),
       });
     }
 
@@ -4384,7 +4400,7 @@ export default function App() {
         accountName,
         color: accountColorMap[accountName] || '#e0e0e0',
         strokeWidth: selectedAccount === accountName ? 2.5 : 1.8,
-        data: filterByTimeframe(history, timeframe, performanceWindowEndDate),
+        data: filterChartSeries(history, timeframe, performanceWindowEndDate),
       });
     });
 
@@ -4395,12 +4411,12 @@ export default function App() {
         color: PALETTE.benchmark,
         strokeWidth: 1.6,
         strokeDasharray: '5 3',
-        data: filterByTimeframe(spxData, timeframe, performanceWindowEndDate),
+        data: filterChartSeries(spxData, timeframe, performanceWindowEndDate),
       });
     }
 
     return definitions.filter((series) => series.data.length);
-  }, [performanceChartSelection, selectedAggregateReturnSeries, accountList, performanceModelSource.accountModels, accountColorMap, selectedAccount, spxData, timeframe, performanceWindowEndDate, accountDisplayNames]);
+  }, [performanceChartSelection, selectedAggregateReturnSeries, accountList, performanceModelSource.accountModels, accountColorMap, selectedAccount, spxData, timeframe, performanceWindowEndDate, accountDisplayNames, filterChartSeries]);
 
   const performanceComparisonData = useMemo(
     () => buildNormalizedComparisonRows(performanceSeriesDefinitions),
@@ -4416,7 +4432,7 @@ export default function App() {
   );
 
   const performanceBarData = useMemo(
-    () => performanceSeriesSummary.map((series) => ({
+    () => performanceSeriesSummary.filter(series=>Number.isFinite(series.periodReturn)).map((series) => ({
       key: series.key,
       label: series.label === 'Aggregate Portfolio'
         ? 'Aggregate'
@@ -4435,7 +4451,7 @@ export default function App() {
   const performanceAccountRanking = useMemo(() => accountList
     .map((accountName, accountIndex) => {
       const history = performanceModelSource.accountModels?.[accountName]?.twrSeries || [];
-      const data = filterByTimeframe(history, timeframe, performanceWindowEndDate);
+      const data = filterChartSeries(history, timeframe, performanceWindowEndDate);
       const periodReturn = computePeriodReturn(data);
       if (!data.length || !Number.isFinite(periodReturn)) return null;
       const displayName = getAccountDisplayName(accountName, accountDisplayNames);
@@ -4452,58 +4468,11 @@ export default function App() {
     })
     .filter(Boolean)
     .sort((a, b) => b.periodReturn - a.periodReturn),
-    [accountList, performanceModelSource.accountModels, accountColorMap, selectedAccount, timeframe, performanceWindowEndDate, accountDisplayNames],
+    [accountList, performanceModelSource.accountModels, accountColorMap, selectedAccount, timeframe, performanceWindowEndDate, accountDisplayNames, filterChartSeries],
   );
 
-  const performanceFocusAccounts = useMemo(() => {
-    const selectedSet = new Set(selectedPerformanceAccounts);
-    const selectedRanked = performanceAccountRanking.filter((series) => selectedSet.has(series.accountName));
-    if (selectedRanked.length) return selectedRanked.slice(0, 6);
-
-    const picks = [];
-    const addPick = (series) => {
-      if (series && !picks.some((item) => item.key === series.key)) picks.push(series);
-    };
-    addPick(performanceAccountRanking[0]);
-    addPick(performanceAccountRanking[1]);
-    addPick(performanceAccountRanking[performanceAccountRanking.length - 1]);
-    if (selectedAccount !== 'ALL') {
-      addPick(performanceAccountRanking.find((series) => series.accountName === selectedAccount));
-    }
-    return picks.filter(Boolean);
-  }, [performanceAccountRanking, selectedPerformanceAccounts, selectedAccount]);
-
-  const performanceFocusSeriesDefinitions = useMemo(() => {
-    const definitions = [];
-    if (selectedAggregateReturnSeries.length) {
-      definitions.push({
-        key: '__portfolio__',
-        label: 'Aggregate Portfolio',
-        shortLabel: 'Aggregate',
-        color: PALETTE.portfolio,
-        strokeWidth: 3,
-        data: filterByTimeframe(selectedAggregateReturnSeries, timeframe, performanceWindowEndDate),
-      });
-    }
-    if (spxData.length) {
-      definitions.push({
-        key: '__spx__',
-        label: 'SPX',
-        shortLabel: 'SPX',
-        color: PALETTE.benchmark,
-        strokeWidth: 2.4,
-        strokeDasharray: '6 4',
-        data: filterByTimeframe(spxData, timeframe, performanceWindowEndDate),
-      });
-    }
-    performanceFocusAccounts.forEach((series) => {
-      definitions.push({
-        ...series,
-        strokeWidth: series.strokeWidth || 1.8,
-      });
-    });
-    return definitions.filter((series) => series.data.length);
-  }, [performanceFocusAccounts, selectedAggregateReturnSeries, spxData, timeframe, performanceWindowEndDate]);
+  const performanceFocusAccounts = useMemo(() => performanceAccountRanking.filter(series=>performanceChartSelection.accounts?.[series.accountName]), [performanceAccountRanking,performanceChartSelection]);
+  const performanceFocusSeriesDefinitions = useMemo(() => selectedDefinitions(performanceSeriesDefinitions,performanceChartSelection), [performanceSeriesDefinitions,performanceChartSelection]);
 
   const performanceFocusData = useMemo(
     () => buildNormalizedComparisonRows(performanceFocusSeriesDefinitions),
@@ -4515,8 +4484,8 @@ export default function App() {
     const spx = performanceFocusSeriesDefinitions.find((series) => series.key === '__spx__');
     const aggregateReturn = computePeriodReturn(aggregate?.data);
     const spxReturn = computePeriodReturn(spx?.data);
-    const bestAccount = performanceAccountRanking[0] || null;
-    const worstAccount = performanceAccountRanking[performanceAccountRanking.length - 1] || null;
+    const bestAccount = performanceFocusAccounts[0] || null;
+    const worstAccount = performanceFocusAccounts[performanceFocusAccounts.length - 1] || null;
     const deltaVsSpx = Number.isFinite(aggregateReturn) && Number.isFinite(spxReturn)
       ? aggregateReturn - spxReturn
       : null;
@@ -4527,11 +4496,11 @@ export default function App() {
       bestAccount,
       worstAccount,
     };
-  }, [performanceFocusSeriesDefinitions, performanceAccountRanking]);
+  }, [performanceFocusSeriesDefinitions, performanceFocusAccounts]);
 
   const performanceFocusRankingRows = useMemo(() => {
     const rows = [
-      ...performanceAccountRanking.slice(0, 8),
+      ...performanceFocusAccounts,
     ];
     const aggregate = performanceFocusSummary.aggregateReturn;
     const spx = performanceFocusSummary.spxReturn;
@@ -4555,15 +4524,15 @@ export default function App() {
     return mixed
       .sort((a, b) => b.periodReturn - a.periodReturn)
       .slice(0, 10);
-  }, [performanceAccountRanking, performanceFocusSummary]);
+  }, [performanceFocusAccounts, performanceFocusSummary]);
 
   // Merge portfolio + SPX for chart
   const chartData = useMemo(() => {
-    return buildPortfolioBenchmarkChartData(performanceFilteredReturnSeries, filteredSPX);
-  }, [performanceFilteredReturnSeries, filteredSPX]);
+    return buildPortfolioBenchmarkChartData(filterChartSeries(legalActivePerformanceModel?.twrSeries || [], timeframe, comparisonEndDate), filteredSPX);
+  }, [legalActivePerformanceModel, timeframe, comparisonEndDate, filterChartSeries, filteredSPX]);
 
   const stats = useMemo(() => filteredHistory.length >= 2 ? computeReturns(filteredHistory) : null, [filteredHistory]);
-  const allTimeStats = useMemo(() => buildReturnStatsFromSeries(performanceActiveReturnSeries, activeHistory), [performanceActiveReturnSeries, activeHistory]);
+  const allTimeStats = useMemo(() => buildReturnStatsFromSeries(legalActivePerformanceModel?.twrSeries || [], activeHistory), [legalActivePerformanceModel, activeHistory]);
   const performanceStats = useMemo(
     () => buildReturnStatsFromSeries(
       performanceFilteredReturnSeries,
@@ -4571,31 +4540,32 @@ export default function App() {
     ),
     [performanceFilteredHistory, performanceFilteredReturnSeries],
   );
+  const riskReturnSeries=legalActivePerformanceModel?.twrSeries || [];
   const riskDrawdownData = useMemo(() => {
-    if (!performanceActiveReturnSeries.length) return [];
+    if (!riskReturnSeries.length) return [];
     const ddData = [];
-    let peak = performanceActiveReturnSeries[0]?.[1] || 1;
-    for (const [date, val] of performanceActiveReturnSeries) {
+    let peak = riskReturnSeries[0]?.[1] || 1;
+    for (const [date, val] of riskReturnSeries) {
       if (val > peak) peak = val;
       ddData.push({ date, dd: peak ? ((val - peak) / peak) * 100 : 0 });
     }
     return filterByTimeframe(ddData.map((d) => [d.date, d.dd]), timeframe)
       .map(([date, dd]) => ({ date, dd }));
-  }, [performanceActiveReturnSeries, timeframe]);
+  }, [riskReturnSeries, timeframe]);
   const riskRollingVolData = useMemo(() => {
-    if (performanceActiveReturnSeries.length < 32) return [];
+    if (riskReturnSeries.length < 32) return [];
     const rolling = [];
-    for (let i = 31; i < performanceActiveReturnSeries.length; i++) {
-      const windowRows = performanceActiveReturnSeries.slice(i - 30, i + 1);
+    for (let i = 31; i < riskReturnSeries.length; i++) {
+      const windowRows = riskReturnSeries.slice(i - 30, i + 1);
       const rets = windowRows.slice(1).map((_, j) => (windowRows[j + 1][1] - windowRows[j][1]) / windowRows[j][1]);
       const mean = rets.reduce((a, b) => a + b, 0) / rets.length;
       const variance = rets.reduce((a, b) => a + (b - mean) ** 2, 0) / rets.length;
       const vol = Math.sqrt(variance * 252) * 100;
-      rolling.push({ date: performanceActiveReturnSeries[i][0], vol });
+      rolling.push({ date: riskReturnSeries[i][0], vol });
     }
     return filterByTimeframe(rolling.map((d) => [d.date, d.vol]), timeframe)
       .map(([date, vol]) => ({ date, vol }));
-  }, [performanceActiveReturnSeries, timeframe]);
+  }, [riskReturnSeries, timeframe]);
 
   // Sector analytics from positions + sector ETF total return series.
   const sectorBreakdown = useMemo(() => {
@@ -5350,12 +5320,8 @@ export default function App() {
     }));
   }, []);
 
-  const setAllPerformanceAccounts = useCallback((nextValue) => {
-    setPerformanceChartSelection((prev) => ({
-      ...prev,
-      accounts: Object.fromEntries(accountList.map((accountName) => [accountName, nextValue])),
-    }));
-  }, [accountList]);
+  const setAllPerformanceAccounts = useCallback((enabled) => setPerformanceChartSelection(accountSelection(accountList,enabled)), [accountList]);
+  const chartToggleStyle=(enabled,color=PALETTE.accentBright)=>({...S.btn,padding:'8px 12px',fontSize:'11px',fontWeight:enabled?750:450,border:`2px solid ${enabled?color:PALETTE.borderSubtle}`,background:enabled?hexToRgba(color,0.2):'transparent',color:enabled?color:PALETTE.textDim,boxShadow:enabled?`inset 0 0 0 1px ${hexToRgba(color,0.25)}`:'none'});
 
   // Account summary cards
   const accountSummary = useMemo(() => {
@@ -5681,7 +5647,7 @@ export default function App() {
         </div>
 
         {/* ── ACCOUNT SELECTOR ── */}
-        {tab !== 'upload' && (
+        {tab !== 'upload' && tab !== 'performance' && (
           <div style={S.selectorBar}>
             <span style={S.selectorLabel}>Account</span>
             {['ALL', ...accountList].map(acc => (
@@ -5840,9 +5806,16 @@ export default function App() {
           <div style={{ ...S.card, marginBottom:'16px' }}>
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:'12px', flexWrap:'wrap', marginBottom:'12px' }}>
               <div>
-                <div style={S.cardTitle}>CHART SERIES</div>
+                <div style={S.cardTitle}>CHART SERIES · {selectedPerformanceAccounts.length + Number(!!performanceChartSelection.aggregate) + Number(!!performanceChartSelection.spx)} selected</div>
+                <div style={{display:'flex',gap:'10px',alignItems:'center',flexWrap:'wrap',margin:'8px 0'}}>
+                  <label>From <input aria-label="Chart start date" type="date" ref={chartStartInput} defaultValue={chartStart} style={S.input}/></label>
+                  <label>To <input aria-label="Chart end date" type="date" ref={chartEndInput} defaultValue={chartEnd} style={S.input}/></label>
+                  <button type="button" style={S.btn} onClick={()=>{setChartStart(chartStartInput.current?.value || '');setChartEnd(chartEndInput.current?.value || '');setTimeframe('CUSTOM');}}>Apply Dates</button>
+                  <span>{timeframe==='CUSTOM' ? `${chartStart || 'Earliest'} → ${chartEnd || 'Latest'}` : timeframe}</span>
+                  {timeframe==='CUSTOM' && chartStart && chartEnd && chartStart>chartEnd && <span role="alert" style={{color:PALETTE.negative}}>Start date must be before end date.</span>}
+                </div>
                 <div style={{ color:PALETTE.textDim, fontSize:'11px' }}>
-                  Add or remove account lines independently from the dashboard account filter. Known cash flows are adjusted using assumed end-of-day timing; other historical flows remain unverified.
+                  Click accounts to compare their returns. Selected accounts have a checkmark and a filled color. Clear All removes every series. Known cash flows are adjusted using assumed end-of-day timing; other historical flows remain unverified.
                 </div>
               </div>
               <div style={{ display:'flex', gap:'6px', flexWrap:'wrap' }}>
@@ -5867,40 +5840,38 @@ export default function App() {
                 >
                   Bar View
                 </button>
-                <button type="button" onClick={() => setAllPerformanceAccounts(true)} style={{ ...S.btn, padding:'4px 10px', fontSize:'10px' }}>All Accounts</button>
-                <button type="button" onClick={() => setAllPerformanceAccounts(false)} style={{ ...S.btn, padding:'4px 10px', fontSize:'10px' }}>Clear Accounts</button>
+                <button type="button" onClick={() => setAllPerformanceAccounts(true)} style={{ ...S.btn, padding:'4px 10px', fontSize:'10px' }}>Select All Accounts</button>
+                <button type="button" onClick={() => setAllPerformanceAccounts(false)} style={{ ...S.btn, padding:'4px 10px', fontSize:'10px' }}>Clear All</button>
               </div>
             </div>
             <div style={{ display:'flex', gap:'8px', flexWrap:'wrap' }}>
               <button
                 type="button"
                 onClick={togglePerformanceAggregate}
-                style={{ ...S.btn, ...(performanceChartSelection.aggregate ? S.btnActive : {}), padding:'4px 10px', fontSize:'10px', borderColor:PALETTE.portfolio, color:PALETTE.portfolio }}
+                aria-pressed={!!performanceChartSelection.aggregate}
+                style={chartToggleStyle(performanceChartSelection.aggregate,PALETTE.portfolio)}
               >
-                Aggregate
+                {performanceChartSelection.aggregate ? '✓ ' : '○ '}Aggregate
               </button>
               <button
                 type="button"
                 onClick={togglePerformanceSPX}
-                style={{ ...S.btn, ...(performanceChartSelection.spx ? S.btnActive : {}), padding:'4px 10px', fontSize:'10px', borderColor:PALETTE.benchmark, color:PALETTE.accentBright }}
+                aria-pressed={!!performanceChartSelection.spx}
+                style={chartToggleStyle(performanceChartSelection.spx,PALETTE.benchmark)}
               >
-                SPX
+                {performanceChartSelection.spx ? '✓ ' : '○ '}SPX
               </button>
               {accountList.map((accountName) => (
                 <button
                   key={accountName}
                   type="button"
                   onClick={() => togglePerformanceAccount(accountName)}
-                  style={{
-                    ...S.btn,
-                    ...(performanceChartSelection.accounts?.[accountName] ? S.btnActive : {}),
-                    padding:'4px 10px',
-                    fontSize:'10px',
-                    borderColor: accountColorMap[accountName] || PALETTE.borderSubtle,
-                    color: performanceChartSelection.accounts?.[accountName] ? accountColorMap[accountName] || PALETTE.textStrong : PALETTE.textDim,
-                  }}
+                  aria-pressed={!!performanceChartSelection.accounts?.[accountName]}
+                  aria-label={`Chart ${getAccountDisplayName(accountName,accountDisplayNames,{short:true})}`}
+                  style={chartToggleStyle(performanceChartSelection.accounts?.[accountName],accountColorMap[accountName])}
                 >
-                  {getAccountDisplayName(accountName, accountDisplayNames, { short: true })}
+                  {performanceChartSelection.accounts?.[accountName] ? '✓ ' : '○ '}{getAccountDisplayName(accountName,accountDisplayNames,{short:true})}{performanceChartSelection.accounts?.[accountName] ? ` · ${fmtPct(performanceAccountRanking.find(item=>item.accountName===accountName)?.periodReturn)}` : ''}
+
                 </button>
               ))}
             </div>
@@ -5924,7 +5895,7 @@ export default function App() {
               >
                 Export
               </button>
-              {performanceChartMode !== 'focus' && performanceSeriesSummary.length > 0 && (
+              {performanceSeriesSummary.length > 0 && (
                 <div style={{ display:'flex', gap:'14px', fontSize:'11px', flexWrap:'wrap', justifyContent:'flex-end' }}>
                   {performanceSeriesSummary.map((series) => (
                     <span key={series.key} style={{ color: series.color }}>
@@ -5937,20 +5908,6 @@ export default function App() {
             </div>
             {performanceChartMode === 'focus' && performanceFocusData.length > 0 ? (
               <div>
-                <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(150px, 1fr))', gap:'10px', marginBottom:'14px' }}>
-                  {[
-                    ['Aggregate', fmtPct(performanceFocusSummary.aggregateReturn), Number(performanceFocusSummary.aggregateReturn) >= 0 ? PALETTE.positive : PALETTE.negative],
-                    ['SPX Benchmark', fmtPct(performanceFocusSummary.spxReturn), Number(performanceFocusSummary.spxReturn) >= 0 ? PALETTE.positive : PALETTE.negative],
-                    ['Vs SPX', Number.isFinite(performanceFocusSummary.deltaVsSpx) ? `${performanceFocusSummary.deltaVsSpx >= 0 ? '+' : ''}${performanceFocusSummary.deltaVsSpx.toFixed(2)} pts` : '--', Number(performanceFocusSummary.deltaVsSpx) >= 0 ? PALETTE.positive : PALETTE.negative],
-                    ['Best Account', performanceFocusSummary.bestAccount ? `${performanceFocusSummary.bestAccount.shortLabel} ${fmtPct(performanceFocusSummary.bestAccount.periodReturn)}` : '--', PALETTE.positive],
-                    ['Worst Account', performanceFocusSummary.worstAccount ? `${performanceFocusSummary.worstAccount.shortLabel} ${fmtPct(performanceFocusSummary.worstAccount.periodReturn)}` : '--', PALETTE.negative],
-                  ].map(([label, value, color]) => (
-                    <div key={label} style={{ border:`1px solid ${PALETTE.borderSubtle}`, background:'rgba(255,255,255,0.025)', borderRadius:'8px', padding:'10px 12px' }}>
-                      <div style={{ ...S.cardTitle, fontSize:'9px', marginBottom:'6px' }}>{label}</div>
-                      <div style={{ color, fontSize:'16px', fontWeight:700, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{value}</div>
-                    </div>
-                  ))}
-                </div>
                 <div style={{ display:'flex', flexWrap:'wrap', gap:'16px', alignItems:'stretch' }}>
                   <div style={{ flex:'1 1 520px', minWidth:'280px', height:'392px' }}>
                     <ResponsiveContainer width="100%" height="100%">
@@ -6043,7 +6000,6 @@ export default function App() {
             <div style={{ ...S.grid(4), marginBottom:'16px' }}>
               {[
                 ['Period Return', fmtPct(performanceStats.total), performanceStats.total >= 0 ? PALETTE.positive : PALETTE.negative],
-                ['YTD Return', fmtPct(performanceStats.ytd), performanceStats.ytd >= 0 ? PALETTE.positive : PALETTE.negative],
                 ['Max Drawdown', fmtPct(-performanceStats.maxDrawdown), PALETTE.warning],
                 ['Annualized Vol', `${fmtNum(performanceStats.volatility)}%`, PALETTE.textStrong],
                 ['Sharpe Ratio', fmtNum(performanceStats.sharpe), performanceStats.sharpe >= 1 ? PALETTE.positive : PALETTE.warning],
@@ -6060,9 +6016,9 @@ export default function App() {
           )}
 
           {/* NAV chart (absolute) */}
-          <div style={S.card}>
+          {performanceFilteredHistory.length > 0 && (<div style={S.card}>
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:'12px', marginBottom:'8px' }}>
-              <div style={S.cardTitle}>ABSOLUTE NAV — {selectedAccountLabel} · {'NAV'}</div>
+              <div style={S.cardTitle}>ABSOLUTE NAV — {chartDetailLabel} · {'NAV'}</div>
               <button
                 type="button"
                 onClick={() => exportCurrentVisual('Absolute NAV', performanceFilteredHistory.map(([date, nav]) => ({ date, nav })))}
@@ -6087,7 +6043,7 @@ export default function App() {
                 <Area type="monotone" dataKey="nav" stroke={PALETTE.portfolio} fill="url(#navGrad)" strokeWidth={2} dot={false} name="NAV" />
               </AreaChart>
             </ResponsiveContainer>
-          </div>
+          </div>)}
         </div>
       )}
 
