@@ -4528,9 +4528,9 @@ export default function App() {
       if (val > peak) peak = val;
       ddData.push({ date, dd: peak ? ((val - peak) / peak) * 100 : 0 });
     }
-    return filterByTimeframe(ddData.map((d) => [d.date, d.dd]), timeframe)
+    return filterChartSeries(ddData.map((d) => [d.date, d.dd]), timeframe, latestBalanceSnapshotDate)
       .map(([date, dd]) => ({ date, dd }));
-  }, [riskReturnSeries, timeframe]);
+  }, [riskReturnSeries, timeframe, filterChartSeries, latestBalanceSnapshotDate]);
   const riskRollingVolData = useMemo(() => {
     if (riskReturnSeries.length < 32) return [];
     const rolling = [];
@@ -4542,9 +4542,9 @@ export default function App() {
       const vol = Math.sqrt(variance * 252) * 100;
       rolling.push({ date: riskReturnSeries[i][0], vol });
     }
-    return filterByTimeframe(rolling.map((d) => [d.date, d.vol]), timeframe)
+    return filterChartSeries(rolling.map((d) => [d.date, d.vol]), timeframe, latestBalanceSnapshotDate)
       .map(([date, vol]) => ({ date, vol }));
-  }, [riskReturnSeries, timeframe]);
+  }, [riskReturnSeries, timeframe, filterChartSeries, latestBalanceSnapshotDate]);
 
   // Sector analytics from positions + sector ETF total return series.
   const sectorBreakdown = useMemo(() => {
@@ -4820,79 +4820,17 @@ export default function App() {
   }, [sectorBenchmarkData, selectedSector, spxData]);
 
   const sectorComparisonChart = useMemo(() => {
-    if (!sectorDetail) return [];
-
-    const startDate = sectorDetail.windowStartDate;
-    const endDate = sectorDetail.windowEndDate;
-    if (!startDate || !endDate) return [];
-
-    const benchmarkBase = getFirstValueOnOrAfter(filteredSectorHistory, startDate)?.[1] ?? null;
-    const historyDates = sectorAccountHistory
-      .filter(([date]) => date >= startDate && date <= endDate)
-      .map(([date]) => date);
-    const dates = [...new Set([...filteredSectorHistory.map(([date]) => date), ...historyDates])].sort();
-    const closedTrades = filterTradesByDateRange(
-      selectedRealizedTradesWithDates.filter((trade) => trade.mainSector === selectedSector),
-      startDate,
-      endDate,
-    ).sort((a, b) => a.closedDateISO.localeCompare(b.closedDateISO));
-    const positionInputs = sectorDetail.positions.map((position) => {
-      const history = getPositionHistorySeries(position);
-      const startPoint = getFirstValueOnOrAfter(history, startDate);
-      if (!startPoint) return null;
-      return {
-        qty: position.qty || 0,
-        startPrice: startPoint[1],
-        series: history,
-      };
-    }).filter(Boolean);
-    const positionDates = positionInputs.flatMap((input) =>
-      input.series
-        .filter(([date]) => date >= startDate && date <= endDate)
-        .map(([date]) => date),
-    );
-    const tradeDates = closedTrades
-      .map((trade) => trade.closedDateISO || normalizeDateInput(trade.closedDate))
-      .filter((date) => date && date >= startDate && date <= endDate);
-    const chartDates = [...new Set([...dates, ...positionDates, ...tradeDates])].sort();
-
-    let closedIndex = 0;
-    let closedDollarReturn = 0;
-
-    return chartDates.map((date) => {
-      while (closedIndex < closedTrades.length && closedTrades[closedIndex].closedDateISO <= date) {
-        closedDollarReturn += closedTrades[closedIndex].gain || 0;
-        closedIndex += 1;
-      }
-
-      const openDollarReturn = positionInputs.reduce((sum, input) => {
-        const price = getValueOnOrBefore(input.series, date);
-        if (price === null || price === undefined) return sum;
-        return sum + input.qty * (price - input.startPrice);
-      }, 0);
-
-      const benchmarkValue = getValueOnOrBefore(filteredSectorHistory, date);
-      const totalDollarReturn = openDollarReturn + closedDollarReturn;
-      return {
-        date,
-        portfolioPct: null,
-        benchmarkPct: benchmarkBase && benchmarkValue !== null ? ((benchmarkValue - benchmarkBase) / benchmarkBase) * 100 : null,
-        totalDollarReturn,
-        openDollarReturn,
-        closedDollarReturn,
-      };
-    }).filter((row) => row.portfolioPct !== null || row.benchmarkPct !== null);
-  }, [filteredSectorHistory, getPositionHistorySeries, sectorAccountHistory, sectorDetail, selectedRealizedTradesWithDates, selectedSector]);
+    const base=filteredSectorHistory[0]?.[1];
+    if (!(base>0)) return [];
+    return filteredSectorHistory.map(([date,value])=>({date,portfolioPct:null,
+      benchmarkPct:(value/base-1)*100,totalDollarReturn:null,openDollarReturn:null,closedDollarReturn:null}));
+  }, [filteredSectorHistory]);
 
   const sectorCorrelationItems = useMemo(() => {
     return sectorAttribution
       .filter((sector) => sector.positions.length > 0 || Math.abs(sector.actualWeight) > 0.01)
       .map((sector) => {
-        const history = filterByTimeframe(
-          sectorBenchmarkData[sector.name]
-          || [],
-          timeframe,
-        );
+        const history = filterChartSeries(sectorBenchmarkData[sector.name] || [], timeframe, latestBalanceSnapshotDate);
         return {
           key: `sector:${sector.name}`,
           label: sector.name,
@@ -4904,7 +4842,7 @@ export default function App() {
       })
       .filter((item) => item.returns.size >= 3)
       .sort((a, b) => a.label.localeCompare(b.label));
-  }, [sectorAttribution, sectorBenchmarkData, spxData, timeframe]);
+  }, [sectorAttribution, sectorBenchmarkData, filterChartSeries, latestBalanceSnapshotDate, timeframe]);
 
   const positionCorrelationItems = useMemo(() => {
     return [...selectedPositions]
@@ -4912,7 +4850,7 @@ export default function App() {
       .sort((a, b) => Math.abs(b.mktVal || 0) - Math.abs(a.mktVal || 0))
       .slice(0, 12)
       .map((position) => {
-        const history = filterByTimeframe(getPositionHistorySeries(position), timeframe);
+        const history = filterChartSeries(getPositionHistorySeries(position), timeframe, latestBalanceSnapshotDate);
         return {
           key: `position:${position.account}:${position.symbol}`,
           label: position.symbol,
@@ -4923,7 +4861,7 @@ export default function App() {
         };
       })
       .filter((item) => item.returns.size >= 3);
-  }, [accountDisplayNames, getPositionHistorySeries, selectedPositions, timeframe]);
+  }, [accountDisplayNames, getPositionHistorySeries, selectedPositions, filterChartSeries, latestBalanceSnapshotDate, timeframe]);
 
   const riskCorrelationItems = useMemo(
     () => (riskMatrixMode === 'positions' ? positionCorrelationItems : sectorCorrelationItems),
