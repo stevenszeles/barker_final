@@ -1,11 +1,9 @@
 // Static transport only. Presentation and portfolio calculations stay in the original dashboard.
+import { loadPublishedFile } from './publication';
 import { api } from './api';
 if (import.meta.env.VITE_STATIC_MODE === '1') {
   const nativeFetch = window.fetch.bind(window);
-  const workspace = nativeFetch('/data/workspace.json', { cache: 'no-cache' }).then(r => {
-    if (!r.ok) throw new Error('Published workspace is unavailable');
-    return r.json();
-  });
+  const workspace=loadPublishedFile('workspace.json');
   let preview: unknown = null;
   window.fetch = async (input, init) => {
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, location.href);
@@ -26,9 +24,7 @@ if (import.meta.env.VITE_STATIC_MODE === '1') {
     const url = new URL(config.url ?? '', location.origin);
     for (const [key,value] of Object.entries(config.params ?? {})) url.searchParams.set(key,String(value));
     const account = url.searchParams.get('account') || 'ALL';
-    const response = await nativeFetch('/data/nav-history.json', {cache:'no-cache'});
-    if (!response.ok) throw new Error('Published analysis is unavailable');
-    const snapshot = await response.json();
+    const snapshot=await loadPublishedFile('nav-history.json');
     const key = url.pathname === '/portfolio/nav' ? `${url.pathname}?account=${account}` : url.pathname;
     if (!(key in snapshot.responses)) throw new Error(`Analysis unavailable in published snapshot: ${url.pathname}`);
     const data = snapshot.responses[key];

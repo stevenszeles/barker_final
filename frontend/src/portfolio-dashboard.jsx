@@ -1,5 +1,8 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine, Area, AreaChart, BarChart, Bar, Cell } from "recharts";
+import { performanceMetrics, businessSeries, derivativeExposure, finiteOrNull } from "./services/performance-math";
+import analyticsConfig from "../public/data/analytics-config.json";
+import { loadPublishedFile } from "./services/publication";
 import { api } from "./services/api";
 import { accountSelection, dateRange, selectedDefinitions } from "./services/chart-selection";
 import { sectorWeights } from "./services/analytics";
@@ -783,7 +786,7 @@ function resolveMainSector(symbol, cleanSym, assetType = "") {
   const futureSector = resolveStatementFutureSector(symbol, symbol);
   if (futureSector) return futureSector;
   const mapped = SYMBOL_TO_SECTOR[cleanSym] || SYMBOL_TO_SECTOR[symbol] || ETF_TO_SECTOR[cleanSym] || null;
-  if (mapped && SP500_SECTOR_SET.has(mapped)) return mapped;
+  if (mapped && ALL_SECTOR_SET.has(mapped)) return mapped;
   if (assetType.includes("Option")) return null;
   return null;
 }
@@ -918,7 +921,7 @@ function getUploadedAssetMeta(symbol, description = '', assetType = '') {
   const assetTypeText = String(assetType || '').trim().toLowerCase();
   const optionLike = assetTypeText.includes('option') || rawSymbol.includes(' ') || /\d{2}\/\d{2}\/\d{4}/.test(rawSymbol);
   const futureSector = resolveStatementFutureSector(rawSymbol, descriptionText);
-  const futureLike = assetTypeText.includes('future') || Boolean(futureSector);
+  const futureLike = assetTypeText.includes('future') || rawSymbol.startsWith('/');
   const baseToken = rawSymbol.split(' ')[0] || rawSymbol;
   const baseSymbol = futureLike ? (getFutureRootSymbol(rawSymbol) || baseToken) : baseToken;
   return {
@@ -1974,29 +1977,7 @@ function computeNormalizedSeries(data) {
   return data.map(([date, val]) => ({ date, pct: ((val - base) / base) * 100, nav: val }));
 }
 
-function computeReturns(data) {
-  const vals = data.map(d => d[1]);
-  if (vals.length < 2) return { total: 0, ytd: 0, maxDrawdown: 0, volatility: 0, sharpe: 0, calmar: 0 };
-  const first = vals[0], last = vals[vals.length - 1];
-  const total = ((last - first) / first) * 100;
-  // YTD: find Jan 1 of current year
-  const now = new Date();
-  const ytdStart = data.findIndex(([d]) => d >= `${now.getFullYear()}-01-01`);
-  const ytd = ytdStart >= 0 ? ((last - vals[ytdStart]) / vals[ytdStart]) * 100 : total;
-  // Max drawdown
-  let peak = vals[0], maxDD = 0;
-  for (const v of vals) { if (v > peak) peak = v; const dd = (peak - v) / peak; if (dd > maxDD) maxDD = dd; }
-  // Daily returns for vol/sharpe
-  const dailyRets = [];
-  for (let i = 1; i < vals.length; i++) dailyRets.push((vals[i] - vals[i-1]) / vals[i-1]);
-  const mean = dailyRets.reduce((a,b)=>a+b,0)/dailyRets.length;
-  const variance = dailyRets.reduce((a,b)=>a+(b-mean)**2,0)/dailyRets.length;
-  const vol = Math.sqrt(variance * 252) * 100;
-  const annMean = mean * 252 * 100;
-  const sharpe = vol > 0 ? (annMean - 4.3) / vol : 0; // ~4.3% risk free
-  const calmar = maxDD > 0 ? (annMean / (maxDD * 100)) : 0;
-  return { total, ytd, maxDrawdown: maxDD * 100, volatility: vol, sharpe, calmar, currentNav: last };
-}
+function computeReturns(data) {return performanceMetrics(data, analyticsConfig.annual_risk_free_rate);}
 
 function computePeriodReturn(data) {
   if (!data || data.length < 2) return null;
@@ -2149,10 +2130,10 @@ function filterByTimeframe(data, tf, anchorDateISO = null, includePriorPoint = f
   if (!bounded.length) return [];
   const { startDate } = getTimeframeBounds(tf, endDate);
   if (!startDate) return bounded;
-  const startIndex = bounded.findIndex(([date]) => date >= startDate);
-  if (startIndex === -1) return bounded;
-  if (!includePriorPoint) return bounded.slice(startIndex);
-  return bounded.slice(Math.max(0, startIndex - 1));
+  const range=dateRange(bounded,startDate,endDate);
+  if (!includePriorPoint) return range;
+  const prior=bounded.filter(([date])=>date<startDate).at(-1);
+  return prior && range[0]?.[0]!==prior[0] ? [prior,...range] : range;
 }
 
 function buildAggregateHistory(histories, accountNames = null) {
@@ -2761,8 +2742,8 @@ function formatDateLocalISO(value = new Date()) {
   return `${year}-${month}-${day}`;
 }
 
-function getTimeframeBounds(tf, anchorDateISO = formatDateLocalISO()) {
-  const endDate = anchorDateISO || formatDateLocalISO();
+function getTimeframeBounds(tf, anchorDateISO = null) {
+  const endDate = anchorDateISO;
   if (!endDate || tf === 'ALL') return { startDate: null, endDate };
 
   const anchor = new Date(`${endDate}T12:00:00`);
@@ -2845,13 +2826,11 @@ let publishedMarketDataPromise;
 
 async function loadBenchmarkHistorySeries(symbol, { days = 3650, retries = 1, forceRefresh = false } = {}) {
   if (import.meta.env.VITE_STATIC_MODE === "1") {
-    publishedMarketDataPromise ??= fetch("/data/market.json").then(response => {
-      if (!response.ok) throw new Error("Published benchmark history is unavailable");
-      return response.json();
-    }).catch(error => { publishedMarketDataPromise = undefined; throw error; });
+    publishedMarketDataPromise ??= loadPublishedFile('market.json').catch(error => { publishedMarketDataPromise = undefined; throw error; });
     const market = await publishedMarketDataPromise;
-    if (!market[symbol]?.length) throw new Error(`No published history for ${symbol}`);
-    return market[symbol].slice(-days);
+    const publishedSymbol=symbol==='^GSPC' ? analyticsConfig.benchmark_symbol : symbol;
+    if (!market[publishedSymbol]?.length) throw new Error(`No published history for ${publishedSymbol}`);
+    return market[publishedSymbol].slice(-days);
   }
   const stooqSymbol = toStooqSymbol(symbol);
   if (!stooqSymbol) throw new Error(`No benchmark data for ${symbol}`);
@@ -3975,8 +3954,8 @@ export default function App() {
     [selectedRealizedTrades],
   );
   const realizedDateBounds = useMemo(
-    () => getTimeframeBounds(realizedTimeframe),
-    [realizedTimeframe],
+    () => getTimeframeBounds(realizedTimeframe,latestBalanceSnapshotDate),
+    [realizedTimeframe,latestBalanceSnapshotDate],
   );
   const filteredRealizedTrades = useMemo(
     () => filterTradesByDateRange(selectedRealizedTradesWithDates, realizedDateBounds.startDate, realizedDateBounds.endDate),
@@ -4407,7 +4386,7 @@ export default function App() {
     if (performanceChartSelection.spx && spxData.length) {
       definitions.push({
         key: '__spx__',
-        label: 'SPX',
+        label: analyticsConfig.benchmark_short_label,
         color: PALETTE.benchmark,
         strokeWidth: 1.6,
         strokeDasharray: '5 3',
@@ -4515,8 +4494,8 @@ export default function App() {
       } : null,
       Number.isFinite(spx) ? {
         key: '__spx__',
-        label: 'SPX',
-        shortLabel: 'SPX',
+        label: analyticsConfig.benchmark_short_label,
+        shortLabel: analyticsConfig.benchmark_short_label,
         color: PALETTE.benchmark,
         periodReturn: spx,
       } : null,
@@ -4540,7 +4519,7 @@ export default function App() {
     ),
     [performanceFilteredHistory, performanceFilteredReturnSeries],
   );
-  const riskReturnSeries=legalActivePerformanceModel?.twrSeries || [];
+  const riskReturnSeries=businessSeries(legalActivePerformanceModel?.twrSeries || []);
   const riskDrawdownData = useMemo(() => {
     if (!riskReturnSeries.length) return [];
     const ddData = [];
@@ -4559,7 +4538,7 @@ export default function App() {
       const windowRows = riskReturnSeries.slice(i - 30, i + 1);
       const rets = windowRows.slice(1).map((_, j) => (windowRows[j + 1][1] - windowRows[j][1]) / windowRows[j][1]);
       const mean = rets.reduce((a, b) => a + b, 0) / rets.length;
-      const variance = rets.reduce((a, b) => a + (b - mean) ** 2, 0) / rets.length;
+      const variance = rets.reduce((a, b) => a + (b - mean) ** 2, 0) / (rets.length - 1);
       const vol = Math.sqrt(variance * 252) * 100;
       rolling.push({ date: riskReturnSeries[i][0], vol });
     }
@@ -4592,9 +4571,9 @@ export default function App() {
     }
 
     return ALL_SECTORS.map(({ name, etf, color }) => {
-      const benchmarkSymbol = etf || 'SPX';
+      const benchmarkSymbol = etf || 'Unavailable';
       const benchmarkSeries = filterByTimeframe(
-        etf ? (sectorBenchmarkData[name] || []) : spxData,
+        etf ? (sectorBenchmarkData[name] || []) : [],
         sectorTimeframe,
         sectorBenchmarkEndDate,
       );
@@ -4670,8 +4649,8 @@ export default function App() {
         name,
         etf: benchmarkSymbol,
         benchmarkSymbol,
-        usesSPXFallback: !etf,
-        hasBenchmark: true,
+        usesSPXFallback: false,
+        hasBenchmark: Boolean(etf),
         color,
         value,
         cost,
@@ -4690,7 +4669,7 @@ export default function App() {
         sleeveGap: actualWeight - targetWeight,
         unrealizedGain: sectors[name].positions.reduce((sum,p)=>sum+(p.mktVal||0)-(p.costBasis||0),0),
         unrealizedReturn: cost > 0 ? (sectors[name].positions.reduce((sum,p)=>sum+(p.mktVal||0)-(p.costBasis||0),0) / cost) * 100 : null,
-        sectorReturn: coveredOpenPositions === sectors[name].positions.length ? targetRelativeReturn : null,
+        sectorReturn: null,
         benchmarkReturn: totalReturn,
         totalReturn,
         benchmarkDollarBase,
@@ -4700,18 +4679,18 @@ export default function App() {
         sectorReturnBaseLabel,
         comparisonDollarBase: sectorReturnBase,
         benchmarkReturnDollar,
-        portfolioRelativeReturn: coveredOpenPositions === sectors[name].positions.length ? portfolioRelativeReturn : null,
-        targetRelativeReturn: coveredOpenPositions === sectors[name].positions.length ? targetRelativeReturn : null,
-        benchmarkRelativeReturn: coveredOpenPositions === sectors[name].positions.length ? benchmarkRelativeReturn : null,
-        alphaReturn: coveredOpenPositions === sectors[name].positions.length ? alphaReturn : null,
-        sleeveAlphaReturn: coveredOpenPositions === sectors[name].positions.length ? sleeveAlphaReturn : null,
-        openDollarReturn,
+        portfolioRelativeReturn: null,
+        targetRelativeReturn: null,
+        benchmarkRelativeReturn: null,
+        alphaReturn: null,
+        sleeveAlphaReturn: null,
+        openDollarReturn: null,
         closedDollarReturn,
-        totalDollarReturn,
-        portfolioContribution,
+        totalDollarReturn: null,
+        portfolioContribution: null,
         weightedBenchmarkReturn: totalReturn === null ? null : (benchmarkWeight * totalReturn) / 100,
         weightedTargetReturn: totalReturn === null ? null : (targetWeight * totalReturn) / 100,
-        weightedActualReturn: coveredOpenPositions === sectors[name].positions.length ? portfolioContribution : null,
+        weightedActualReturn: null,
         weightedActiveReturn: totalReturn === null ? null : (activeWeight * totalReturn) / 100,
         coverageWeight: value > 0 ? (coveredOpenValue / value) * 100 : 0,
         coveredOpenValue,
@@ -4756,7 +4735,7 @@ export default function App() {
     () => [...sectorAttribution]
       .map((sector) => ({
         ...sector,
-        actualAllocationAlphaDisplay: Number.isFinite(sector.actualAllocationAlpha) ? sector.actualAllocationAlpha : 0,
+        actualAllocationAlphaDisplay: finiteOrNull(sector.actualAllocationAlpha),
       }))
       .sort((a, b) => b.actualWeight - a.actualWeight),
     [sectorAttribution],
@@ -4776,20 +4755,13 @@ export default function App() {
     const target = sectorAttribution.reduce((sum, s) => sum + s.targetWeight, 0);
     const actual = sectorAttribution.reduce((sum, s) => sum + s.actualWeight, 0);
     const classified = sectorAttribution.reduce((sum, s) => sum + s.value, 0);
-    const totalComparisonBase = sectorAttribution.reduce((sum, s) => sum + (s.sectorReturnBase || 0), 0);
-    const totalAlphaDollar = sectorAttribution.reduce((sum, s) => {
-      if ((s.actualAllocationAlpha ?? null) === null || !s.comparisonDollarBase) return sum;
-      return sum + ((s.actualAllocationAlpha / 100) * s.comparisonDollarBase);
-    }, 0);
     return {
       benchmark,
       target,
       actual,
       benchmarkReturn: benchmarkSectorReturn,
-      portfolioRelativeReturn: totalComparisonBase > 0
-        ? (sectorAttribution.reduce((sum, s) => sum + (s.totalDollarReturn || 0), 0) / totalComparisonBase) * 100
-        : null,
-      totalAlphaDollar,
+      portfolioRelativeReturn: null,
+      totalAlphaDollar: null,
       excludedValue: Math.max(currentAccountValue - classified, 0),
       excludedWeight: currentAccountValue > 0 ? ((currentAccountValue - classified) / currentAccountValue) * 100 : 0,
     };
@@ -4802,8 +4774,7 @@ export default function App() {
 
   const filteredSectorHistory = useMemo(
     () => filterByTimeframe(
-      sectorBenchmarkData[selectedSector]
-      || (MANUAL_ONLY_SECTORS.some((sector) => sector.name === selectedSector) ? spxData : []),
+      sectorBenchmarkData[selectedSector] || [],
       sectorTimeframe,
       sectorBenchmarkEndDate,
     ),
@@ -4904,7 +4875,7 @@ export default function App() {
       const totalDollarReturn = openDollarReturn + closedDollarReturn;
       return {
         date,
-        portfolioPct: sectorDetail.sectorReturnBase > 0 ? (totalDollarReturn / sectorDetail.sectorReturnBase) * 100 : null,
+        portfolioPct: null,
         benchmarkPct: benchmarkBase && benchmarkValue !== null ? ((benchmarkValue - benchmarkBase) / benchmarkBase) * 100 : null,
         totalDollarReturn,
         openDollarReturn,
@@ -4919,7 +4890,7 @@ export default function App() {
       .map((sector) => {
         const history = filterByTimeframe(
           sectorBenchmarkData[sector.name]
-          || (MANUAL_ONLY_SECTORS.some((manualSector) => manualSector.name === sector.name) ? spxData : []),
+          || [],
           timeframe,
         );
         return {
@@ -5633,7 +5604,7 @@ export default function App() {
               <div style={S.headerMeta}>Multi-Account Portfolio Command Center</div>
             </div>
             <div style={{ display:'flex', alignItems:'center', gap:'10px', flexWrap:'wrap', justifyContent:'flex-end' }}>
-              <div style={{ ...S.statusPill, color:PALETTE.textMuted }}>{import.meta.env.VITE_STATIC_MODE === '1' ? `Updated as of: ${sharedStateUpdatedAt?.slice(0, 10) || 'Loading…'}` : new Date().toLocaleDateString('en-US',{weekday:'short',year:'numeric',month:'short',day:'numeric'})}</div>
+              <div style={{ ...S.statusPill, color:PALETTE.textMuted }}>{import.meta.env.VITE_STATIC_MODE === '1' ? `Updated as of: ${sharedStateUpdatedAt?.slice(0, 10) || (sharedStateReady ? 'Unavailable — reload' : 'Loading…')}` : new Date().toLocaleDateString('en-US',{weekday:'short',year:'numeric',month:'short',day:'numeric'})}</div>
             </div>
           </div>
 
@@ -5676,10 +5647,10 @@ export default function App() {
               {[
                 { label:'Portfolio NAV', val: fmt$(allTimeStats.currentNav), sub: 'Current Value' },
                 { label:'Total Return', val: fmtPct(allTimeStats.total), sub: 'Since Inception', color: allTimeStats.total >= 0 ? PALETTE.positive : PALETTE.negative },
-                { label:'YTD Return', val: fmtPct(allTimeStats.ytd), sub: '2026', color: allTimeStats.ytd >= 0 ? PALETTE.positive : PALETTE.negative },
-                { label:'Max Drawdown', val: fmtPct(-allTimeStats.maxDrawdown), sub: 'Peak to Trough', color:PALETTE.warning },
+                { label:'YTD Return', val: fmtPct(allTimeStats.ytd), sub: latestBalanceSnapshotDate?.slice(0,4) || '--', color: allTimeStats.ytd >= 0 ? PALETTE.positive : PALETTE.negative },
+                { label:'Max Drawdown', val: fmtPct(allTimeStats.maxDrawdown == null ? null : -allTimeStats.maxDrawdown), sub: 'Peak to Trough', color:PALETTE.warning },
                 { label:'Volatility', val: `${fmtNum(allTimeStats.volatility)}%`, sub: 'Annualized' },
-                { label:'Sharpe Ratio', val: fmtNum(allTimeStats.sharpe), sub: 'Risk-Adjusted', color: allTimeStats.sharpe >= 1 ? PALETTE.positive : allTimeStats.sharpe >= 0 ? PALETTE.warning : PALETTE.negative },
+                { label:'Sharpe Ratio', val: fmtNum(allTimeStats.sharpe), sub: 'Assumed risk-free rate', color: allTimeStats.sharpe >= 1 ? PALETTE.positive : allTimeStats.sharpe >= 0 ? PALETTE.warning : PALETTE.negative },
               ].map(({ label, val, sub, color }) => (
                 <div key={label} style={signalPanelStyle(color || '#8f99a3')}>
                   <div style={S.cardTitle}>{label}</div>
@@ -5694,7 +5665,7 @@ export default function App() {
           <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(320px, 1fr))', gap:'12px', marginBottom:'16px' }}>
             <div style={S.card}>
               <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'12px' }}>
-                <div style={S.cardTitle}>PORTFOLIO vs SPX — {selectedAccountLabel}</div>
+                <div style={S.cardTitle}>PORTFOLIO vs S&P 500 proxy — {selectedAccountLabel}</div>
                 <div style={{ display:'flex', gap:'6px', flexWrap:'wrap', justifyContent:'flex-end' }}>
                   {TIMEFRAMES.map(tf => (
                     <button key={tf} onClick={() => setTimeframe(tf)}
@@ -5702,7 +5673,7 @@ export default function App() {
                   ))}
                   <button
                     type="button"
-                    onClick={() => exportCurrentVisual('Portfolio vs SPX', chartData)}
+                    onClick={() => exportCurrentVisual('Portfolio vs S&P 500 proxy', chartData)}
                     disabled={!chartData.length}
                     style={{ ...S.btn, padding:'3px 8px', fontSize:'10px', borderColor:PALETTE.borderStrong, color:PALETTE.accentBright, opacity: chartData.length ? 1 : 0.45 }}
                   >
@@ -5719,7 +5690,7 @@ export default function App() {
                     <Tooltip content={<CustomTooltip mode="pct" />} />
                     <ReferenceLine y={0} stroke={PALETTE.lineGrid} strokeDasharray="2 2" />
                     <Line type="monotone" dataKey="portPct" stroke={PALETTE.portfolio} dot={false} strokeWidth={2} name="Portfolio" />
-                    {showBenchmark && <Line type="monotone" dataKey="spxPct" stroke={PALETTE.benchmark} dot={false} strokeWidth={1.5} strokeDasharray="4 2" name="SPX" />}
+                    {showBenchmark && <Line type="monotone" dataKey="spxPct" stroke={PALETTE.benchmark} dot={false} strokeWidth={1.5} strokeDasharray="4 2" name={analyticsConfig.benchmark_short_label} />}
                   </LineChart>
                 </ResponsiveContainer>
               ) : (
@@ -5730,7 +5701,7 @@ export default function App() {
               <div style={{ display:'flex', gap:'16px', marginTop:'8px' }}>
                 <label style={{ color:PALETTE.textDim, fontSize:'10px', cursor:'pointer', display:'flex', alignItems:'center', gap:'4px' }}>
                   <input type="checkbox" checked={showBenchmark} onChange={e => setShowBenchmark(e.target.checked)} style={{ accentColor:PALETTE.accent }} />
-                  Show SPX Benchmark
+                  Show SPY Total-Return Proxy
                 </label>
               </div>
             </div>
@@ -5815,7 +5786,7 @@ export default function App() {
                   {timeframe==='CUSTOM' && chartStart && chartEnd && chartStart>chartEnd && <span role="alert" style={{color:PALETTE.negative}}>Start date must be before end date.</span>}
                 </div>
                 <div style={{ color:PALETTE.textDim, fontSize:'11px' }}>
-                  Click accounts to compare their returns. Selected accounts have a checkmark and a filled color. Clear All removes every series. Known cash flows are adjusted using assumed end-of-day timing; other historical flows remain unverified.
+                  Click accounts to compare their returns. Selected accounts have a checkmark and a filled color. Clear All removes every series. Known cash flows are adjusted using assumed end-of-day timing; other historical flows remain unverified. Benchmark: SPY dividend-adjusted proxy. Risk uses weekdays and an explicit risk-free-rate assumption.
                 </div>
               </div>
               <div style={{ display:'flex', gap:'6px', flexWrap:'wrap' }}>
@@ -5859,7 +5830,7 @@ export default function App() {
                 aria-pressed={!!performanceChartSelection.spx}
                 style={chartToggleStyle(performanceChartSelection.spx,PALETTE.benchmark)}
               >
-                {performanceChartSelection.spx ? '✓ ' : '○ '}SPX
+                {performanceChartSelection.spx ? '✓ ' : '○ '}{analyticsConfig.benchmark_short_label}
               </button>
               {accountList.map((accountName) => (
                 <button
@@ -5927,7 +5898,7 @@ export default function App() {
                             strokeWidth={series.strokeWidth}
                             strokeDasharray={series.strokeDasharray}
                             name={series.shortLabel || series.label}
-                            connectNulls
+                            connectNulls={false}
                           />
                         ))}
                       </LineChart>
@@ -5983,14 +5954,14 @@ export default function App() {
                       strokeWidth={series.strokeWidth}
                       strokeDasharray={series.strokeDasharray}
                       name={series.label}
-                      connectNulls
+                      connectNulls={false}
                     />
                   ))}
                 </LineChart>
               </ResponsiveContainer>
             ) : (
               <div style={{ height:360, display:'flex', alignItems:'center', justifyContent:'center', color:PALETTE.textDim }}>
-                Select at least one account, aggregate portfolio, or SPX to chart performance.
+                Select at least one account, aggregate portfolio, or benchmark to chart performance.
               </div>
             )}
           </div>
@@ -6000,9 +5971,9 @@ export default function App() {
             <div style={{ ...S.grid(4), marginBottom:'16px' }}>
               {[
                 ['Period Return', fmtPct(performanceStats.total), performanceStats.total >= 0 ? PALETTE.positive : PALETTE.negative],
-                ['Max Drawdown', fmtPct(-performanceStats.maxDrawdown), PALETTE.warning],
+                ['Max Drawdown', fmtPct(performanceStats.maxDrawdown == null ? null : -performanceStats.maxDrawdown), PALETTE.warning],
                 ['Annualized Vol', `${fmtNum(performanceStats.volatility)}%`, PALETTE.textStrong],
-                ['Sharpe Ratio', fmtNum(performanceStats.sharpe), performanceStats.sharpe >= 1 ? PALETTE.positive : PALETTE.warning],
+                [`Sharpe (${(analyticsConfig.annual_risk_free_rate*100).toFixed(1)}% assumed)`, fmtNum(performanceStats.sharpe), performanceStats.sharpe >= 1 ? PALETTE.positive : PALETTE.warning],
                 ['Calmar Ratio', fmtNum(performanceStats.calmar), performanceStats.calmar >= 1 ? PALETTE.positive : PALETTE.warning],
                 ['Current NAV', fmt$(performanceStats.currentNav), PALETTE.textStrong],
                 ['Data Points', performanceFilteredHistory.length.toString(), PALETTE.textDim],
@@ -6057,7 +6028,7 @@ export default function App() {
             <div style={S.tableWrapper}>
               <table style={S.table}>
                 <thead>
-                  <tr>{['Symbol','Description','Account','Type','Sector Assignment','Qty','Price','Market Value','Cost Basis','Gain $','Gain %'].map(h => <th key={h} style={S.th}>{h}</th>)}</tr>
+                  <tr>{['Symbol','Description','Account','Type','Sector Assignment','Qty','Price','Market Value','Notional','Cost Basis','Gain $','Gain %'].map(h => <th key={h} style={S.th}>{h}</th>)}</tr>
                 </thead>
                 <tbody>
                   {positionsDisplay.map((entry, i) => {
@@ -6200,6 +6171,7 @@ export default function App() {
                         </td>
                         <td style={S.td}>{isGroup ? entry.priceDisplay : (row?.price ? `$${row.price.toFixed(2)}` : '--')}</td>
                         <td style={{ ...S.td, fontWeight:600 }}>{fmt$(isGroup ? entry.totalMarketValue : row?.mktVal)}</td>
+                        <td style={S.td}>{fmt$(isGroup ? null : derivativeExposure(row || {}).notional)}{!isGroup && isOptionPosition(row) && <div style={{fontSize:'9px',color:PALETTE.textDim}}>premium shown; delta unavailable</div>}</td>
                         <td style={S.td}>{fmt$(isGroup ? entry.totalCostBasis : row?.costBasis)}</td>
                         <td style={{ ...S.td, color: gainValue >= 0 ? PALETTE.positive : PALETTE.negative }}>{fmt$(gainValue)}</td>
                         <td style={{ ...S.td, color: gainPct >= 0 ? PALETTE.positive : PALETTE.negative, fontWeight:600 }}>{fmtPct(gainPct)}</td>
@@ -6207,7 +6179,7 @@ export default function App() {
                     );
                   })}
                   {positionsDisplay.length === 0 && (
-                    <tr><td colSpan={11} style={{ ...S.td, textAlign:'center', color:'#333', padding:'32px' }}>Upload a positions file to view holdings</td></tr>
+                    <tr><td colSpan={12} style={{ ...S.td, textAlign:'center', color:'#333', padding:'32px' }}>Upload a positions file to view holdings</td></tr>
                   )}
                 </tbody>
               </table>
@@ -6224,7 +6196,7 @@ export default function App() {
               <div>
                 <div style={S.cardTitle}>SECTOR MODEL — BENCHMARK SECTORS PLUS MANUAL DESK BUCKETS</div>
                 <div style={{ color:'#666', fontSize:'11px', lineHeight:'1.5' }}>
-                  S&P 500 sectors use their sector ETF benchmark. Manual-only buckets (`Crypto`, `Commodities`, `Equities`) are assigned per position and fall back to SPX for charting.
+                  Sector weights and realized P/L are measured from the exports. Historical sector returns and alpha remain unavailable without a full holdings ledger. Manual buckets have no automatic substitute benchmark.
                   Sector targets are account-specific; select an individual account to edit benchmark and target weights.
                 </div>
               </div>
@@ -6328,7 +6300,7 @@ export default function App() {
                     <YAxis width={62} tick={CHART_TICK_STYLE} tickFormatter={v => `${v>=0?'+':''}${v.toFixed(1)}%`} tickMargin={8} />
                     <Tooltip content={<CustomTooltip mode="pct" />} />
                     <ReferenceLine y={0} stroke="#333" />
-                    <Line type="monotone" dataKey="portfolioPct" stroke="#00d4ff" dot={false} strokeWidth={2} name={`${selectedSector} Sleeve`} connectNulls />
+                    <Line type="monotone" dataKey="portfolioPct" stroke="#00d4ff" dot={false} strokeWidth={2} name={`${selectedSector} Sleeve`} connectNulls={false} />
                     {showBenchmark && (
                       <Line
                         type="monotone"
@@ -6338,7 +6310,7 @@ export default function App() {
                         strokeWidth={1.6}
                         strokeDasharray="5 3"
                         name={`${sectorDetail?.benchmarkSymbol || 'SPX'} Benchmark`}
-                        connectNulls
+                        connectNulls={false}
                       />
                     )}
                   </LineChart>
@@ -6426,12 +6398,12 @@ export default function App() {
                   <div style={{ background:'#111', border:'1px solid rgba(255,255,255,0.06)', borderRadius:'2px', padding:'12px' }}>
                     <div style={{ color:'#555', fontSize:'10px', marginBottom:'6px' }}>LIVE ACTIVE WT</div>
                     <div style={{ color:'#00d4ff', fontSize:'18px', fontWeight:700 }}>{fmtPct(sectorDetail.activeWeight)}</div>
-                    <div style={{ color:'#777', fontSize:'11px', marginTop:'4px' }}>Sector P/L is reconstructed, not historical sleeve TWR. Missing derivative coverage shows --. Active = NAV weight minus benchmark weight · Invested weight excludes cash; shorts retain their sign · Vs benchmark {fmtPct(sectorDetail.relativeWeight)}</div>
+                    <div style={{ color:'#777', fontSize:'11px', marginTop:'4px' }}>Historical sleeve TWR and alpha are unavailable; current sector weights and realized P/L remain available. Active = NAV weight minus benchmark weight · Invested weight excludes cash; shorts retain their sign · Vs benchmark {fmtPct(sectorDetail.relativeWeight)}</div>
                   </div>
                   <div style={{ background:'#111', border:'1px solid rgba(255,255,255,0.06)', borderRadius:'2px', padding:'12px' }}>
                     <div style={{ color:'#555', fontSize:'10px', marginBottom:'6px' }}>SECTOR RETURN</div>
                     <div style={{ color: sectorDetail.sectorReturn >= 0 ? '#00e676' : '#ff4444', fontSize:'18px', fontWeight:700 }}>{fmtPct(sectorDetail.sectorReturn)}</div>
-                    <div style={{ color:'#777', fontSize:'11px', marginTop:'4px' }}>{sectorDetail.sectorReturnBaseLabel} base for {sectorTimeframe} · Base {fmt$(sectorDetail.sectorReturnBase)} · Reconstructed sleeve {fmtPct(sectorDetail.portfolioRelativeReturn)} · Benchmark {sectorDetail.benchmarkSymbol} {fmtPct(sectorDetail.benchmarkReturn)}</div>
+                    <div style={{ color:'#777', fontSize:'11px', marginTop:'4px' }}>Historical sleeve return needs a complete dated holdings ledger · Benchmark {sectorDetail.benchmarkSymbol} {fmtPct(sectorDetail.benchmarkReturn)}</div>
                   </div>
                 </div>
               ) : (
@@ -6444,13 +6416,13 @@ export default function App() {
             <div style={S.cardTitle}>SECTOR DETAIL — CLICK A ROW TO DRILL INTO ITS RETURN SERIES</div>
             {!editableSectorScope && (
               <div style={{ color:'#8b9097', fontSize:'10px', marginBottom:'10px' }}>
-                Market-value weights use signed exposures. Invested weight excludes cash; active weight retains cash underweights. Option premiums are not delta exposure. Benchmark price history excludes dividends. Select a single account to edit benchmark and target weights. `ALL` shows a weighted blend of account-specific settings.
+                Market-value weights use signed exposures. Invested weight excludes cash; active weight retains cash underweights. Option premiums are not delta exposure. Benchmark adjusted-close history includes reinvested dividends where available. Select a single account to edit benchmark and target weights. `ALL` shows a weighted blend of account-specific settings.
               </div>
             )}
             <div style={S.tableWrapper}>
               <table style={S.table}>
                 <thead>
-                  <tr>{['Sector','Benchmark','Est. Sleeve P/L %','Bench %','Actual Wt','Invested Wt','Benchmark Wt','Active (pp)','Target Wt','ETF / Alpha','Target 70/30','Wtd Bench','Wtd Portfolio','Target α','Decision α','Benchmark Input','Target Input','Target Bias','Positions'].map(h => <th key={h} style={S.th}>{h}</th>)}</tr>
+                  <tr>{['Sector','Benchmark','Sleeve Return %','Bench %','Actual Wt','Invested Wt','Benchmark Wt','Active (pp)','Target Wt','ETF / Alpha','Target 70/30','Wtd Bench','Wtd Portfolio','Target α','Decision α','Benchmark Input','Target Input','Target Bias','Positions'].map(h => <th key={h} style={S.th}>{h}</th>)}</tr>
                 </thead>
                 <tbody>
                   {sectorAttribution.map(s => (
@@ -6653,7 +6625,7 @@ export default function App() {
                   );})}
                   {filteredRealizedTrades.length === 0 && (
                     <tr>
-                      <td colSpan={11} style={{ ...S.td, textAlign:'center', color:'#333', padding:'32px' }}>
+                      <td colSpan={12} style={{ ...S.td, textAlign:'center', color:'#333', padding:'32px' }}>
                         {selectedRealizedTrades.length
                           ? `No realized trades found for ${realizedTimeframe}.`
                           : 'Upload realized gain/loss file to view trades.'}
@@ -6676,7 +6648,7 @@ export default function App() {
               <div style={{ ...S.grid(3), marginBottom:'16px' }}>
                 {/* Risk card set */}
                 {[
-                  { label:'Max Drawdown', val: fmtPct(-allTimeStats.maxDrawdown), color:'#ff9800', desc:'Peak-to-trough decline' },
+                  { label:'Max Drawdown', val: fmtPct(allTimeStats.maxDrawdown == null ? null : -allTimeStats.maxDrawdown), color:'#ff9800', desc:'Peak-to-trough decline' },
                   { label:'Annualized Volatility', val: `${fmtNum(allTimeStats.volatility)}%`, color:'#e0e0e0', desc:'σ of daily returns × √252' },
                   { label:'Sharpe Ratio', val: fmtNum(allTimeStats.sharpe), color: allTimeStats.sharpe >= 1 ? '#00e676' : allTimeStats.sharpe >= 0 ? '#ffd600' : '#ff4444', desc:'Return per unit risk (4.3% RF)' },
                   { label:'Calmar Ratio', val: fmtNum(allTimeStats.calmar), color: allTimeStats.calmar >= 0.5 ? '#00e676' : '#ffd600', desc:'Ann. return / Max drawdown' },
@@ -6698,7 +6670,7 @@ export default function App() {
                     <div style={{ color:'#666', fontSize:'11px', marginTop:'4px', lineHeight:'1.5' }}>
                       {riskMatrixMode === 'positions'
                         ? `Top ${riskCorrelationItems.length} positions by absolute market value with historical series over ${timeframe}. Options and instruments without history are excluded.`
-                        : `Sector proxy correlations over ${timeframe}. S&P sectors use sector ETFs and manual sectors fall back to SPX.`}
+                        : `Sector proxy correlations over ${timeframe}. S&P sectors use sector ETFs; sectors without a verified benchmark remain unavailable.`}
                     </div>
                   </div>
                   <div style={{ display:'flex', gap:'6px', flexWrap:'wrap', alignItems:'center' }}>
@@ -6980,7 +6952,7 @@ export default function App() {
               <div>
                 <div style={S.cardTitle}>BENCHMARK MARKET DATA</div>
                 <div style={{ fontSize:'11px', color: spxData.length > 0 ? '#00e676' : '#666', marginBottom:'3px' }}>
-                  {spxData.length > 0 ? `SPX ✓ ${spxData.length} trading days (${spxData[0]?.[0]} – ${spxData[spxData.length-1]?.[0]})` : spxLoading ? 'Loading benchmark data from Stooq...' : 'SPX not loaded'}
+                  {spxData.length > 0 ? `SPY total-return proxy ✓ ${spxData.length} trading days (${spxData[0]?.[0]} – ${spxData[spxData.length-1]?.[0]})` : spxLoading ? 'Loading published benchmark data...' : 'Benchmark not loaded'}
                 </div>
                 <div style={{ fontSize:'10px', color: Object.keys(sectorBenchmarkData).length === SP500_SECTORS.length ? '#00e676' : '#666' }}>
                   Sector ETFs: {Object.keys(sectorBenchmarkData).length}/{SP500_SECTORS.length} loaded

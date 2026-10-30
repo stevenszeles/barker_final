@@ -1,0 +1,9 @@
+{
+  "annual_risk_free_rate": 0.043,
+  "risk_free_rate_basis": "assumed, not a live rate",
+  "risk_calendar": "weekdays; 252-session annualization",
+  "benchmark_basis": "SPY dividend-adjusted closing prices; ETF proxy, not the S&P 500 total-return index",
+  "benchmark_symbol": "SPY",
+  "benchmark_label": "S&P 500 (SPY total-return proxy)",
+  "benchmark_short_label": "SPY TR proxy"
+}

@@ -224,7 +224,7 @@ copies of the same export. Double-click `Publish Barker Dashboard.command` in th
 repository. The first run installs its local publishing dependencies. Subsequent
 runs parse the CSVs with the original dashboard's parsers, reconcile all holdings,
 account totals/cash/cost, balance histories and realized gains independently,
-refresh frozen market history through the data date, build, commit only the four
+refresh frozen market history through the data date, build, commit only the
 published data files, and push to GitHub. Render automatically deploys the update.
 A failed preparation restores the prior data files and does not push.
 
@@ -282,3 +282,32 @@ automatically. Use a timeframe preset or enter From/To dates and click Apply Dat
 Custom dates and selections are retained in browser preferences. Details and NAV
 follow the selected account or selected-account group, not another page's scope.
 Missing returns remain unavailable rather than being presented as zero.
+
+
+## Accuracy and publication safeguards
+
+Schwab transaction JSON exports can be placed beside the CSVs in Desktop/Dashboard
+CSV. Publishing imports dated deposits, withdrawals and identified cash journals,
+deduplicates overlapping exports and existing manual entries, and excludes records
+after the portfolio snapshot. Trades, dividends, interest, reinvestments and futures
+margin sweeps are not external cash flows. Ambiguous journals and corporate actions
+are reported in transaction-audit.json for review. Raw transaction files stay local.
+The current examples cover two accounts from April 30 through October 29, 2026;
+they do not establish complete historical cash-flow coverage for all accounts.
+
+Sector weights and realized gains remain available. Historical sector sleeve returns
+and alpha stay unavailable without complete dated position/transaction history.
+Manual sectors without a verified proxy do not inherit the S&P benchmark. Derivative
+market value is labeled separately from notional; options require underlying/Greek
+data for delta exposure and futures require a verified contract multiplier.
+
+Benchmark comparisons use dividend-adjusted SPY closing prices, explicitly labeled
+an ETF total-return proxy. Risk statistics exclude weekends and use a stated 252-day
+weekday convention, sample volatility, configurable assumed risk-free rate (4.3%
+default), and annualized return for Calmar. Holidays are not an exchange calendar.
+Dates and YTD anchor to the snapshot rather than the computer clock. Unavailable
+metrics remain unavailable, including undefined ratios and missing alpha.
+
+A content manifest checks every published data file. The browser rejects mixed or
+corrupt snapshots. Publishing rolls back local data on preparation failure and only
+reports success after the live frontend and every published file match the build.

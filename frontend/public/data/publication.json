@@ -1,0 +1,14 @@
+{
+  "id": "8fe019d86a202b723adbd37f2186fdcee2df2665f8ba387e5e8337fd76395ee2",
+  "as_of": "2026-10-29",
+  "files": {
+    "workspace.json": "db32666d2c7f9f89d4963d676584665ce14c2963cad44e1e679943d8240dc6cb",
+    "nav-history.json": "f0bd776cf455d2b470bb75f412f81905268362e512ec6933db842594ccee03a2",
+    "market.json": "a282bc004b1368203d2335d12a80767bcf067a3add074a75ca9e6c3278133a37",
+    "cash-flows.json": "2d455f6f1f9a0dda376ca2e95508bb268dc9775e6252b79c8c1db4836a8b5f3f",
+    "transaction-audit.json": "9d92e3aeedfe2f5c4a16a37ad72e9f31789a21180aa276fa04a71c46d49c2429",
+    "analytics-config.json": "42badeb1a53967594c02aad6fe8c0bb8d089e612ae31d0abd8b3fe067246315a",
+    "verification.json": "cdb421b04038c5e01ab7b6a7e16218d582ec6fa0277803504e45e56cfca4a858",
+    "verification.md": "d4c26f24cdfc60043b4a63fbc045e3f95d937d1d3e3d9984dc2b43301a6b152d"
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "as_of": "2026-10-29",
+  "cash_flow_coverage": "partial",
+  "files": [
+    {
+      "account": "Limit_Liability_Company ...145",
+      "from": "2026-04-30",
+      "through": "2026-10-29",
+      "included_records": 192,
+      "excluded_after_snapshot": 4,
+      "categories": {
+        "income_or_expense": 49,
+        "internal": 54,
+        "trade": 87,
+        "corporate_action": 2
+      },
+      "source_sha256": "01bb986affd1d95976565ff876d82fa08222834d70bec0e1c0c630532bff1253"
+    },
+    {
+      "account": "Limit_Liability_Company ...288",
+      "from": "2026-04-30",
+      "through": "2026-10-29",
+      "included_records": 122,
+      "excluded_after_snapshot": 0,
+      "categories": {
+        "income_or_expense": 2,
+        "trade": 119,
+        "journal": 1
+      },
+      "source_sha256": "3d84ceb1ef18653c1ef216af9af2b2961cc36b419a3aa19657a3e80c7902a9dc"
+    }
+  ],
+  "categories": {
+    "income_or_expense": 51,
+    "internal": 54,
+    "trade": 206,
+    "corporate_action": 2,
+    "journal": 1
+  },
+  "review": [
+    {
+      "account": "Limit_Liability_Company ...145",
+      "date": "2026-10-06",
+      "action": "Reverse Split",
+      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
+    },
+    {
+      "account": "Limit_Liability_Company ...145",
+      "date": "2026-10-06",
+      "action": "Reverse Split",
+      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
+    }
+  ],
+  "note": "Transaction files do not cover every account or the full valuation history. Income, fees, trades and futures sweeps are not external flows."
+}

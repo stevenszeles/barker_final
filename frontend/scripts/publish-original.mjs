@@ -41,7 +41,7 @@ await writeFile('public/data/workspace.json',JSON.stringify({state,updated_at:as
 console.log(`Original dashboard snapshot: ${Object.keys(accounts).length} accounts, ${realizedTrades.length} trades, as of ${asOf}`);
 
 let flowConfig=JSON.parse(await readFile('public/data/cash-flows.json','utf8'));
-try { flowConfig=JSON.parse(await readFile(path.join(folder,'cash-flows.json'),'utf8')); } catch(error) { if(error.code!=='ENOENT') throw error; }
+try { if (!process.argv.includes('--prepared-flows')) flowConfig=JSON.parse(await readFile(path.join(folder,'cash-flows.json'),'utf8')); } catch(error) { if(error.code!=='ENOENT') throw error; }
 await writeFile('public/data/cash-flows.json',JSON.stringify(flowConfig,null,2)+'\n');
 for (const flow of flowConfig.flows) {
  if (!accounts[flow.account] || !Number.isFinite(flow.amount) || !balanceHistory[flow.account]?.some(([date])=>date===flow.date)) throw new Error('Cash flow must match an account and valuation date');
@@ -52,6 +52,6 @@ if ([...transfers.values()].some(value=>Math.abs(value)>0.001)) throw new Error(
 const responses = {};
 for (const account of ['ALL', ...new Set([...Object.keys(accounts),...Object.keys(balanceHistory)])]) {
  const history=account==='ALL' ? parsers.buildAggregateHistory(balanceHistory) : balanceHistory[account] || [];
- responses[`/portfolio/nav?account=${account}`]=adjustKnownCashFlows(history,flowConfig.flows.filter(flow=>account==='ALL'||flow.account===account));
+ responses[`/portfolio/nav?account=${account}`]=adjustKnownCashFlows(history,flowConfig.flows.filter(flow=>account==='ALL' ? !flow.internal : flow.account===account));
 }
 await writeFile('public/data/nav-history.json', JSON.stringify({as_of:asOf,responses}));

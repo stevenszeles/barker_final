@@ -6,3 +6,15 @@ test('withdrawal is not an investment loss',()=>assert.equal(adjustKnownCashFlow
 test('internal journal cancels in aggregate',()=>assert.equal(adjustKnownCashFlows([['2026-10-27',200],['2026-10-28',200]],[{date:'2026-10-28',amount:10},{date:'2026-10-28',amount:-10}])[1].twr,1));
 test('cash-neutral invested weight is distinct from active weight',()=>assert.deepEqual(sectorWeights(40,100,80,50),{actualWeight:40,activeWeight:-10,investedWeight:50}));
 test('short exposure is not labeled a long overweight',()=>assert.equal(sectorWeights(-10,100,80,5).activeWeight,-15));
+import {performanceMetrics,businessSeries,derivativeExposure,finiteOrNull,periodSeries} from '../src/services/performance-math.js';
+test('YTD uses the snapshot year and prior year-end baseline',()=>assert.ok(Math.abs(performanceMetrics([['2024-12-31',100],['2025-01-02',105],['2025-06-01',110]]).ytd-10)<1e-9));
+test('weekend flat balances do not dilute weekday volatility',()=>{
+ const weekdays=[['2026-10-01',100],['2026-10-02',102],['2026-10-05',101],['2026-10-06',104]];
+ const calendar=[...weekdays.slice(0,2),['2026-10-03',102],['2026-10-04',102],...weekdays.slice(2)];
+ assert.equal(performanceMetrics(calendar).volatility,performanceMetrics(weekdays).volatility);
+});
+test('undefined Sharpe is unavailable, not zero',()=>assert.equal(performanceMetrics([['2026-10-01',100],['2026-10-02',100],['2026-10-05',100]]).sharpe,null));
+test('missing alpha stays missing while a measured zero survives',()=>{assert.equal(finiteOrNull(null),null);assert.equal(finiteOrNull(NaN),null);assert.equal(finiteOrNull(0),0);});
+test('option premium is not delta or notional exposure',()=>assert.deepEqual(derivativeExposure({assetType:'Option',qty:2,price:5,mktVal:1000}),{basis:'premium',marketValue:1000,notional:null,deltaExposure:null}));
+test('futures need a verified multiplier',()=>{assert.equal(derivativeExposure({assetType:'Future',qty:2,price:100}).notional,null);assert.equal(derivativeExposure({assetType:'Future',qty:-2,price:100,multiplier:50}).notional,-10000);});
+test('weekend boundary uses the prior close and does not invent future prices',()=>assert.deepEqual(periodSeries([['2026-10-02',100],['2026-10-05',110]],'2026-10-03','2026-10-05'),[['2026-10-03',100],['2026-10-05',110]]));
