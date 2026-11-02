@@ -18,7 +18,7 @@ def write_manifest(data):
     return manifest
 
 
-def wait_for_deployment(base, manifest, local_index, timeout=300, interval=5):
+def wait_for_deployment(base, manifest, local_index, timeout=600, interval=5):
     assets=re.findall(r'(?:src|href)="(/assets/[^\"]+)"',local_index)
     deadline=time.monotonic()+timeout;last_error='not yet checked';last_progress=0
     while time.monotonic()<deadline:
