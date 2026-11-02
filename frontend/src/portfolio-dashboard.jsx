@@ -3245,6 +3245,7 @@ export default function App() {
   const sharedStateSaveInFlightRef = useRef(false);
 
   const [tab, setTab] = useState('overview');
+  const [sectorSettingsSaved, setSectorSettingsSaved] = useState(false);
   const [timeframe, setTimeframe] = useState(persisted.timeframe || '1Y');
   const [sectorTimeframe, setSectorTimeframe] = useState(persisted.sectorTimeframe || '1Y');
   const [realizedTimeframe, setRealizedTimeframe] = useState(persisted.realizedTimeframe || 'YTD');
@@ -3750,6 +3751,14 @@ export default function App() {
     };
     reader.readAsText(file);
   }, [loadBenchmarks, markSharedWorkspaceDirty]);
+
+  const saveSectorAssignments = () => {
+    downloadTextFile('publication-settings.json', JSON.stringify({
+      format: 'barker-sector-settings-v1',
+      sectorOverrides, sectorTargetsByAccount, accountDisplayNames,
+    }, null, 2), 'application/json');
+    setSectorSettingsSaved(true);
+  };
 
   // Derived: account list
   const accountList = useMemo(() => {
@@ -5732,6 +5741,13 @@ export default function App() {
         </div>
       )}
 
+      {sectorSettingsSaved && (
+        <div role="status" style={{margin:'4px',padding:'4px 6px',background:'#EBEB7E',border:'1px solid #7B7B7B',color:'#000000'}}>
+          Settings download requested. Keep it in Downloads, then run Publish Barker Dashboard on your desktop to save the changes for everyone.
+          <button type="button" aria-label="Dismiss settings reminder" style={{...S.btn,marginLeft:'8px'}} onClick={()=>setSectorSettingsSaved(false)}>Dismiss</button>
+        </div>
+      )}
+
       {/* ══════ PERFORMANCE TAB ══════ */}
       {tab === 'performance' && (
         <div style={S.section}>
@@ -6171,6 +6187,7 @@ export default function App() {
                 </div>
               </div>
               <div style={{ display:'flex', gap:'6px', flexWrap:'wrap' }}>
+                <button type="button" style={S.btn} onClick={saveSectorAssignments}>Save sector assignments</button>
                 {TIMEFRAMES.map(tf => (
                   <button key={tf} onClick={() => setSectorTimeframe(tf)}
                     style={{ ...S.btn, ...(sectorTimeframe===tf ? S.btnActive : {}), padding:'3px 8px', fontSize:'10px' }}>{tf}</button>
@@ -6804,14 +6821,14 @@ export default function App() {
           <div style={{ display:'flex', justifyContent:'space-between', gap:'4px', alignItems:'flex-start', marginBottom:'4px', flexWrap:'wrap' }}>
             <div style={{ color:'#000000', fontSize:'11px', lineHeight:'1.5', maxWidth:'780px', background:'#EBEB7E', border:'1px solid #000000', padding:'3px 6px', fontFamily:CQG_FONT_UI }}>
               {import.meta.env.VITE_STATIC_MODE === '1'
-                ? 'Published snapshot. Uploads and edits here are temporary previews; they do not update the shared website. To update everyone’s portfolio, place the CSVs in Desktop → Dashboard CSV and run Publish Barker Dashboard. Export any analysis you want to keep before reloading.'
+                ? 'Published snapshot. Uploads and edits here are temporary previews; they do not update the shared website. To update everyone’s portfolio, place the CSVs in Desktop → Dashboard CSV and run Publish Barker Dashboard. For sector changes, click Save sector assignments, keep the download in Downloads, then run Publish Barker Dashboard. Export any analysis you want to keep before reloading.'
                 : 'Upload Schwab export files to update the shared portfolio workspace. Uploaded balances, positions, realized P&L, and sector configuration are saved to the backend so every viewer sees the same portfolio after one daily refresh. Files can be re-uploaded at any time to refresh the shared state.'}
               <div style={{ color: sharedSyncTone, marginTop:'6px', fontWeight:600 }}>
                 {import.meta.env.VITE_STATIC_MODE === "1" ? "Portfolio updated as of: " : "Workspace sync: "}{import.meta.env.VITE_STATIC_MODE === "1" ? sharedStateUpdatedAt?.slice(0, 10) : sharedSyncStatus}{import.meta.env.VITE_STATIC_MODE !== "1" && sharedStateUpdatedAt ? ` · ${new Date(sharedStateUpdatedAt).toLocaleString()}` : ''}
               </div>
             </div>
-            <button type="button" style={S.btn} onClick={() => downloadTextFile('publication-settings.json', JSON.stringify({sectorOverrides,sectorTargetsByAccount,accountDisplayNames}, null, 2), 'application/json')}>
-              Export sector settings
+            <button type="button" style={S.btn} onClick={saveSectorAssignments}>
+              Save sector assignments
             </button>
             <button
               type="button"

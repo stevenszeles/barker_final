@@ -11,6 +11,7 @@ from datetime import date, timedelta
 from verify_publication import verify
 from transactions import prepare as prepare_transactions
 from publication import write_manifest, wait_for_deployment
+from sector_settings import import_download
 
 ROOT=Path(__file__).resolve().parents[1]
 DATA=ROOT/'frontend/public/data'
@@ -52,6 +53,7 @@ def main():
         head=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT)
         remote=subprocess.check_output(['git','rev-parse','origin/main'],cwd=ROOT)
         if head!=remote: raise RuntimeError('Local branch differs from GitHub; reconcile it before publishing')
+    import_download(args.csv_dir)
     backups={name:(DATA/name).read_bytes() if (DATA/name).exists() else None for name in FILES}
     try:
         local_config=args.csv_dir/'analytics-config.json'

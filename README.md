@@ -242,8 +242,12 @@ are retained, not silently forced to agree. Published JSON is public to visitors
 
 Sector assignment uses a manual override first, the brokerage Sector column next,
 and the underlying-symbol mapping last. Unresolved holdings stay unclassified.
-In Upload Data, export sector settings as `publication-settings.json`, move that
-file into Desktop/Dashboard CSV, and run the publishing shortcut. Published settings
+Click **Save sector assignments** in Sectors or Data & Settings and keep the
+download in Downloads. Then run **Publish Barker Dashboard** on the desktop.
+The publisher automatically imports the newest settings download into Dashboard CSV,
+including browser-numbered copies. A newer manually saved settings file in Dashboard
+CSV takes priority over older downloads. Invalid downloads stop publication without
+replacing existing assignments. Published settings
 are retained on later imports. Website edits remain session previews.
 
 Actual weight is signed sector market value divided by NAV. Invested weight divides
