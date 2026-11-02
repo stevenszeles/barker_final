@@ -12,23 +12,23 @@ const SEED_BALANCE_013 = [["2024-05-14",336796.23],["2024-05-15",338431.74],["20
 
 // ─── S&P 500 SECTOR MODEL ─────────────────────────────────────────────────────
 const SP500_SECTORS = [
-  { name:"Communication Services", etf:"XLC", color:"#ff6b6b" },
-  { name:"Consumer Discretionary", etf:"XLY", color:"#ff9f43" },
-  { name:"Consumer Staples", etf:"XLP", color:"#a3be4c" },
-  { name:"Energy", etf:"XLE", color:"#ffb703" },
-  { name:"Financials", etf:"XLF", color:"#7c4dff" },
-  { name:"Health Care", etf:"XLV", color:"#00e676" },
-  { name:"Industrials", etf:"XLI", color:"#4dd0e1" },
-  { name:"Information Technology", etf:"XLK", color:"#00d4ff" },
-  { name:"Materials", etf:"XLB", color:"#ffd166" },
-  { name:"Real Estate", etf:"XLRE", color:"#26c6da" },
-  { name:"Utilities", etf:"XLU", color:"#66bb6a" },
+  { name:"Communication Services", etf:"XLC", color:"#800080" },
+  { name:"Consumer Discretionary", etf:"XLY", color:"#FF8000" },
+  { name:"Consumer Staples", etf:"XLP", color:"#808000" },
+  { name:"Energy", etf:"XLE", color:"#996600" },
+  { name:"Financials", etf:"XLF", color:"#003399" },
+  { name:"Health Care", etf:"XLV", color:"#339933" },
+  { name:"Industrials", etf:"XLI", color:"#008080" },
+  { name:"Information Technology", etf:"XLK", color:"#0066CC" },
+  { name:"Materials", etf:"XLB", color:"#B8860B" },
+  { name:"Real Estate", etf:"XLRE", color:"#993366" },
+  { name:"Utilities", etf:"XLU", color:"#666600" },
 ];
 
 const MANUAL_ONLY_SECTORS = [
-  { name:"Crypto", etf:null, color:"#ff8c42" },
-  { name:"Commodities", etf:null, color:"#ffd166" },
-  { name:"Equities", etf:null, color:"#8ecae6" },
+  { name:"Crypto", etf:null, color:"#C06000" },
+  { name:"Commodities", etf:null, color:"#806000" },
+  { name:"Equities", etf:null, color:"#336699" },
 ];
 
 const ALL_SECTORS = [...SP500_SECTORS, ...MANUAL_ONLY_SECTORS];
@@ -160,7 +160,7 @@ const FUTURES_ROOT_TO_SECTOR = {
 
 const SECTOR_COLORS = Object.fromEntries([
   ...ALL_SECTORS.map(({ name, color }) => [name, color]),
-  [UNCLASSIFIED_SECTOR, "#666"],
+  [UNCLASSIFIED_SECTOR, "#808080"],
 ]);
 
 const PALETTE = {
@@ -203,12 +203,12 @@ const ACCOUNT_COLORS = [
   PALETTE.rust,
   PALETTE.plum,
   PALETTE.brass,
-  '#70838c',
-  '#9b815f',
-  '#7d8d84',
-  '#9a6554',
-  '#756f7f',
-  '#8f8a6f',
+  '#008080',
+  '#C06000',
+  '#0099CC',
+  '#999966',
+  '#003399',
+  '#663399',
 ];
 const APP_STORAGE_SCHEMA_VERSION = "2026.04.16.1";
 const APP_STATE_STORAGE_KEY = `portfolio-dashboard.app-state.${APP_STORAGE_SCHEMA_VERSION}`;
@@ -2872,7 +2872,7 @@ async function loadBenchmarkHistorySeries(symbol, { days = 3650, retries = 1, fo
 function fmt$(n) { if (n===undefined||n===null||isNaN(n)) return '--'; return new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',minimumFractionDigits:0,maximumFractionDigits:0}).format(n); }
 function fmtPct(n,decimals=2) { if (n===undefined||n===null||isNaN(n)) return '--'; return `${n>=0?'+':''}${n.toFixed(decimals)}%`; }
 function fmtNum(n,d=2) { if (n===undefined||n===null||isNaN(n)) return '--'; return n.toFixed(d); }
-const CHART_TICK_STYLE = { fill:PALETTE.textDim, fontSize:10 };
+const CHART_TICK_STYLE = { fill:'#000000', fontSize:11, fontFamily:"Arial, 'Helvetica Neue', sans-serif" };
 
 function getTickInterval(length, targetTicks = 8) {
   if (!length || length <= targetTicks) return 0;
@@ -3142,12 +3142,10 @@ function hexToRgba(hex, alpha = 1) {
 function signalPanelStyle(color = PALETTE.steel) {
   return {
     ...S.card,
-    background:[
-      `linear-gradient(180deg, ${hexToRgba(color, 0.1)}, rgba(7,9,11,0) 44%)`,
-      'linear-gradient(180deg, rgba(22,26,30,0.98), rgba(6,8,10,0.99))',
-    ].join(','),
-    borderColor: hexToRgba(color, 0.18),
-    boxShadow:`inset 0 0 0 1px ${hexToRgba(color, 0.06)}, 0 8px 18px rgba(0,0,0,0.14)`,
+    background:'#FFFFFF',
+    border:'1px solid #000000',
+    padding:'2px 6px 3px',
+    boxShadow:'none',
   };
 }
 
@@ -3198,21 +3196,21 @@ function computeCorrelation(aMap, bMap) {
 }
 
 function correlationColor(value) {
-  if (!Number.isFinite(value)) return 'rgba(85, 92, 102, 0.18)';
+  if (!Number.isFinite(value)) return '#F0F0F0';
   const clamped = Math.max(-1, Math.min(1, value));
-  if (Math.abs(clamped) < 0.0001) return 'rgba(120, 128, 138, 0.18)';
-  if (clamped > 0) return `rgba(103, 168, 111, ${0.14 + Math.abs(clamped) * 0.34})`;
-  return `rgba(199, 105, 92, ${0.14 + Math.abs(clamped) * 0.34})`;
+  if (Math.abs(clamped) < 0.0001) return '#F0F0F0';
+  if (clamped > 0) return `rgba(0, 160, 0, ${0.10 + Math.abs(clamped) * 0.45})`;
+  return `rgba(230, 0, 0, ${0.10 + Math.abs(clamped) * 0.45})`;
 }
 
 // ─── TOOLTIP ──────────────────────────────────────────────────────────────────
 const CustomTooltip = ({ active, payload, label, mode='pct' }) => {
   if (!active || !payload?.length) return null;
   return (
-    <div style={{ background:'linear-gradient(180deg, rgba(24,28,32,0.99), rgba(8,10,12,0.99))', border:`1px solid ${PALETTE.borderStrong}`, boxShadow:'0 10px 20px rgba(0,0,0,0.28)', padding:'10px 14px', borderRadius:'2px', fontSize:'11px' }}>
-      <div style={{ color:PALETTE.accentBright, marginBottom:'6px', letterSpacing:'1px', textTransform:'uppercase', fontSize:'10px', fontFamily:"'IBM Plex Sans Condensed', 'IBM Plex Sans', sans-serif" }}>{label}</div>
+    <div style={{ background:'#FFFF00', border:'1px solid #646464', boxShadow:'none', padding:'0 0 1px', borderRadius:'0', fontSize:'12px', fontFamily:CQG_FONT_DATA, fontVariantNumeric:'tabular-nums', minWidth:'130px' }}>
+      <div style={{ color:'#FFFF00', background:'#404040', padding:'0 4px', lineHeight:'15px', marginBottom:'1px', fontSize:'12px', fontFamily:CQG_FONT_DATA }}>{label}</div>
       {payload.map((p, i) => (
-        <div key={i} style={{ color: p.color, marginBottom:'2px' }}>
+        <div key={i} style={{ color: p.color, marginBottom:'0', padding:'0 4px', lineHeight:'14px' }}>
           <span style={{color:PALETTE.textMuted}}>{p.name}: </span>
           {mode==='pct' ? fmtPct(p.value) : mode==='$' ? fmt$(p.value) : fmtNum(p.value)}
         </div>
@@ -4412,7 +4410,7 @@ export default function App() {
         key: getPerformanceSeriesKey(accountName, accountIndex),
         label: getAccountDisplayName(accountName, accountDisplayNames),
         accountName,
-        color: accountColorMap[accountName] || '#e0e0e0',
+        color: accountColorMap[accountName] || '#000000',
         strokeWidth: selectedAccount === accountName ? 2.5 : 1.8,
         data: filterChartSeries(history, timeframe, performanceWindowEndDate),
       });
@@ -4474,7 +4472,7 @@ export default function App() {
         label: displayName,
         accountName,
         shortLabel: getAccountDisplayName(accountName, accountDisplayNames, { short: true }),
-        color: accountColorMap[accountName] || '#e0e0e0',
+        color: accountColorMap[accountName] || '#000000',
         strokeWidth: selectedAccount === accountName ? 2.5 : 1.8,
         data,
         periodReturn,
@@ -4890,7 +4888,7 @@ export default function App() {
           key: `position:${position.account}:${position.symbol}`,
           label: position.symbol,
           sublabel: getAccountDisplayName(position.account, accountDisplayNames, { short: true }),
-          color: position.mainSector ? (SECTOR_COLORS[position.mainSector] || '#8f99a3') : '#8f99a3',
+          color: position.mainSector ? (SECTOR_COLORS[position.mainSector] || '#666666') : '#666666',
           valueLabel: fmt$(position.mktVal),
           returns: buildDailyReturnMap(history),
         };
@@ -5265,7 +5263,7 @@ export default function App() {
   }, []);
 
   const setAllPerformanceAccounts = useCallback((enabled) => setPerformanceChartSelection(accountSelection(accountList,enabled)), [accountList]);
-  const chartToggleStyle=(enabled,color=PALETTE.accentBright)=>({...S.btn,padding:'8px 12px',fontSize:'11px',fontWeight:enabled?750:450,border:`2px solid ${enabled?color:PALETTE.borderSubtle}`,background:enabled?hexToRgba(color,0.2):'transparent',color:enabled?color:PALETTE.textDim,boxShadow:enabled?`inset 0 0 0 1px ${hexToRgba(color,0.25)}`:'none'});
+  const chartToggleStyle=(enabled,color=PALETTE.accentBright)=>({...S.btn,padding:'0 8px',fontSize:'11px',fontWeight:enabled?700:400,border:'1px solid #3C3C3C',background:enabled?color:S.btn.background,color:enabled?'#FFFFFF':'#000000',boxShadow:enabled?'inset 1px 1px 0 rgba(255,255,255,0.25)':CQG_BEVEL});
 
   // Account summary cards
   const accountSummary = useMemo(() => {
@@ -5572,11 +5570,11 @@ export default function App() {
         {/* ── HEADER ── */}
         <div style={S.headerShell}>
           <div style={S.header}>
-            <div style={{ display:'flex', alignItems:'center', gap:'18px', flexWrap:'wrap' }}>
+            <div style={{ display:'flex', alignItems:'center', gap:'6px', flexWrap:'wrap' }}>
               <div style={S.logo}>Barker Capital Desk</div>
               <div style={S.headerMeta}>Multi-Account Portfolio Command Center</div>
             </div>
-            <div style={{ display:'flex', alignItems:'center', gap:'10px', flexWrap:'wrap', justifyContent:'flex-end' }}>
+            <div style={{ display:'flex', alignItems:'center', gap:'2px', flexWrap:'wrap', justifyContent:'flex-end' }}>
               <div style={{ ...S.statusPill, color:PALETTE.textMuted }}>{import.meta.env.VITE_STATIC_MODE === '1' ? `Updated as of: ${sharedStateUpdatedAt?.slice(0, 10) || (sharedStateReady ? 'Unavailable — reload' : 'Loading…')}` : new Date().toLocaleDateString('en-US',{weekday:'short',year:'numeric',month:'short',day:'numeric'})}</div>
             </div>
           </div>
@@ -5601,8 +5599,6 @@ export default function App() {
                   ...(selectedAccount===acc ? S.btnActive : {}),
                   fontSize:'10px',
                   padding:'4px 10px',
-                  borderColor: selectedAccount===acc ? PALETTE.borderStrong : PALETTE.border,
-                  color: selectedAccount===acc ? PALETTE.accentBright : PALETTE.textMuted,
                 }}>
                 {acc === 'ALL' ? 'ALL' : getAccountDisplayName(acc, accountDisplayNames, { short: true })}
               </button>
@@ -5616,7 +5612,7 @@ export default function App() {
           <div style={S.section}>
           {/* Stat bar */}
           {allTimeStats && (
-            <div style={{ ...S.grid(6), marginBottom:'16px' }}>
+            <div style={{ ...S.grid(6), marginBottom:'4px' }}>
               {[
                 { label:'Portfolio NAV', val: fmt$(allTimeStats.currentNav), sub: 'Current Value' },
                 { label:'Total Return', val: fmtPct(allTimeStats.total), sub: 'Since Inception', color: allTimeStats.total >= 0 ? PALETTE.positive : PALETTE.negative },
@@ -5625,8 +5621,8 @@ export default function App() {
                 { label:'Volatility', val: `${fmtNum(allTimeStats.volatility)}%`, sub: 'Annualized' },
                 { label:'Sharpe Ratio', val: fmtNum(allTimeStats.sharpe), sub: 'Assumed risk-free rate', color: allTimeStats.sharpe >= 1 ? PALETTE.positive : allTimeStats.sharpe >= 0 ? PALETTE.warning : PALETTE.negative },
               ].map(({ label, val, sub, color }) => (
-                <div key={label} style={signalPanelStyle(color || '#8f99a3')}>
-                  <div style={S.cardTitle}>{label}</div>
+                <div key={label} className="cqg-tile" style={signalPanelStyle(color || '#666666')}>
+                  <div className="cqg-title" style={S.cardTitle}>{label}</div>
                   <div style={{ fontSize:'20px', fontWeight:700, color: color || PALETTE.textStrong, letterSpacing:'-0.5px' }}>{val}</div>
                   <div style={{ fontSize:'10px', color:PALETTE.textDim, marginTop:'2px' }}>{sub}</div>
                 </div>
@@ -5635,10 +5631,10 @@ export default function App() {
           )}
 
           {/* Mini chart + account cards */}
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(320px, 1fr))', gap:'12px', marginBottom:'16px' }}>
-            <div style={S.card}>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(320px, 1fr))', gap:'4px', marginBottom:'4px' }}>
+            <div className="cqg-panel" style={S.card}>
               <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'12px' }}>
-                <div style={S.cardTitle}>PORTFOLIO vs S&P 500 proxy — {selectedAccountLabel}</div>
+                <div className="cqg-title" style={S.cardTitle}>PORTFOLIO vs S&P 500 proxy — {selectedAccountLabel}</div>
                 <div style={{ display:'flex', gap:'6px', flexWrap:'wrap', justifyContent:'flex-end' }}>
                   {TIMEFRAMES.map(tf => (
                     <button key={tf} onClick={() => setTimeframe(tf)}
@@ -5648,7 +5644,7 @@ export default function App() {
                     type="button"
                     onClick={() => exportCurrentVisual('Portfolio vs S&P 500 proxy', chartData)}
                     disabled={!chartData.length}
-                    style={{ ...S.btn, padding:'3px 8px', fontSize:'10px', borderColor:PALETTE.borderStrong, color:PALETTE.accentBright, opacity: chartData.length ? 1 : 0.45 }}
+                    style={{ ...S.btn, padding:'3px 8px', fontSize:'10px', opacity: chartData.length ? 1 : 0.45 }}
                   >
                     Export
                   </button>
@@ -5656,10 +5652,10 @@ export default function App() {
               </div>
               {chartData.length > 0 ? (
                 <ResponsiveContainer width="100%" height={236}>
-                  <LineChart data={chartData} margin={{ top:10, right:18, bottom:8, left:10 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#111" />
+                  <LineChart data={chartData} margin={{ top:10, right:18, bottom:8, left:26 }}>
+                    <CartesianGrid strokeDasharray="2 5" stroke="#A0A0A4" />
                     <XAxis dataKey="date" tick={CHART_TICK_STYLE} tickFormatter={d => d.slice(5)} interval={getTickInterval(chartData.length, 6)} minTickGap={24} tickMargin={8} />
-                    <YAxis width={62} tick={CHART_TICK_STYLE} tickFormatter={v => `${v>=0?'+':''}${v.toFixed(1)}%`} tickMargin={8} />
+                    <YAxis orientation="right" width={62} tick={CHART_TICK_STYLE} tickFormatter={v => `${v>=0?'+':''}${v.toFixed(1)}%`} tickMargin={8} />
                     <Tooltip content={<CustomTooltip mode="pct" />} />
                     <ReferenceLine y={0} stroke={PALETTE.lineGrid} strokeDasharray="2 2" />
                     <Line type="monotone" dataKey="portPct" stroke={PALETTE.portfolio} dot={false} strokeWidth={2} name="Portfolio" />
@@ -5679,14 +5675,14 @@ export default function App() {
               </div>
             </div>
 
-            <div style={{ ...S.col, gap:'8px' }}>
-              <div style={S.card}>
-                <div style={S.cardTitle}>TOTAL PORTFOLIO</div>
+            <div style={{ ...S.col, gap:'4px' }}>
+              <div className="cqg-panel" style={S.card}>
+                <div className="cqg-title" style={S.cardTitle}>TOTAL PORTFOLIO</div>
                 <div style={{ fontSize:'22px', fontWeight:700, color:PALETTE.textStrong }}>{fmt$(totalPortfolioValue)}</div>
                 <div style={{ fontSize:'10px', color:PALETTE.textDim, marginTop:'4px' }}>{accountSummary.length} accounts</div>
               </div>
               {accountSummary.slice(0,4).map(acc => (
-                <div key={acc.name} style={{ ...S.card, cursor:'pointer', borderColor: selectedAccount===acc.name ? PALETTE.borderStrong : PALETTE.borderSubtle }}
+                <div key={acc.name} className="cqg-panel" style={{ ...S.card, cursor:'pointer', borderColor: selectedAccount===acc.name ? '#F26521' : '#1A1A1A' }}
                   onClick={() => setSelectedAccount(acc.name)}>
                   <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
                     <div style={{ color: acc.color, fontSize:'11px', fontWeight:700 }}>{acc.shortName}</div>
@@ -5699,10 +5695,10 @@ export default function App() {
           </div>
 
           {/* All accounts table */}
-          <div style={S.card}>
-            <div style={S.cardTitle}>ALL ACCOUNTS — SNAPSHOT</div>
+          <div className="cqg-panel" style={S.card}>
+            <div className="cqg-title" style={S.cardTitle}>ALL ACCOUNTS — SNAPSHOT</div>
             <div style={S.tableWrapper}>
-              <table style={S.table}>
+              <table className="cqg-grid" style={S.table}>
                 <thead>
                   <tr>{['Account','Display Name','NAV','Day Chg','Total Return','Positions','Cost Basis','Unrealized G/L'].map(h => <th key={h} style={S.th}>{h}</th>)}</tr>
                 </thead>
@@ -5739,18 +5735,18 @@ export default function App() {
       {/* ══════ PERFORMANCE TAB ══════ */}
       {tab === 'performance' && (
         <div style={S.section}>
-          <div style={{ display:'flex', gap:'8px', marginBottom:'16px', alignItems:'center' }}>
-            <span style={{ color:'#444', fontSize:'10px' }}>TIMEFRAME:</span>
+          <div style={{ display:'flex', gap:'2px', marginBottom:'4px', alignItems:'center' }}>
+            <span style={{ color:'#000000', fontSize:'11px', fontWeight:700, fontFamily:CQG_FONT_UI }}>TIMEFRAME:</span>
             {TIMEFRAMES.map(tf => (
               <button key={tf} onClick={() => setTimeframe(tf)}
                 style={{ ...S.btn, ...(timeframe===tf ? S.btnActive : {}) }}>{tf}</button>
             ))}
           </div>
 
-          <div style={{ ...S.card, marginBottom:'16px' }}>
+          <div className="cqg-panel" style={{ ...S.card, marginBottom:'4px' }}>
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:'12px', flexWrap:'wrap', marginBottom:'12px' }}>
               <div>
-                <div style={S.cardTitle}>CHART SERIES · {selectedPerformanceAccounts.length + Number(!!performanceChartSelection.aggregate) + Number(!!performanceChartSelection.spx)} selected</div>
+                <div className="cqg-title" style={S.cardTitle}>CHART SERIES · {selectedPerformanceAccounts.length + Number(!!performanceChartSelection.aggregate) + Number(!!performanceChartSelection.spx)} selected</div>
                 <div style={{display:'flex',gap:'10px',alignItems:'center',flexWrap:'wrap',margin:'8px 0'}}>
                   <label>From <input aria-label="Chart start date" type="date" ref={chartStartInput} defaultValue={chartStart} style={S.input}/></label>
                   <label>To <input aria-label="Chart end date" type="date" ref={chartEndInput} defaultValue={chartEnd} style={S.input}/></label>
@@ -5822,9 +5818,9 @@ export default function App() {
           </div>
 
           {/* Full chart */}
-          <div style={{ ...S.card, marginBottom:'16px' }}>
+          <div className="cqg-panel" style={{ ...S.card, marginBottom:'4px' }}>
             <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'12px' }}>
-              <div style={S.cardTitle}>
+              <div className="cqg-title" style={S.cardTitle}>
                 {performanceChartMode === 'bar' ? 'PERIOD RETURN SNAPSHOT' : performanceChartMode === 'focus' ? 'PERFORMANCE FOCUS' : 'NORMALIZED PERFORMANCE COMPARISON'}
                 {' '}· {timeframe} · {'NAV'}
               </div>
@@ -5835,7 +5831,7 @@ export default function App() {
                   performanceChartMode === 'bar' ? performanceBarData : performanceChartMode === 'focus' ? performanceFocusData : performanceComparisonData,
                 )}
                 disabled={!(performanceChartMode === 'bar' ? performanceBarData.length : performanceChartMode === 'focus' ? performanceFocusData.length : performanceComparisonData.length)}
-                style={{ ...S.btn, padding:'4px 10px', fontSize:'10px', borderColor:PALETTE.borderStrong, color:PALETTE.accentBright }}
+                style={{ ...S.btn, padding:'4px 10px', fontSize:'10px' }}
               >
                 Export
               </button>
@@ -5855,10 +5851,10 @@ export default function App() {
                 <div style={{ display:'flex', flexWrap:'wrap', gap:'16px', alignItems:'stretch' }}>
                   <div style={{ flex:'1 1 520px', minWidth:'280px', height:'392px' }}>
                     <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={performanceFocusData} margin={{ top:10, right:32, bottom:8, left:10 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke={PALETTE.lineGrid} />
+                      <LineChart data={performanceFocusData} margin={{ top:10, right:32, bottom:8, left:26 }}>
+                        <CartesianGrid strokeDasharray="2 5" stroke={PALETTE.lineGrid} />
                         <XAxis dataKey="date" tick={CHART_TICK_STYLE} tickFormatter={d => d.slice(0,7)} interval={getTickInterval(performanceFocusData.length)} minTickGap={24} tickMargin={8} />
-                        <YAxis width={62} tick={CHART_TICK_STYLE} tickFormatter={v => `${v>=0?'+':''}${v.toFixed(1)}%`} tickMargin={8} />
+                        <YAxis orientation="right" width={62} tick={CHART_TICK_STYLE} tickFormatter={v => `${v>=0?'+':''}${v.toFixed(1)}%`} tickMargin={8} />
                         <Tooltip content={<CustomTooltip mode="pct" />} />
                         <ReferenceLine y={0} stroke={PALETTE.lineGrid} />
                         {performanceFocusSeriesDefinitions.map((series) => (
@@ -5877,8 +5873,8 @@ export default function App() {
                       </LineChart>
                     </ResponsiveContainer>
                   </div>
-                  <div style={{ flex:'0 1 260px', border:`1px solid ${PALETTE.borderSubtle}`, background:'rgba(255,255,255,0.02)', borderRadius:'8px', padding:'12px', minHeight:'340px' }}>
-                    <div style={{ ...S.cardTitle, marginBottom:'10px' }}>RANKED BY {timeframe}</div>
+                  <div style={{ flex:'0 1 260px', border:'1px solid #B8B8B8', background:'#F4F4F4', borderRadius:'0', padding:'4px 6px', minHeight:'340px' }}>
+                    <div className="cqg-title" style={{ ...S.cardTitle, marginBottom:'10px' }}>RANKED BY {timeframe}</div>
                     <div style={{ display:'flex', flexDirection:'column', gap:'8px' }}>
                       {performanceFocusRankingRows.map((row) => (
                         <div key={row.key} style={{ display:'grid', gridTemplateColumns:'1fr auto', gap:'10px', alignItems:'center', fontSize:'11px' }}>
@@ -5895,10 +5891,10 @@ export default function App() {
               </div>
             ) : performanceChartMode === 'bar' && performanceBarData.length > 0 ? (
               <ResponsiveContainer width="100%" height={372}>
-                <BarChart data={performanceBarData} margin={{ top:10, right:22, bottom:8, left:10 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke={PALETTE.lineGrid} />
+                <BarChart data={performanceBarData} margin={{ top:10, right:22, bottom:8, left:26 }}>
+                  <CartesianGrid strokeDasharray="2 5" stroke={PALETTE.lineGrid} />
                   <XAxis dataKey="label" tick={CHART_TICK_STYLE} interval={0} minTickGap={24} tickMargin={8} />
-                  <YAxis width={62} tick={CHART_TICK_STYLE} tickFormatter={v => `${v>=0?'+':''}${v.toFixed(1)}%`} tickMargin={8} />
+                  <YAxis orientation="right" width={62} tick={CHART_TICK_STYLE} tickFormatter={v => `${v>=0?'+':''}${v.toFixed(1)}%`} tickMargin={8} />
                   <Tooltip content={<CustomTooltip mode="pct" />} />
                   <ReferenceLine y={0} stroke={PALETTE.lineGrid} />
                   <Bar dataKey="value" name="Return" radius={[2, 2, 0, 0]}>
@@ -5910,10 +5906,10 @@ export default function App() {
               </ResponsiveContainer>
             ) : performanceComparisonData.length > 0 ? (
               <ResponsiveContainer width="100%" height={372}>
-                <LineChart data={performanceComparisonData} margin={{ top:10, right:22, bottom:8, left:10 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke={PALETTE.lineGrid} />
+                <LineChart data={performanceComparisonData} margin={{ top:10, right:22, bottom:8, left:26 }}>
+                  <CartesianGrid strokeDasharray="2 5" stroke={PALETTE.lineGrid} />
                   <XAxis dataKey="date" tick={CHART_TICK_STYLE} tickFormatter={d => d.slice(0,7)} interval={getTickInterval(performanceComparisonData.length)} minTickGap={24} tickMargin={8} />
-                  <YAxis width={62} tick={CHART_TICK_STYLE} tickFormatter={v => `${v>=0?'+':''}${v.toFixed(1)}%`} tickMargin={8} />
+                  <YAxis orientation="right" width={62} tick={CHART_TICK_STYLE} tickFormatter={v => `${v>=0?'+':''}${v.toFixed(1)}%`} tickMargin={8} />
                   <Tooltip content={<CustomTooltip mode="pct" />} />
                   <Legend wrapperStyle={{ fontSize:'11px', color:PALETTE.textMuted, paddingTop:'6px' }} />
                   <ReferenceLine y={0} stroke={PALETTE.lineGrid} />
@@ -5941,7 +5937,7 @@ export default function App() {
 
           {/* Stats grid */}
           {performanceStats && (
-            <div style={{ ...S.grid(4), marginBottom:'16px' }}>
+            <div style={{ ...S.grid(4), marginBottom:'4px' }}>
               {[
                 ['Period Return', fmtPct(performanceStats.total), performanceStats.total >= 0 ? PALETTE.positive : PALETTE.negative],
                 ['Max Drawdown', fmtPct(performanceStats.maxDrawdown == null ? null : -performanceStats.maxDrawdown), PALETTE.warning],
@@ -5951,8 +5947,8 @@ export default function App() {
                 ['Current NAV', fmt$(performanceStats.currentNav), PALETTE.textStrong],
                 ['Data Points', performanceFilteredHistory.length.toString(), PALETTE.textDim],
               ].map(([label, val, color]) => (
-                <div key={label} style={signalPanelStyle(color || '#8f99a3')}>
-                  <div style={S.cardTitle}>{label}</div>
+                <div key={label} className="cqg-tile" style={signalPanelStyle(color || '#666666')}>
+                  <div className="cqg-title" style={S.cardTitle}>{label}</div>
                   <div style={{ fontSize:'18px', fontWeight:700, color }}>{val}</div>
                 </div>
               ))}
@@ -5960,29 +5956,29 @@ export default function App() {
           )}
 
           {/* NAV chart (absolute) */}
-          {performanceFilteredHistory.length > 0 && (<div style={S.card}>
+          {performanceFilteredHistory.length > 0 && (<div className="cqg-panel" style={S.card}>
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:'12px', marginBottom:'8px' }}>
-              <div style={S.cardTitle}>ABSOLUTE NAV — {chartDetailLabel} · {'NAV'}</div>
+              <div className="cqg-title" style={S.cardTitle}>ABSOLUTE NAV — {chartDetailLabel} · {'NAV'}</div>
               <button
                 type="button"
                 onClick={() => exportCurrentVisual('Absolute NAV', performanceFilteredHistory.map(([date, nav]) => ({ date, nav })))}
                 disabled={!performanceFilteredHistory.length}
-                style={{ ...S.btn, padding:'4px 10px', fontSize:'10px', borderColor:PALETTE.borderStrong, color:PALETTE.accentBright, opacity: performanceFilteredHistory.length ? 1 : 0.45 }}
+                style={{ ...S.btn, padding:'4px 10px', fontSize:'10px', opacity: performanceFilteredHistory.length ? 1 : 0.45 }}
               >
                 Export
               </button>
             </div>
             <ResponsiveContainer width="100%" height={214}>
-              <AreaChart data={performanceFilteredHistory.map(([d,v]) => ({ date:d, nav:v }))} margin={{ top:10, right:18, bottom:8, left:12 }}>
+              <AreaChart data={performanceFilteredHistory.map(([d,v]) => ({ date:d, nav:v }))} margin={{ top:10, right:18, bottom:8, left:26 }}>
                 <defs>
                   <linearGradient id="navGrad" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor={PALETTE.accentBright} stopOpacity={0.12}/>
                     <stop offset="95%" stopColor={PALETTE.accentBright} stopOpacity={0}/>
                   </linearGradient>
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke={PALETTE.lineGrid} />
+                <CartesianGrid strokeDasharray="2 5" stroke={PALETTE.lineGrid} />
                 <XAxis dataKey="date" tick={CHART_TICK_STYLE} tickFormatter={d => d.slice(0,7)} interval={getTickInterval(performanceFilteredHistory.length)} minTickGap={24} tickMargin={8} />
-                <YAxis width={76} tick={CHART_TICK_STYLE} tickFormatter={v => `$${(v/1000).toFixed(0)}K`} tickMargin={8} />
+                <YAxis orientation="right" width={76} tick={CHART_TICK_STYLE} tickFormatter={v => `$${(v/1000).toFixed(0)}K`} tickMargin={8} />
                 <Tooltip content={<CustomTooltip mode="$" />} />
                 <Area type="monotone" dataKey="nav" stroke={PALETTE.portfolio} fill="url(#navGrad)" strokeWidth={2} dot={false} name="NAV" />
               </AreaChart>
@@ -5994,12 +5990,12 @@ export default function App() {
       {/* ══════ POSITIONS TAB ══════ */}
       {tab === 'positions' && (
         <div style={S.section}>
-          <div style={{ marginBottom:'12px', color:PALETTE.textDim, fontSize:'11px' }}>
+          <div style={{ marginBottom:'4px', color:'#000000', fontSize:'11px', fontFamily:CQG_FONT_UI }}>
             {positionGroupCount} grouped lines · {selectedPositions.length} total positions · {selectedAccountLabel}
           </div>
-          <div style={S.card}>
+          <div className="cqg-panel" style={S.card}>
             <div style={S.tableWrapper}>
-              <table style={S.table}>
+              <table className="cqg-grid" style={S.table}>
                 <thead>
                   <tr>{['Symbol','Description','Account','Type','Sector Assignment','Qty','Price','Market Value','Notional','Cost Basis','Gain $','Gain %'].map(h => <th key={h} style={S.th}>{h}</th>)}</tr>
                 </thead>
@@ -6045,12 +6041,12 @@ export default function App() {
                         key={entry.key}
                         style={{
                           background: isGroup
-                            ? 'linear-gradient(90deg, rgba(216,139,47,0.14) 0%, rgba(18,21,25,0.98) 22%, rgba(18,21,25,0.98) 100%)'
+                            ? '#DFE4E4'
                             : entry.child
-                              ? 'rgba(11,13,16,0.95)'
+                              ? '#F4F4F4'
                               : i % 2
-                                ? 'rgba(17,19,22,0.98)'
-                                : 'rgba(13,15,18,0.98)',
+                                ? '#E2E2E2'
+                                : '#EAEAEA',
                         }}
                       >
                         <td style={{ ...S.td, fontWeight:700, color: isGroup ? PALETTE.textStrong : (isOptionPosition(row) ? PALETTE.warning : isFuturePosition(row) ? PALETTE.brass : PALETTE.portfolio) }}>
@@ -6063,7 +6059,8 @@ export default function App() {
                                   width:'18px',
                                   height:'18px',
                                   border:`1px solid ${PALETTE.borderStrong}`,
-                                  background:'linear-gradient(180deg, rgba(53,40,21,0.96), rgba(16,14,12,0.98))',
+                                  background:'linear-gradient(180deg, #E5E5E5, #CDCDCD)',
+                                  boxShadow:CQG_BEVEL,
                                   color:PALETTE.accentBright,
                                   cursor:'pointer',
                                   borderRadius:'2px',
@@ -6164,10 +6161,10 @@ export default function App() {
       {/* ══════ SECTORS TAB ══════ */}
       {tab === 'sectors' && (
         <div style={S.section}>
-          <div style={{ ...S.card, marginBottom:'16px' }}>
+          <div className="cqg-panel" style={{ ...S.card, marginBottom:'4px' }}>
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:'12px', flexWrap:'wrap' }}>
               <div>
-                <div style={S.cardTitle}>SECTOR MODEL — BENCHMARK SECTORS PLUS MANUAL DESK BUCKETS</div>
+                <div className="cqg-title" style={S.cardTitle}>SECTOR MODEL — BENCHMARK SECTORS PLUS MANUAL DESK BUCKETS</div>
                 <div style={{ color:'#666', fontSize:'11px', lineHeight:'1.5' }}>
                   Sector weights and realized P/L are measured from the exports. Historical sector returns and alpha remain unavailable without a full holdings ledger. Manual buckets have no automatic substitute benchmark.
                   Sector targets are account-specific; select an individual account to edit benchmark and target weights.
@@ -6182,50 +6179,50 @@ export default function App() {
             </div>
           </div>
 
-          <div style={{ ...S.grid(4), marginBottom:'16px' }}>
+          <div style={{ ...S.grid(4), marginBottom:'4px' }}>
             {[
-              ['Benchmark Wt', fmtPct(sectorTotals.benchmark), '#7c4dff', 'Editable baseline'],
-              ['Target Wt', fmtPct(sectorTotals.target), Math.abs(sectorTotals.target - 100) < 0.25 ? '#00d4ff' : '#ffd166', editableSectorScope ? `Configured weights for ${getAccountDisplayName(selectedAccount, accountDisplayNames, { short: true })}` : 'Weighted aggregate of account-specific targets'],
-              ['Active Sector Wt', fmtPct(sectorTotals.actual), '#00d4ff', 'Current classified exposure'],
-              ['Benchmark Return', fmtPct(sectorTotals.benchmarkReturn), sectorTotals.benchmarkReturn >= 0 ? '#00e676' : '#ff4444', `Sector benchmark aggregate for ${sectorTimeframe}`],
+              ['Benchmark Wt', fmtPct(sectorTotals.benchmark), '#003399', 'Editable baseline'],
+              ['Target Wt', fmtPct(sectorTotals.target), Math.abs(sectorTotals.target - 100) < 0.25 ? '#0066CC' : '#CC6600', editableSectorScope ? `Configured weights for ${getAccountDisplayName(selectedAccount, accountDisplayNames, { short: true })}` : 'Weighted aggregate of account-specific targets'],
+              ['Active Sector Wt', fmtPct(sectorTotals.actual), '#0066CC', 'Current classified exposure'],
+              ['Benchmark Return', fmtPct(sectorTotals.benchmarkReturn), sectorTotals.benchmarkReturn >= 0 ? '#008000' : '#E60000', `Sector benchmark aggregate for ${sectorTimeframe}`],
             ].map(([label, value, color, sub]) => (
-              <div key={label} style={signalPanelStyle(color || '#8f99a3')}>
-                <div style={S.cardTitle}>{label}</div>
+              <div key={label} className="cqg-tile" style={signalPanelStyle(color || '#666666')}>
+                <div className="cqg-title" style={S.cardTitle}>{label}</div>
                 <div style={{ fontSize:'19px', fontWeight:700, color }}>{value}</div>
                 <div style={{ fontSize:'10px', color:'#444', marginTop:'2px' }}>{sub}</div>
               </div>
             ))}
           </div>
 
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(360px, 1fr))', gap:'16px', marginBottom:'16px' }}>
-            <div style={S.card}>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(360px, 1fr))', gap:'4px', marginBottom:'4px' }}>
+            <div className="cqg-panel" style={S.card}>
               <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:'12px', marginBottom:'8px' }}>
-                <div style={S.cardTitle}>SECTOR WEIGHTS — ACTIVE vs TARGET</div>
+                <div className="cqg-title" style={S.cardTitle}>SECTOR WEIGHTS — ACTIVE vs TARGET</div>
                 <button
                   type="button"
                   onClick={() => exportCurrentVisual('Sector Weights Active vs Target', sectorChartBars)}
                   disabled={!sectorChartBars.length}
-                  style={{ ...S.btn, padding:'4px 10px', fontSize:'10px', borderColor:PALETTE.borderStrong, color:PALETTE.accentBright, opacity: sectorChartBars.length ? 1 : 0.45 }}
+                  style={{ ...S.btn, padding:'4px 10px', fontSize:'10px', opacity: sectorChartBars.length ? 1 : 0.45 }}
                 >
                   Export
                 </button>
               </div>
               <ResponsiveContainer width="100%" height={sectorChartHeight}>
                 <BarChart data={sectorChartBars} layout="vertical" margin={{ top:10, right:26, bottom:8, left:8 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#111" horizontal={false} />
+                  <CartesianGrid strokeDasharray="2 5" stroke="#A0A0A4" horizontal={false} />
                   <XAxis type="number" tick={CHART_TICK_STYLE} tickFormatter={v => `${v.toFixed(1)}%`} tickMargin={8} />
                   <YAxis type="category" dataKey="name" tick={CHART_TICK_STYLE} width={sectorAxisWidth} tickMargin={8} />
                   <Tooltip content={<CustomTooltip mode="pct" />} />
-                  <Bar dataKey="activeWeight" name="Active Weight" fill="#00d4ff" radius={[0,1,1,0]} />
-                  <Bar dataKey="targetWeight" name="Target Weight" fill="#7c4dff" radius={[0,1,1,0]} />
+                  <Bar dataKey="activeWeight" name="Active Weight" fill="#0066CC" radius={[0,1,1,0]} />
+                  <Bar dataKey="targetWeight" name="Target Weight" fill="#003399" radius={[0,1,1,0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
 
-            <div style={S.card}>
+            <div className="cqg-panel" style={S.card}>
               <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'10px', gap:'12px', flexWrap:'wrap' }}>
                 <div>
-                  <div style={S.cardTitle}>SECTOR SLEEVE RETURN vs BENCHMARK — {selectedSector}</div>
+                  <div className="cqg-title" style={S.cardTitle}>SECTOR SLEEVE RETURN vs BENCHMARK — {selectedSector}</div>
                   {sectorDetail && (
                     <div style={{ fontSize:'11px', color:'#666' }}>
                       {sectorDetail.benchmarkSymbol} · Sector Return {fmtPct(sectorDetail.sectorReturn)} · Benchmark {fmtPct(sectorDetail.benchmarkReturn)} · Active {fmtPct(sectorDetail.activeWeight)} · Vs Bench {fmtPct(sectorDetail.relativeWeight)}
@@ -6234,13 +6231,13 @@ export default function App() {
                 </div>
                 {sectorDetail && (
                   <div style={{ display:'flex', gap:'10px', fontSize:'10px', color:'#666', flexWrap:'wrap' }}>
-                    <span style={{ color:'#00d4ff' }}>Open {fmt$(sectorDetail.openDollarReturn)} · Closed {fmt$(sectorDetail.closedDollarReturn)}</span>
-                    <span style={{ color: sectorDetail.actualAllocationAlpha >= 0 ? '#00e676' : '#ff4444' }}>Decision Alpha {fmtPct(sectorDetail.actualAllocationAlpha)}</span>
+                    <span style={{ color:'#0066CC' }}>Open {fmt$(sectorDetail.openDollarReturn)} · Closed {fmt$(sectorDetail.closedDollarReturn)}</span>
+                    <span style={{ color: sectorDetail.actualAllocationAlpha >= 0 ? '#008000' : '#E60000' }}>Decision Alpha {fmtPct(sectorDetail.actualAllocationAlpha)}</span>
                     <button
                       type="button"
                       onClick={() => exportCurrentVisual(`${selectedSector} Sleeve Return vs Benchmark`, sectorComparisonChart)}
                       disabled={!sectorComparisonChart.length}
-                      style={{ ...S.btn, padding:'3px 8px', fontSize:'10px', borderColor:PALETTE.borderStrong, color:PALETTE.accentBright, opacity: sectorComparisonChart.length ? 1 : 0.45 }}
+                      style={{ ...S.btn, padding:'3px 8px', fontSize:'10px', opacity: sectorComparisonChart.length ? 1 : 0.45 }}
                     >
                       Export
                     </button>
@@ -6256,9 +6253,8 @@ export default function App() {
                       ...S.btn,
                       padding:'4px 8px',
                       fontSize:'10px',
-                      borderColor: selectedSector === sector.name ? (sector.color || '#00d4ff') : S.btn.borderColor,
-                      color: selectedSector === sector.name ? '#f5f7fa' : '#8f99a3',
-                      background: selectedSector === sector.name ? `linear-gradient(180deg, ${hexToRgba(sector.color || '#00d4ff', 0.18)}, rgba(8,10,12,0.95))` : S.btn.background,
+                      color: selectedSector === sector.name ? '#FFFFFF' : '#000000',
+                      background: selectedSector === sector.name ? S.btnActive.background : S.btn.background,
                     }}
                   >
                     {sector.name}
@@ -6267,18 +6263,18 @@ export default function App() {
               </div>
               {sectorComparisonChart.length > 0 ? (
                 <ResponsiveContainer width="100%" height={320}>
-                  <LineChart data={sectorComparisonChart} margin={{ top:10, right:20, bottom:8, left:10 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#111" />
+                  <LineChart data={sectorComparisonChart} margin={{ top:10, right:20, bottom:8, left:26 }}>
+                    <CartesianGrid strokeDasharray="2 5" stroke="#A0A0A4" />
                     <XAxis dataKey="date" tick={CHART_TICK_STYLE} tickFormatter={d => d.slice(0,7)} interval={getTickInterval(sectorComparisonChart.length)} minTickGap={24} tickMargin={8} />
-                    <YAxis width={62} tick={CHART_TICK_STYLE} tickFormatter={v => `${v>=0?'+':''}${v.toFixed(1)}%`} tickMargin={8} />
+                    <YAxis orientation="right" width={62} tick={CHART_TICK_STYLE} tickFormatter={v => `${v>=0?'+':''}${v.toFixed(1)}%`} tickMargin={8} />
                     <Tooltip content={<CustomTooltip mode="pct" />} />
                     <ReferenceLine y={0} stroke="#333" />
-                    <Line type="monotone" dataKey="portfolioPct" stroke="#00d4ff" dot={false} strokeWidth={2} name={`${selectedSector} Sleeve`} connectNulls={false} />
+                    <Line type="monotone" dataKey="portfolioPct" stroke="#0066CC" dot={false} strokeWidth={2} name={`${selectedSector} Sleeve`} connectNulls={false} />
                     {showBenchmark && (
                       <Line
                         type="monotone"
                         dataKey="benchmarkPct"
-                        stroke={sectorDetail?.color || '#7c4dff'}
+                        stroke={sectorDetail?.color || '#003399'}
                         dot={false}
                         strokeWidth={1.6}
                         strokeDasharray="5 3"
@@ -6296,22 +6292,22 @@ export default function App() {
             </div>
           </div>
 
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(320px, 1fr))', gap:'16px', marginBottom:'16px' }}>
-            <div style={S.card}>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(320px, 1fr))', gap:'4px', marginBottom:'4px' }}>
+            <div className="cqg-panel" style={S.card}>
               <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:'12px', marginBottom:'8px' }}>
-                <div style={S.cardTitle}>SECTOR DECISION ALPHA — SLEEVE vs BENCHMARK</div>
+                <div className="cqg-title" style={S.cardTitle}>SECTOR DECISION ALPHA — SLEEVE vs BENCHMARK</div>
                 <button
                   type="button"
                   onClick={() => exportCurrentVisual('Sector Decision Alpha', sectorChartBars)}
                   disabled={!sectorChartBars.length}
-                  style={{ ...S.btn, padding:'4px 10px', fontSize:'10px', borderColor:PALETTE.borderStrong, color:PALETTE.accentBright, opacity: sectorChartBars.length ? 1 : 0.45 }}
+                  style={{ ...S.btn, padding:'4px 10px', fontSize:'10px', opacity: sectorChartBars.length ? 1 : 0.45 }}
                 >
                   Export
                 </button>
               </div>
               <ResponsiveContainer width="100%" height={sectorChartHeight}>
                 <BarChart data={sectorChartBars} layout="vertical" margin={{ top:10, right:26, bottom:8, left:8 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#111" horizontal={false} />
+                  <CartesianGrid strokeDasharray="2 5" stroke="#A0A0A4" horizontal={false} />
                   <XAxis type="number" tick={CHART_TICK_STYLE} tickFormatter={v => `${v>=0?'+':''}${v.toFixed(1)}%`} tickMargin={8} />
                   <YAxis type="category" dataKey="name" tick={CHART_TICK_STYLE} width={sectorAxisWidth} tickMargin={8} />
                   <Tooltip content={<CustomTooltip mode="pct" />} />
@@ -6320,7 +6316,7 @@ export default function App() {
                     {sectorChartBars.map((s, i) => (
                       <Cell
                         key={i}
-                        fill={!Number.isFinite(s.actualAllocationAlpha) ? '#555' : s.actualAllocationAlpha >= 0 ? '#00e676' : '#ff4444'}
+                        fill={!Number.isFinite(s.actualAllocationAlpha) ? '#555' : s.actualAllocationAlpha >= 0 ? '#008000' : '#E60000'}
                       />
                     ))}
                   </Bar>
@@ -6328,14 +6324,14 @@ export default function App() {
               </ResponsiveContainer>
             </div>
 
-            <div style={S.card}>
-              <div style={S.cardTitle}>SELECTED SECTOR SLEEVE — {selectedSector}</div>
+            <div className="cqg-panel" style={S.card}>
+              <div className="cqg-title" style={S.cardTitle}>SELECTED SECTOR SLEEVE — {selectedSector}</div>
               {sectorDetail ? (
                 <div style={{ ...S.grid(2), gap:'10px' }}>
-                  <div style={{ background:'#111', border:'1px solid rgba(255,255,255,0.06)', borderRadius:'2px', padding:'12px' }}>
+                  <div style={{ background:'#F4F4F4', border:'1px solid #B8B8B8', borderRadius:'0', padding:'4px 6px' }}>
                     <div style={{ color:'#555', fontSize:'10px', marginBottom:'6px' }}>TARGET SPLIT</div>
-                    <div style={{ color:'#7c4dff', fontSize:'18px', fontWeight:700 }}>{fmtPct(sectorDetail.targetWeight)}</div>
-                    <div style={{ color:'#777', fontSize:'11px', marginTop:'4px' }}>ETF {fmtPct(sectorDetail.targetEtfWeight)} · Alpha {fmtPct(sectorDetail.targetAlphaWeight)}</div>
+                    <div style={{ color:'#003399', fontSize:'18px', fontWeight:700 }}>{fmtPct(sectorDetail.targetWeight)}</div>
+                    <div style={{ color:'#555555', fontSize:'11px', marginTop:'4px' }}>ETF {fmtPct(sectorDetail.targetEtfWeight)} · Alpha {fmtPct(sectorDetail.targetAlphaWeight)}</div>
                     {editableSectorScope && (
                       <div style={{ display:'flex', gap:'8px', marginTop:'10px', flexWrap:'wrap' }}>
                         <label style={{ display:'flex', flexDirection:'column', gap:'4px', color:'#666', fontSize:'9px', textTransform:'uppercase', letterSpacing:'0.08em' }}>
@@ -6363,20 +6359,20 @@ export default function App() {
                       </div>
                     )}
                   </div>
-                  <div style={{ background:'#111', border:'1px solid rgba(255,255,255,0.06)', borderRadius:'2px', padding:'12px' }}>
+                  <div style={{ background:'#F4F4F4', border:'1px solid #B8B8B8', borderRadius:'0', padding:'4px 6px' }}>
                     <div style={{ color:'#555', fontSize:'10px', marginBottom:'6px' }}>ACTUAL SPLIT</div>
-                    <div style={{ color:'#00d4ff', fontSize:'18px', fontWeight:700 }}>{fmtPct(sectorDetail.actualWeight)}</div>
-                    <div style={{ color:'#777', fontSize:'11px', marginTop:'4px' }}>ETF {fmtPct(sectorDetail.actualEtfWeight)} · Alpha {fmtPct(sectorDetail.actualAlphaWeight)}</div>
+                    <div style={{ color:'#0066CC', fontSize:'18px', fontWeight:700 }}>{fmtPct(sectorDetail.actualWeight)}</div>
+                    <div style={{ color:'#555555', fontSize:'11px', marginTop:'4px' }}>ETF {fmtPct(sectorDetail.actualEtfWeight)} · Alpha {fmtPct(sectorDetail.actualAlphaWeight)}</div>
                   </div>
-                  <div style={{ background:'#111', border:'1px solid rgba(255,255,255,0.06)', borderRadius:'2px', padding:'12px' }}>
+                  <div style={{ background:'#F4F4F4', border:'1px solid #B8B8B8', borderRadius:'0', padding:'4px 6px' }}>
                     <div style={{ color:'#555', fontSize:'10px', marginBottom:'6px' }}>LIVE ACTIVE WT</div>
-                    <div style={{ color:'#00d4ff', fontSize:'18px', fontWeight:700 }}>{fmtPct(sectorDetail.activeWeight)}</div>
-                    <div style={{ color:'#777', fontSize:'11px', marginTop:'4px' }}>Historical sleeve TWR and alpha are unavailable; current sector weights and realized P/L remain available. Active = NAV weight minus benchmark weight · Invested weight excludes cash; shorts retain their sign · Vs benchmark {fmtPct(sectorDetail.relativeWeight)}</div>
+                    <div style={{ color:'#0066CC', fontSize:'18px', fontWeight:700 }}>{fmtPct(sectorDetail.activeWeight)}</div>
+                    <div style={{ color:'#555555', fontSize:'11px', marginTop:'4px' }}>Historical sleeve TWR and alpha are unavailable; current sector weights and realized P/L remain available. Active = NAV weight minus benchmark weight · Invested weight excludes cash; shorts retain their sign · Vs benchmark {fmtPct(sectorDetail.relativeWeight)}</div>
                   </div>
-                  <div style={{ background:'#111', border:'1px solid rgba(255,255,255,0.06)', borderRadius:'2px', padding:'12px' }}>
+                  <div style={{ background:'#F4F4F4', border:'1px solid #B8B8B8', borderRadius:'0', padding:'4px 6px' }}>
                     <div style={{ color:'#555', fontSize:'10px', marginBottom:'6px' }}>SECTOR RETURN</div>
-                    <div style={{ color: sectorDetail.sectorReturn >= 0 ? '#00e676' : '#ff4444', fontSize:'18px', fontWeight:700 }}>{fmtPct(sectorDetail.sectorReturn)}</div>
-                    <div style={{ color:'#777', fontSize:'11px', marginTop:'4px' }}>Historical sleeve return needs a complete dated holdings ledger · Benchmark {sectorDetail.benchmarkSymbol} {fmtPct(sectorDetail.benchmarkReturn)}</div>
+                    <div style={{ color: sectorDetail.sectorReturn >= 0 ? '#008000' : '#E60000', fontSize:'18px', fontWeight:700 }}>{fmtPct(sectorDetail.sectorReturn)}</div>
+                    <div style={{ color:'#555555', fontSize:'11px', marginTop:'4px' }}>Historical sleeve return needs a complete dated holdings ledger · Benchmark {sectorDetail.benchmarkSymbol} {fmtPct(sectorDetail.benchmarkReturn)}</div>
                   </div>
                 </div>
               ) : (
@@ -6385,15 +6381,15 @@ export default function App() {
             </div>
           </div>
 
-          <div style={S.card}>
-            <div style={S.cardTitle}>SECTOR DETAIL — CLICK A ROW TO DRILL INTO ITS RETURN SERIES</div>
+          <div className="cqg-panel" style={S.card}>
+            <div className="cqg-title" style={S.cardTitle}>SECTOR DETAIL — CLICK A ROW TO DRILL INTO ITS RETURN SERIES</div>
             {!editableSectorScope && (
-              <div style={{ color:'#8b9097', fontSize:'10px', marginBottom:'10px' }}>
+              <div style={{ color:'#666666', fontSize:'10px', marginBottom:'10px' }}>
                 Market-value weights use signed exposures. Invested weight excludes cash; active weight retains cash underweights. Option premiums are not delta exposure. Benchmark adjusted-close history includes reinvested dividends where available. Select a single account to edit benchmark and target weights. `ALL` shows a weighted blend of account-specific settings.
               </div>
             )}
             <div style={S.tableWrapper}>
-              <table style={S.table}>
+              <table className="cqg-grid" style={S.table}>
                 <thead>
                   <tr>{['Sector','Benchmark','Sleeve Return %','Bench %','Actual Wt','Invested Wt','Benchmark Wt','Active (pp)','Target Wt','ETF / Alpha','Target 70/30','Wtd Bench','Wtd Portfolio','Target α','Decision α','Benchmark Input','Target Input','Target Bias','Positions'].map(h => <th key={h} style={S.th}>{h}</th>)}</tr>
                 </thead>
@@ -6401,22 +6397,22 @@ export default function App() {
                   {sectorAttribution.map(s => (
                     <tr key={s.name}
                       onClick={() => setSelectedSector(s.name)}
-                      style={{ cursor:'pointer', background: selectedSector === s.name ? 'rgba(0,212,255,0.05)' : 'transparent' }}>
+                      style={{ cursor:'pointer', ...(selectedSector === s.name ? { background:'#FCFCB5' } : {}) }}>
                       <td style={S.td}><span style={{ color: SECTOR_COLORS[s.name] || '#666', marginRight:'6px' }}>■</span>{s.name}</td>
                       <td style={{ ...S.td, color:'#666' }}>{s.benchmarkSymbol}</td>
-                      <td style={{ ...S.td, color: s.sectorReturn >= 0 ? '#00e676' : '#ff4444', fontWeight:600 }}>{fmtPct(s.sectorReturn)}</td>
-                      <td style={{ ...S.td, color: s.benchmarkReturn >= 0 ? '#00e676' : '#ff4444', fontWeight:600 }}>{fmtPct(s.benchmarkReturn)}</td>
+                      <td style={{ ...S.td, color: s.sectorReturn >= 0 ? '#008000' : '#E60000', fontWeight:600 }}>{fmtPct(s.sectorReturn)}</td>
+                      <td style={{ ...S.td, color: s.benchmarkReturn >= 0 ? '#008000' : '#E60000', fontWeight:600 }}>{fmtPct(s.benchmarkReturn)}</td>
                       <td style={{ ...S.td, fontWeight:700 }}>{fmtPct(s.actualWeight)}</td>
                       <td style={S.td}>{fmtPct(s.investedWeight)}</td>
                       <td style={S.td}>{fmtPct(s.benchmarkWeight)}</td>
-                      <td style={{ ...S.td, color: s.relativeWeight >= 0 ? '#00e676' : '#ff4444' }}>{fmtPct(s.relativeWeight)}</td>
+                      <td style={{ ...S.td, color: s.relativeWeight >= 0 ? '#008000' : '#E60000' }}>{fmtPct(s.relativeWeight)}</td>
                       <td style={S.td}>{fmtPct(s.targetWeight)}</td>
                       <td style={S.td}>A: {fmtPct(s.actualEtfWeight)} / {fmtPct(s.actualAlphaWeight)}</td>
                       <td style={S.td}>T: {fmtPct(s.targetEtfWeight)} / {fmtPct(s.targetAlphaWeight)}</td>
-                      <td style={{ ...S.td, color: s.weightedBenchmarkReturn >= 0 ? '#00e676' : '#ff4444' }}>{fmtPct(s.weightedBenchmarkReturn)}</td>
-                      <td style={{ ...S.td, color: s.weightedActualReturn >= 0 ? '#00e676' : '#ff4444' }}>{fmtPct(s.weightedActualReturn)}</td>
-                      <td style={{ ...S.td, color: s.targetAllocationAlpha >= 0 ? '#00e676' : '#ff4444' }}>{fmtPct(s.targetAllocationAlpha)}</td>
-                      <td style={{ ...S.td, color: s.actualAllocationAlpha >= 0 ? '#00e676' : '#ff4444' }}>{fmtPct(s.actualAllocationAlpha)}</td>
+                      <td style={{ ...S.td, color: s.weightedBenchmarkReturn >= 0 ? '#008000' : '#E60000' }}>{fmtPct(s.weightedBenchmarkReturn)}</td>
+                      <td style={{ ...S.td, color: s.weightedActualReturn >= 0 ? '#008000' : '#E60000' }}>{fmtPct(s.weightedActualReturn)}</td>
+                      <td style={{ ...S.td, color: s.targetAllocationAlpha >= 0 ? '#008000' : '#E60000' }}>{fmtPct(s.targetAllocationAlpha)}</td>
+                      <td style={{ ...S.td, color: s.actualAllocationAlpha >= 0 ? '#008000' : '#E60000' }}>{fmtPct(s.actualAllocationAlpha)}</td>
                       <td style={S.td}>
                         <input
                           type="number"
@@ -6445,13 +6441,13 @@ export default function App() {
                         <div style={{ display:'flex', gap:'4px', flexWrap:'wrap', opacity: editableSectorScope ? 1 : 0.5 }}>
                           <button type="button" onClick={e => { e.stopPropagation(); setSectorAllocationBias(s.name, 'underweight'); }}
                             disabled={!editableSectorScope}
-                            style={{ ...S.btn, padding:'3px 6px', fontSize:'9px', ...(s.stance === 'Underweight' ? { borderColor:'#ff4444', color:'#ff4444' } : {}) }}>UW</button>
+                            style={{ ...S.btn, padding:'3px 6px', fontSize:'9px', ...(s.stance === 'Underweight' ? { borderColor:'#E60000', color:'#E60000' } : {}) }}>UW</button>
                           <button type="button" onClick={e => { e.stopPropagation(); setSectorAllocationBias(s.name, 'equal'); }}
                             disabled={!editableSectorScope}
                             style={{ ...S.btn, padding:'3px 6px', fontSize:'9px', ...(s.stance === 'Equal' ? S.btnActive : {}) }}>EQ</button>
                           <button type="button" onClick={e => { e.stopPropagation(); setSectorAllocationBias(s.name, 'overweight'); }}
                             disabled={!editableSectorScope}
-                            style={{ ...S.btn, padding:'3px 6px', fontSize:'9px', ...(s.stance === 'Overweight' ? { borderColor:'#00e676', color:'#00e676' } : {}) }}>OW</button>
+                            style={{ ...S.btn, padding:'3px 6px', fontSize:'9px', ...(s.stance === 'Overweight' ? { borderColor:'#008000', color:'#008000' } : {}) }}>OW</button>
                           <button type="button" onClick={e => { e.stopPropagation(); nudgeSectorActiveWeight(s.name, -0.5); }}
                             disabled={!editableSectorScope}
                             style={{ ...S.btn, padding:'3px 6px', fontSize:'9px' }}>-0.5</button>
@@ -6474,10 +6470,10 @@ export default function App() {
       {/* ══════ REALIZED P&L TAB ══════ */}
       {tab === 'realized' && (
         <div style={S.section}>
-          <div style={{ ...S.card, marginBottom:'16px' }}>
+          <div className="cqg-panel" style={{ ...S.card, marginBottom:'4px' }}>
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:'12px', flexWrap:'wrap' }}>
               <div>
-                <div style={S.cardTitle}>REALIZED P&amp;L WINDOW</div>
+                <div className="cqg-title" style={S.cardTitle}>REALIZED P&amp;L WINDOW</div>
                 <div style={{ color:'#666', fontSize:'11px', lineHeight:'1.5' }}>
                   Closed trades are filtered by closed date for the selected account scope.
                   {filteredRealizedTrades.length
@@ -6512,15 +6508,15 @@ export default function App() {
             const avgLoss = losers.length ? losers.reduce((a,t)=>a+t.gain,0)/losers.length : 0;
             const pf = Math.abs(avgLoss) > 0 ? Math.abs(avgWin / avgLoss) : 0;
             return (
-              <div style={{ ...S.grid(5), marginBottom:'16px' }}>
+              <div style={{ ...S.grid(5), marginBottom:'4px' }}>
                 {[
-                  ['Total Realized G/L', fmt$(totalGain), totalGain >= 0 ? '#00e676' : '#ff4444'],
-                  ['Win Rate', fmtPct(winRate), winRate >= 50 ? '#00e676' : '#ff4444'],
-                  ['Avg Winner', fmt$(avgWin), '#00e676'],
-                  ['Avg Loser', fmt$(avgLoss), '#ff4444'],
-                  ['Profit Factor', fmtNum(pf), pf >= 1 ? '#00e676' : '#ff4444'],
+                  ['Total Realized G/L', fmt$(totalGain), totalGain >= 0 ? '#008000' : '#E60000'],
+                  ['Win Rate', fmtPct(winRate), winRate >= 50 ? '#008000' : '#E60000'],
+                  ['Avg Winner', fmt$(avgWin), '#008000'],
+                  ['Avg Loser', fmt$(avgLoss), '#E60000'],
+                  ['Profit Factor', fmtNum(pf), pf >= 1 ? '#008000' : '#E60000'],
                 ].map(([label, val, color]) => (
-                  <div key={label} style={signalPanelStyle(color || '#8f99a3')}><div style={S.cardTitle}>{label}</div><div style={{ fontSize:'18px', fontWeight:700, color }}>{val}</div></div>
+                  <div key={label} className="cqg-tile" style={signalPanelStyle(color || '#666666')}><div className="cqg-title" style={S.cardTitle}>{label}</div><div style={{ fontSize:'18px', fontWeight:700, color }}>{val}</div></div>
                 ))}
               </div>
             );
@@ -6528,27 +6524,27 @@ export default function App() {
 
           {/* Realized by sector */}
           {realizedBySector.length > 0 && (
-            <div style={{ ...S.card, marginBottom:'16px' }}>
+            <div className="cqg-panel" style={{ ...S.card, marginBottom:'4px' }}>
               <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:'12px', marginBottom:'8px' }}>
-                <div style={S.cardTitle}>REALIZED P&L BY SECTOR</div>
+                <div className="cqg-title" style={S.cardTitle}>REALIZED P&L BY SECTOR</div>
                 <button
                   type="button"
                   onClick={() => exportCurrentVisual('Realized P&L By Sector', realizedBySector)}
                   disabled={!realizedBySector.length}
-                  style={{ ...S.btn, padding:'4px 10px', fontSize:'10px', borderColor:PALETTE.borderStrong, color:PALETTE.accentBright }}
+                  style={{ ...S.btn, padding:'4px 10px', fontSize:'10px' }}
                 >
                   Export
                 </button>
               </div>
               <ResponsiveContainer width="100%" height={realizedSectorChartHeight}>
                 <BarChart data={realizedBySector} layout="vertical" margin={{ top:10, right:26, bottom:8, left:8 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#111" horizontal={false} />
+                  <CartesianGrid strokeDasharray="2 5" stroke="#A0A0A4" horizontal={false} />
                   <XAxis type="number" tick={CHART_TICK_STYLE} tickFormatter={v => `$${(v/1000).toFixed(0)}K`} tickMargin={8} />
                   <YAxis type="category" dataKey="name" tick={CHART_TICK_STYLE} width={realizedSectorAxisWidth} tickMargin={8} />
                   <Tooltip content={<CustomTooltip mode="$" />} />
                   <ReferenceLine x={0} stroke="#333" />
                   <Bar dataKey="gain" name="Realized G/L" radius={[0,1,1,0]}>
-                    {realizedBySector.map((s, i) => <Cell key={i} fill={s.gain >= 0 ? '#00e676' : '#ff4444'} />)}
+                    {realizedBySector.map((s, i) => <Cell key={i} fill={s.gain >= 0 ? '#008000' : '#E60000'} />)}
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
@@ -6556,10 +6552,10 @@ export default function App() {
           )}
 
           {/* Trades table */}
-          <div style={S.card}>
-            <div style={S.cardTitle}>REALIZED TRADES — {filteredRealizedTrades.length} ROWS · {realizedTimeframe}</div>
+          <div className="cqg-panel" style={S.card}>
+            <div className="cqg-title" style={S.cardTitle}>REALIZED TRADES — {filteredRealizedTrades.length} ROWS · {realizedTimeframe}</div>
             <div style={S.tableWrapper}>
-              <table style={S.table}>
+              <table className="cqg-grid" style={S.table}>
                 <thead>
                   <tr>{['Symbol','Account','Type','Sector Assignment','Closed Date','Qty','Proceeds','Cost','Gain $','Gain %','Term'].map(h => <th key={h} style={S.th}>{h}</th>)}</tr>
                 </thead>
@@ -6591,9 +6587,9 @@ export default function App() {
                       <td style={S.td}>{Number.isFinite(Number(t.qty)) && Number(t.qty) !== 0 ? t.qty : '--'}</td>
                       <td style={S.td}>{fmt$(t.proceeds)}</td>
                       <td style={S.td}>{fmt$(t.cost)}</td>
-                      <td style={{ ...S.td, color: t.gain >= 0 ? '#00e676' : '#ff4444', fontWeight:600 }}>{fmt$(t.gain)}</td>
-                      <td style={{ ...S.td, color: t.gain >= 0 ? '#00e676' : '#ff4444' }}>{fmtPct(t.gainPct)}</td>
-                      <td style={S.td}><span style={S.badge(t.term === 'Long Term' ? '#00e676' : '#ffd600')}>{t.term === 'Long Term' ? 'LT' : 'ST'}</span></td>
+                      <td style={{ ...S.td, color: t.gain >= 0 ? '#008000' : '#E60000', fontWeight:600 }}>{fmt$(t.gain)}</td>
+                      <td style={{ ...S.td, color: t.gain >= 0 ? '#008000' : '#E60000' }}>{fmtPct(t.gainPct)}</td>
+                      <td style={S.td}><span style={S.badge(t.term === 'Long Term' ? '#008000' : '#CC6600')}>{t.term === 'Long Term' ? 'LT' : 'ST'}</span></td>
                     </tr>
                   );})}
                   {filteredRealizedTrades.length === 0 && (
@@ -6618,28 +6614,28 @@ export default function App() {
         <div style={S.section}>
           {allTimeStats ? (
             <>
-              <div style={{ ...S.grid(3), marginBottom:'16px' }}>
+              <div style={{ ...S.grid(3), marginBottom:'4px' }}>
                 {/* Risk card set */}
                 {[
-                  { label:'Max Drawdown', val: fmtPct(allTimeStats.maxDrawdown == null ? null : -allTimeStats.maxDrawdown), color:'#ff9800', desc:'Peak-to-trough decline' },
-                  { label:'Annualized Volatility', val: `${fmtNum(allTimeStats.volatility)}%`, color:'#e0e0e0', desc:'σ of daily returns × √252' },
-                  { label:'Sharpe Ratio', val: fmtNum(allTimeStats.sharpe), color: allTimeStats.sharpe >= 1 ? '#00e676' : allTimeStats.sharpe >= 0 ? '#ffd600' : '#ff4444', desc:'Return per unit risk (4.3% RF)' },
-                  { label:'Calmar Ratio', val: fmtNum(allTimeStats.calmar), color: allTimeStats.calmar >= 0.5 ? '#00e676' : '#ffd600', desc:'Ann. return / Max drawdown' },
-                  { label:'Total Return', val: fmtPct(allTimeStats.total), color: allTimeStats.total >= 0 ? '#00e676' : '#ff4444', desc:'Inception to date' },
-                  { label:'YTD Return', val: fmtPct(allTimeStats.ytd), color: allTimeStats.ytd >= 0 ? '#00e676' : '#ff4444', desc:'Year to date' },
+                  { label:'Max Drawdown', val: fmtPct(allTimeStats.maxDrawdown == null ? null : -allTimeStats.maxDrawdown), color:'#CC6600', desc:'Peak-to-trough decline' },
+                  { label:'Annualized Volatility', val: `${fmtNum(allTimeStats.volatility)}%`, color:'#000000', desc:'σ of daily returns × √252' },
+                  { label:'Sharpe Ratio', val: fmtNum(allTimeStats.sharpe), color: allTimeStats.sharpe >= 1 ? '#008000' : allTimeStats.sharpe >= 0 ? '#CC6600' : '#E60000', desc:'Return per unit risk (4.3% RF)' },
+                  { label:'Calmar Ratio', val: fmtNum(allTimeStats.calmar), color: allTimeStats.calmar >= 0.5 ? '#008000' : '#CC6600', desc:'Ann. return / Max drawdown' },
+                  { label:'Total Return', val: fmtPct(allTimeStats.total), color: allTimeStats.total >= 0 ? '#008000' : '#E60000', desc:'Inception to date' },
+                  { label:'YTD Return', val: fmtPct(allTimeStats.ytd), color: allTimeStats.ytd >= 0 ? '#008000' : '#E60000', desc:'Year to date' },
                 ].map(({ label, val, color, desc }) => (
-                  <div key={label} style={signalPanelStyle(color || '#8f99a3')}>
-                    <div style={S.cardTitle}>{label}</div>
+                  <div key={label} className="cqg-tile" style={signalPanelStyle(color || '#666666')}>
+                    <div className="cqg-title" style={S.cardTitle}>{label}</div>
                     <div style={{ fontSize:'24px', fontWeight:700, color, marginBottom:'4px' }}>{val}</div>
                     <div style={{ fontSize:'10px', color:'#444' }}>{desc}</div>
                   </div>
                 ))}
               </div>
 
-              <div style={{ ...S.card, marginBottom:'16px' }}>
+              <div className="cqg-panel" style={{ ...S.card, marginBottom:'4px' }}>
                 <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:'12px', marginBottom:'12px', flexWrap:'wrap' }}>
                   <div>
-                    <div style={S.cardTitle}>CORRELATION MATRIX</div>
+                    <div className="cqg-title" style={S.cardTitle}>CORRELATION MATRIX</div>
                     <div style={{ color:'#666', fontSize:'11px', marginTop:'4px', lineHeight:'1.5' }}>
                       {riskMatrixMode === 'positions'
                         ? `Top ${riskCorrelationItems.length} positions by absolute market value with historical series over ${timeframe}. Options and instruments without history are excluded.`
@@ -6651,7 +6647,7 @@ export default function App() {
                       type="button"
                       onClick={() => exportCurrentVisual('Correlation Matrix', visualExportTables.risk_correlation_matrix)}
                       disabled={!riskCorrelationItems.length}
-                      style={{ ...S.btn, borderColor:PALETTE.borderStrong, color:PALETTE.accentBright, opacity: riskCorrelationItems.length ? 1 : 0.45 }}
+                      style={{ ...S.btn, opacity: riskCorrelationItems.length ? 1 : 0.45 }}
                     >
                       Export
                     </button>
@@ -6677,14 +6673,14 @@ export default function App() {
                     <div style={{ display:'flex', gap:'12px', flexWrap:'wrap', marginBottom:'12px', color:'#666', fontSize:'10px' }}>
                       <span>{riskCorrelationMeta.itemCount} series</span>
                       <span>{riskCorrelationMeta.minObs}–{riskCorrelationMeta.maxObs} return observations</span>
-                      <span style={{ color:'#00e676' }}>Positive = green</span>
-                      <span style={{ color:'#ff4444' }}>Negative = red</span>
+                      <span style={{ color:'#008000' }}>Positive = green</span>
+                      <span style={{ color:'#E60000' }}>Negative = red</span>
                     </div>
-                    <div style={{ overflow:'auto', border:'1px solid rgba(255,255,255,0.06)' }}>
-                      <table style={{ ...S.table, minWidth: `${Math.max(720, riskCorrelationItems.length * 92 + 180)}px` }}>
+                    <div style={{ overflow:'auto', border:'1px solid #7B7B7B' }}>
+                      <table className="cqg-grid" style={{ ...S.table, minWidth: `${Math.max(720, riskCorrelationItems.length * 92 + 180)}px` }}>
                         <thead>
                           <tr>
-                            <th style={{ ...S.th, position:'sticky', left:0, zIndex:3, background:'#0b0d10', minWidth:'180px' }}>Series</th>
+                            <th style={{ ...S.th, position:'sticky', left:0, zIndex:3, background:'#BCBCBC', minWidth:'180px' }}>Series</th>
                             {riskCorrelationItems.map((item) => (
                               <th key={item.key} style={{ ...S.th, minWidth:'92px', textAlign:'center' }}>
                                 <div style={{ color:item.color || '#d8dce2', fontWeight:700 }}>{item.label}</div>
@@ -6696,7 +6692,7 @@ export default function App() {
                         <tbody>
                           {riskCorrelationItems.map((rowItem, rowIndex) => (
                             <tr key={rowItem.key}>
-                              <td style={{ ...S.td, position:'sticky', left:0, zIndex:2, background:'#090c0f', minWidth:'180px' }}>
+                              <td style={{ ...S.td, position:'sticky', left:0, zIndex:2, background:'#E2E2E2', minWidth:'180px' }}>
                                 <div style={{ color:rowItem.color || '#d8dce2', fontWeight:700 }}>{rowItem.label}</div>
                                 <div style={{ color:'#666', fontSize:'10px', marginTop:'2px' }}>{rowItem.sublabel || rowItem.valueLabel}</div>
                               </td>
@@ -6714,9 +6710,9 @@ export default function App() {
                                       minWidth:'92px',
                                       textAlign:'center',
                                       fontWeight:isDiagonal ? 700 : 600,
-                                      color:isDiagonal ? '#f4f6f8' : Number.isFinite(value) ? '#d8dce2' : '#666',
-                                      background:isDiagonal ? 'rgba(244,178,79,0.18)' : correlationColor(value),
-                                      borderColor:isDiagonal ? 'rgba(244,178,79,0.3)' : 'rgba(255,255,255,0.05)',
+                                      color:isDiagonal ? '#000000' : Number.isFinite(value) ? '#000000' : '#666',
+                                      background:isDiagonal ? '#FFFF80' : correlationColor(value),
+                                      borderColor:'#C8C8C8',
                                     }}
                                   >
                                     {Number.isFinite(value) ? value.toFixed(2) : '—'}
@@ -6739,63 +6735,63 @@ export default function App() {
               </div>
 
               {/* Drawdown chart */}
-              <div style={{ ...S.card, marginBottom:'16px' }}>
+              <div className="cqg-panel" style={{ ...S.card, marginBottom:'4px' }}>
                 <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:'12px', marginBottom:'8px' }}>
-                  <div style={S.cardTitle}>DRAWDOWN CHART</div>
+                  <div className="cqg-title" style={S.cardTitle}>DRAWDOWN CHART</div>
                   <button
                     type="button"
                     onClick={() => exportCurrentVisual('Drawdown Chart', riskDrawdownData)}
                     disabled={!riskDrawdownData.length}
-                    style={{ ...S.btn, padding:'4px 10px', fontSize:'10px', borderColor:PALETTE.borderStrong, color:PALETTE.accentBright, opacity: riskDrawdownData.length ? 1 : 0.45 }}
+                    style={{ ...S.btn, padding:'4px 10px', fontSize:'10px', opacity: riskDrawdownData.length ? 1 : 0.45 }}
                   >
                     Export
                   </button>
                 </div>
                 <ResponsiveContainer width="100%" height={180}>
-                  <AreaChart data={riskDrawdownData} margin={{ top:10, right:18, bottom:8, left:10 }}>
+                  <AreaChart data={riskDrawdownData} margin={{ top:10, right:18, bottom:8, left:26 }}>
                     <defs>
                       <linearGradient id="ddGrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#ff4444" stopOpacity={0.3}/>
-                        <stop offset="95%" stopColor="#ff4444" stopOpacity={0.05}/>
+                        <stop offset="5%" stopColor="#E60000" stopOpacity={0.3}/>
+                        <stop offset="95%" stopColor="#E60000" stopOpacity={0.05}/>
                       </linearGradient>
                     </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#111" />
+                    <CartesianGrid strokeDasharray="2 5" stroke="#A0A0A4" />
                     <XAxis dataKey="date" tick={CHART_TICK_STYLE} tickFormatter={d => d.slice(0,7)} interval={getTickInterval(riskDrawdownData.length)} minTickGap={24} tickMargin={8} />
-                    <YAxis width={62} tick={CHART_TICK_STYLE} tickFormatter={v => `${v.toFixed(1)}%`} tickMargin={8} />
+                    <YAxis orientation="right" width={62} tick={CHART_TICK_STYLE} tickFormatter={v => `${v.toFixed(1)}%`} tickMargin={8} />
                     <Tooltip content={<CustomTooltip mode="pct" />} />
                     <ReferenceLine y={0} stroke="#333" />
-                    <Area type="monotone" dataKey="dd" stroke="#ff4444" fill="url(#ddGrad)" strokeWidth={1.5} dot={false} name="Drawdown" />
+                    <Area type="monotone" dataKey="dd" stroke="#E60000" fill="url(#ddGrad)" strokeWidth={1.5} dot={false} name="Drawdown" />
                   </AreaChart>
                 </ResponsiveContainer>
               </div>
 
               {/* Rolling 30-day vol */}
               {riskRollingVolData.length > 0 && (
-                <div style={S.card}>
+                <div className="cqg-panel" style={S.card}>
                   <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:'12px', marginBottom:'8px' }}>
-                    <div style={S.cardTitle}>ROLLING 30-DAY VOLATILITY (ANNUALIZED)</div>
+                    <div className="cqg-title" style={S.cardTitle}>ROLLING 30-DAY VOLATILITY (ANNUALIZED)</div>
                     <button
                       type="button"
                       onClick={() => exportCurrentVisual('Rolling 30 Day Volatility', riskRollingVolData)}
-                      style={{ ...S.btn, padding:'4px 10px', fontSize:'10px', borderColor:PALETTE.borderStrong, color:PALETTE.accentBright }}
+                      style={{ ...S.btn, padding:'4px 10px', fontSize:'10px' }}
                     >
                       Export
                     </button>
                   </div>
                   <ResponsiveContainer width="100%" height={180}>
-                    <LineChart data={riskRollingVolData} margin={{ top:10, right:18, bottom:8, left:10 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#111" />
+                    <LineChart data={riskRollingVolData} margin={{ top:10, right:18, bottom:8, left:26 }}>
+                      <CartesianGrid strokeDasharray="2 5" stroke="#A0A0A4" />
                       <XAxis dataKey="date" tick={CHART_TICK_STYLE} tickFormatter={d => d.slice(0,7)} interval={getTickInterval(riskRollingVolData.length)} minTickGap={24} tickMargin={8} />
-                      <YAxis width={62} tick={CHART_TICK_STYLE} tickFormatter={v => `${v.toFixed(1)}%`} tickMargin={8} />
+                      <YAxis orientation="right" width={62} tick={CHART_TICK_STYLE} tickFormatter={v => `${v.toFixed(1)}%`} tickMargin={8} />
                       <Tooltip content={<CustomTooltip mode="pct" />} />
-                      <Line type="monotone" dataKey="vol" stroke="#ffd600" dot={false} strokeWidth={2} name="30D Vol" />
+                      <Line type="monotone" dataKey="vol" stroke="#CC6600" dot={false} strokeWidth={2} name="30D Vol" />
                     </LineChart>
                   </ResponsiveContainer>
                 </div>
               )}
             </>
           ) : (
-            <div style={{ ...S.card, textAlign:'center', padding:'48px', color:'#333' }}>
+            <div className="cqg-panel" style={{ ...S.card, textAlign:'center', padding:'48px', color:'#333' }}>
               Upload balance history to compute risk metrics
             </div>
           )}
@@ -6805,8 +6801,8 @@ export default function App() {
       {/* ══════ UPLOAD TAB ══════ */}
       {tab === 'upload' && (
         <div style={S.section}>
-          <div style={{ display:'flex', justifyContent:'space-between', gap:'12px', alignItems:'flex-start', marginBottom:'20px', flexWrap:'wrap' }}>
-            <div style={{ color:'#555', fontSize:'11px', lineHeight:'1.6', maxWidth:'780px' }}>
+          <div style={{ display:'flex', justifyContent:'space-between', gap:'4px', alignItems:'flex-start', marginBottom:'4px', flexWrap:'wrap' }}>
+            <div style={{ color:'#000000', fontSize:'11px', lineHeight:'1.5', maxWidth:'780px', background:'#EBEB7E', border:'1px solid #000000', padding:'3px 6px', fontFamily:CQG_FONT_UI }}>
               {import.meta.env.VITE_STATIC_MODE === '1'
                 ? 'Published snapshot. Uploads and edits here are temporary previews; they do not update the shared website. To update everyone’s portfolio, place the CSVs in Desktop → Dashboard CSV and run Publish Barker Dashboard. Export any analysis you want to keep before reloading.'
                 : 'Upload Schwab export files to update the shared portfolio workspace. Uploaded balances, positions, realized P&L, and sector configuration are saved to the backend so every viewer sees the same portfolio after one daily refresh. Files can be re-uploaded at any time to refresh the shared state.'}
@@ -6820,15 +6816,15 @@ export default function App() {
             <button
               type="button"
               onClick={() => window.location.reload()}
-              style={{ ...S.btn, borderColor:'#ff4444', color:'#ff4444' }}
+              style={{ ...S.btn, borderColor:'#E60000', color:'#E60000' }}
             >
               Reload Published Data
             </button>
           </div>
 
-          <div style={{ ...S.card, marginBottom:'16px', display:'flex', justifyContent:'space-between', gap:'16px', alignItems:'flex-start', flexWrap:'wrap' }}>
+          <div className="cqg-group" style={{ ...S.card, marginBottom:'4px', display:'flex', justifyContent:'space-between', gap:'8px', alignItems:'flex-start', flexWrap:'wrap', padding:'4px 6px 6px' }}>
             <div style={{ maxWidth:'760px' }}>
-              <div style={{ ...S.cardTitle, color:PALETTE.accentBright, marginBottom:'6px' }}>FUTURES STATEMENT ROUTING</div>
+              <div className="cqg-title" style={{ ...S.cardTitle, color:PALETTE.accentBright, marginBottom:'6px' }}>FUTURES STATEMENT ROUTING</div>
               <div style={{ color:PALETTE.textMuted, fontSize:'11px', lineHeight:'1.6' }}>
                 Schwab account statements do not always identify a masked account suffix when they include futures. Choose the source account for the futures statement here.
                 If the statement is ambiguous, you can leave it on auto-detect or route it to the clearing bucket, keep that account assignment with the imported statement.
@@ -6887,14 +6883,14 @@ export default function App() {
           </div>
 
           {/* Current data status */}
-          <div style={{ ...S.card, marginTop:'24px' }}>
-            <div style={S.cardTitle}>CURRENT DATA STATUS</div>
+          <div className="cqg-panel" style={{ ...S.card, marginTop:'4px' }}>
+            <div className="cqg-title" style={S.cardTitle}>CURRENT DATA STATUS</div>
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:'16px', marginTop:'8px' }}>
               <div>
                 <div style={{ color:'#555', fontSize:'10px', marginBottom:'6px' }}>POSITIONS</div>
                 {Object.entries(accounts).map(([name, acc]) => (
-                  <div key={name} style={{ color:'#888', fontSize:'11px', marginBottom:'3px' }}>
-                    <span style={{ color:'#00d4ff' }}>{getAccountDisplayName(name, accountDisplayNames, { short: true })}</span>: {acc.positions.length} positions · {fmt$(acc.total)}
+                  <div key={name} style={{ color:'#333333', fontSize:'11px', marginBottom:'3px' }}>
+                    <span style={{ color:'#0066CC' }}>{getAccountDisplayName(name, accountDisplayNames, { short: true })}</span>: {acc.positions.length} positions · {fmt$(acc.total)}
                   </div>
                 ))}
                 {Object.keys(accounts).length === 0 && <div style={{ color:'#333' }}>No positions loaded</div>}
@@ -6902,14 +6898,14 @@ export default function App() {
               <div>
                 <div style={{ color:'#555', fontSize:'10px', marginBottom:'6px' }}>BALANCE HISTORY</div>
                 {Object.entries(balanceHistory).map(([name, hist]) => (
-                  <div key={name} style={{ color:'#888', fontSize:'11px', marginBottom:'3px' }}>
-                    <span style={{ color:'#00d4ff' }}>{getAccountDisplayName(name, accountDisplayNames, { short: true })}</span>: {hist.length} rows · {hist[0]?.[0]} → {hist[hist.length-1]?.[0]}
+                  <div key={name} style={{ color:'#333333', fontSize:'11px', marginBottom:'3px' }}>
+                    <span style={{ color:'#0066CC' }}>{getAccountDisplayName(name, accountDisplayNames, { short: true })}</span>: {hist.length} rows · {hist[0]?.[0]} → {hist[hist.length-1]?.[0]}
                   </div>
                 ))}
               </div>
               <div>
                 <div style={{ color:'#555', fontSize:'10px', marginBottom:'6px' }}>REALIZED TRADES</div>
-                <div style={{ color:'#888', fontSize:'11px' }}>{realizedTrades.length} trades · {new Set(realizedTrades.map(t=>t.account)).size} accounts</div>
+                <div style={{ color:'#333333', fontSize:'11px' }}>{realizedTrades.length} trades · {new Set(realizedTrades.map(t=>t.account)).size} accounts</div>
                 {realizedTrades.length > 0 && (
                   <div style={{ color:'#555', fontSize:'10px', marginTop:'4px' }}>
                     Total: {fmt$(realizedTrades.reduce((a,t)=>a+t.gain,0))}
@@ -6920,14 +6916,14 @@ export default function App() {
           </div>
 
           {/* Benchmark status */}
-          <div style={{ ...S.card, marginTop:'12px' }}>
+          <div className="cqg-panel" style={{ ...S.card, marginTop:'4px' }}>
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
               <div>
-                <div style={S.cardTitle}>BENCHMARK MARKET DATA</div>
-                <div style={{ fontSize:'11px', color: spxData.length > 0 ? '#00e676' : '#666', marginBottom:'3px' }}>
+                <div className="cqg-title" style={S.cardTitle}>BENCHMARK MARKET DATA</div>
+                <div style={{ fontSize:'11px', color: spxData.length > 0 ? '#008000' : '#666', marginBottom:'3px' }}>
                   {spxData.length > 0 ? `SPY total-return proxy ✓ ${spxData.length} trading days (${spxData[0]?.[0]} – ${spxData[spxData.length-1]?.[0]})` : spxLoading ? 'Loading published benchmark data...' : 'Benchmark not loaded'}
                 </div>
-                <div style={{ fontSize:'10px', color: Object.keys(sectorBenchmarkData).length === SP500_SECTORS.length ? '#00e676' : '#666' }}>
+                <div style={{ fontSize:'10px', color: Object.keys(sectorBenchmarkData).length === SP500_SECTORS.length ? '#008000' : '#666' }}>
                   Sector ETFs: {Object.keys(sectorBenchmarkData).length}/{SP500_SECTORS.length} loaded
                 </div>
               </div>
@@ -6958,29 +6954,29 @@ function UploadCard({ label, hint, desc, fields, status, handler, accept, multip
   };
 
   return (
-    <div style={{ ...S.card, display:'flex', flexDirection:'column', gap:'12px' }}>
-      <div style={{ color:'#f4b24f', fontSize:'11px', fontWeight:700, letterSpacing:'1.4px', textTransform:'uppercase' }}>{label}</div>
-      <div style={{ color:'#6e7680', fontSize:'10px', fontFamily:'inherit' }}>{hint}</div>
-      <div style={{ color:'#a3acb7', fontSize:'11px', lineHeight:'1.6' }}>{desc}</div>
+    <div className="cqg-panel" style={{ ...S.card, display:'flex', flexDirection:'column', gap:'6px' }}>
+      <div className="cqg-title" style={{ ...S.cardTitle }}>{label}</div>
+      <div style={{ color:'#333333', fontSize:'11px', fontFamily:CQG_FONT_DATA }}>{hint}</div>
+      <div style={{ color:'#333333', fontSize:'11px', lineHeight:'1.6' }}>{desc}</div>
       {fields && (
-        <div style={{ fontSize:'10px', color:'#59616b' }}>
-          Expected columns: {fields.map(f => <span key={f} style={{ color:'#aab3bc', background:'linear-gradient(180deg, rgba(38,42,46,0.95), rgba(12,14,17,0.98))', border:'1px solid rgba(255,255,255,0.06)', padding:'1px 5px', borderRadius:'2px', margin:'0 2px' }}>{f}</span>)}
+        <div style={{ fontSize:'10px', color:'#666666' }}>
+          Expected columns: {fields.map(f => <span key={f} style={{ color:'#000000', background:'#F0F0F0', border:'1px solid #A0A0A0', padding:'0 4px', borderRadius:'0', margin:'0 2px', lineHeight:'16px', display:'inline-block' }}>{f}</span>)}
         </div>
       )}
       <div
-        style={{ ...S.uploadBox, borderColor: dragging ? 'rgba(244,178,79,0.5)' : 'rgba(244,178,79,0.22)', background: dragging ? 'rgba(244,178,79,0.08)' : 'linear-gradient(180deg, rgba(24,27,31,0.48), rgba(7,9,11,0.72))' }}
+        style={{ ...S.uploadBox, borderColor: dragging ? '#FF7200' : '#7B7B7B', background: dragging ? '#FFFF80' : '#F4F4F4' }}
         onDragOver={e => { e.preventDefault(); setDragging(true); }}
         onDragLeave={() => setDragging(false)}
         onDrop={e => { e.preventDefault(); setDragging(false); onFile(Array.from(e.dataTransfer.files || [])); }}
         onClick={() => inputRef.current?.click()}
       >
-        <div style={{ fontSize:'24px', marginBottom:'8px', opacity:0.6, color:'#f4b24f' }}>⬆</div>
-        <div style={{ color:'#a3acb7', fontSize:'11px' }}>{multiple ? 'Drop files here or click to browse' : 'Drop file here or click to browse'}</div>
-        <div style={{ color:'#6e7680', fontSize:'10px', marginTop:'4px' }}>CSV · Excel exports</div>
+        <div style={{ fontSize:'20px', marginBottom:'4px', color:'#333333' }}>⬆</div>
+        <div style={{ color:'#333333', fontSize:'11px' }}>{multiple ? 'Drop files here or click to browse' : 'Drop file here or click to browse'}</div>
+        <div style={{ color:'#666666', fontSize:'10px', marginTop:'4px' }}>CSV · Excel exports</div>
         <input ref={inputRef} type="file" accept={accept} multiple={multiple} style={{ display:'none' }} onChange={e => onFile(Array.from(e.target.files || []))} />
       </div>
       {status && (
-        <div style={{ fontSize:'11px', color: status.startsWith('✓') ? '#6ef3a5' : '#ff8f8f', background: status.startsWith('✓') ? 'rgba(0,230,118,0.08)' : 'rgba(255,68,68,0.08)', border:`1px solid ${status.startsWith('✓') ? 'rgba(0,230,118,0.18)' : 'rgba(255,68,68,0.18)'}`, padding:'6px 10px', borderRadius:'3px', fontFamily:'inherit' }}>
+        <div style={{ fontSize:'11px', color: status.startsWith('✓') ? '#008000' : '#E60000', background:'#FFFFFF', border:`1px solid ${status.startsWith('✓') ? '#008000' : '#E60000'}`, padding:'2px 6px', borderRadius:'0', fontFamily:CQG_FONT_UI }}>
           {status}
         </div>
       )}
