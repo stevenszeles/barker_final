@@ -1,9 +1,8 @@
-@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap");
-
+/* CQG IC look: grey chrome around light data surfaces, 1 px rules, bevel buttons, no motion. */
 :root {
-  color-scheme: dark;
-  background: #060709;
-  font-family: "IBM Plex Sans", system-ui, sans-serif;
+  color-scheme: light;
+  background: #ABABAB;
+  font-family: "Segoe UI", Tahoma, sans-serif;
 }
 
 html,
@@ -15,15 +14,11 @@ body,
 }
 
 body {
-  background:
-    radial-gradient(circle at top left, rgba(216, 139, 47, 0.08), transparent 22%),
-    radial-gradient(circle at top right, rgba(126, 139, 146, 0.05), transparent 28%),
-    linear-gradient(180deg, #15191f 0%, #060709 100%);
-  color: #ddd7cc;
-  font-family: "IBM Plex Sans", system-ui, sans-serif;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+  background: #ABABAB;
+  color: #000000;
+  font-family: "Segoe UI", Tahoma, sans-serif;
+  font-size: 12px;
+  -webkit-font-smoothing: auto;
 }
 
 * {
@@ -31,21 +26,107 @@ body {
 }
 
 *::selection {
-  background: rgba(245, 166, 35, 0.28);
-  color: #fff6e5;
+  background: #3399FF;
+  color: #FFFFFF;
 }
 
-*::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+/* Panel caption: Win7-basic child-window caption band across the top of each panel. */
+.cqg-panel > .cqg-title:first-child,
+.cqg-panel > :first-child:has(> .cqg-title),
+.cqg-panel > :first-child:has(> div > .cqg-title) {
+  background: linear-gradient(180deg, #99B5D1, #B9D1EA) !important;
+  margin: -4px -6px 6px !important;
+  padding: 2px 6px !important;
+  min-height: 25px;
+  border-bottom: 1px solid #696969 !important;
+  box-shadow: 0 1px 0 #A0A0A0;
+}
+.cqg-panel > .cqg-title:first-child {
+  line-height: 21px;
+}
+.cqg-panel > :first-child:has(> .cqg-title) .cqg-title,
+.cqg-panel > :first-child:has(> div > .cqg-title) .cqg-title {
+  margin-bottom: 0 !important;
+  line-height: 21px;
 }
 
-*::-webkit-scrollbar-track {
-  background: rgba(9, 12, 15, 0.92);
+/* Settings-style group panel. */
+.cqg-group {
+  background: #F4F4F4 !important;
+  border-color: #B8B8B8 !important;
+}
+.cqg-group .cqg-title {
+  font: bold 11px Tahoma, "Segoe UI", sans-serif !important;
+  color: #000000 !important;
 }
 
-*::-webkit-scrollbar-thumb {
-  background: linear-gradient(180deg, rgba(245, 166, 35, 0.55), rgba(112, 76, 20, 0.72));
-  border: 2px solid rgba(9, 12, 15, 0.92);
-  border-radius: 999px;
+/* Quote Board tiles: label line, right-aligned value in the fixed-cell face. */
+.cqg-tile > .cqg-title {
+  font: 11px Tahoma, "Segoe UI", Verdana, sans-serif !important;
+  color: #333333 !important;
+  margin-bottom: 0 !important;
+}
+.cqg-tile > .cqg-title + div {
+  font-family: Arial, "Helvetica Neue", sans-serif !important;
+  font-weight: 400 !important;
+  font-size: 16px !important;
+  line-height: 20px;
+  letter-spacing: 0.04em !important;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  margin-bottom: 0 !important;
+}
+.cqg-tile > .cqg-title + div + div {
+  text-align: right;
+  color: #333333 !important;
+  font-size: 10px !important;
+  font-family: Tahoma, "Segoe UI", sans-serif;
+  margin-top: 0 !important;
+}
+
+/* Gen-2 monitor grid: zebra rows, emphasis by weight only. */
+.cqg-grid tbody tr:nth-child(odd) {
+  background: #EAEAEA;
+}
+.cqg-grid tbody tr:nth-child(even) {
+  background: #E2E2E2;
+}
+.cqg-grid td {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Bevel inverts on press; no hover tints anywhere. */
+button:active:not(:disabled) {
+  background: linear-gradient(180deg, #C9C9C9, #B1B1B1) !important;
+  box-shadow: inset 1px 1px 0 #A0A0A0, inset -1px -1px 0 #FFFFFF !important;
+  color: #000000 !important;
+}
+button:focus-visible,
+select:focus-visible {
+  outline: 1px dotted #000000;
+  outline-offset: -4px;
+}
+
+/* Chrome dropdown: bevel face with a fused darker drop zone and a solid triangle. */
+select {
+  -webkit-appearance: none;
+  appearance: none;
+  background:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='7' height='4'%3E%3Cpath d='M0 0h7L3.5 4z' fill='%23333333'/%3E%3C/svg%3E") no-repeat right 5px center / 7px 4px,
+    linear-gradient(to left, #BCBCBC 0, #BCBCBC 17px, #767679 17px, #767679 18px, transparent 18px),
+    linear-gradient(180deg, #E5E5E5, #CDCDCD) !important;
+  border: 1px solid #3C3C3C !important;
+  box-shadow: inset 1px 1px 0 #FFFFFF !important;
+  border-radius: 0 !important;
+  padding: 2px 22px 2px 4px !important;
+  min-height: 21px;
+  color: #000000 !important;
+  font: 11px Tahoma, "Segoe UI", sans-serif !important;
+}
+select option {
+  background: #FFFFFF;
+  color: #000000;
+}
+input[type="checkbox"] {
+  accent-color: #0078D7;
 }
