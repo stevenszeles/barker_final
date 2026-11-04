@@ -58,8 +58,9 @@
         "internal": 197,
         "income_or_expense": 125,
         "corporate_action": 7,
-        "review": 36,
-        "journal": 15
+        "review": 34,
+        "journal": 15,
+        "external": 2
       },
       "source_sha256": "573a3b0007c5d01e4a206860d1fef2c48a71b0a437bcd751235a54080ac9c295"
     },
@@ -174,10 +175,11 @@
   "categories": {
     "trade": 5005,
     "income_or_expense": 965,
-    "review": 1772,
+    "review": 1770,
     "corporate_action": 20,
     "internal": 280,
-    "journal": 89
+    "journal": 89,
+    "external": 2
   },
   "review": [
     {
@@ -3646,18 +3648,6 @@
       "account": "Limit_Liability_Company ...145",
       "date": "2025-07-01",
       "action": "Journal",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...145",
-      "date": "2025-01-28",
-      "action": "MoneyLink Deposit",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...145",
-      "date": "2025-01-24",
-      "action": "MoneyLink Deposit",
       "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
     },
     {

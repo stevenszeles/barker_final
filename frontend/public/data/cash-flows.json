@@ -22,6 +22,20 @@
       "timing": "end_of_day_assumed",
       "counterparty_account": "...997",
       "internal": false
+    },
+    {
+      "account": "Limit_Liability_Company ...145",
+      "date": "2025-01-28",
+      "amount": 4188.03,
+      "source": "transaction_export",
+      "timing": "end_of_day_assumed"
+    },
+    {
+      "account": "Limit_Liability_Company ...145",
+      "date": "2025-01-24",
+      "amount": 150000,
+      "source": "transaction_export",
+      "timing": "end_of_day_assumed"
     }
   ]
 }

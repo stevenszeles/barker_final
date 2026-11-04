@@ -86,6 +86,8 @@ def prepare(folder, data, database, seed_paths=()):
             for key, sector in snapshot['state'].get('sectorOverrides', {}).items():
                 db.execute('INSERT OR IGNORE INTO sector_assignments VALUES (?,?,?,?)', (identity, key, sector, snapshot['as_of']))
         events = [json.loads(row[0]) for row in db.execute('SELECT payload FROM events WHERE date<=? ORDER BY date,id', (asof,))]
+        # Classification is derived from immutable source rows so rule fixes apply to retained events.
+        for event in events: event['classification'] = classify(event['raw'])[0]
         snapshots = [(row[0], row[1], json.loads(row[2])) for row in db.execute('SELECT id,asof,payload FROM snapshots WHERE asof<=? ORDER BY asof,imported_at,id', (asof,))]
         prior = next((item for item in reversed(snapshots) if item[1] < asof), None)
         reconciliation = reconcile_quantities(prior[2]['state'], current['state'], events, prior[1], asof) if prior else {

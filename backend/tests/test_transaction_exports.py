@@ -47,3 +47,18 @@ def test_identical_real_deposits_are_retained_but_overlapping_file_is_not(tmp_pa
     assert len(json.loads((data/'cash-flows.json').read_text())['flows'])==2
     tx.prepare(folder,data)
     assert len(json.loads((data/'cash-flows.json').read_text())['flows'])==2
+
+
+@pytest.mark.parametrize('action',['MoneyLink Deposit','MoneyLink Withdrawal'])
+def test_moneylink_bank_movements_are_external_flows(action):
+    assert tx.classify({'Action':action})==('external',None)
+
+
+def test_moneylink_deposit_is_included_in_the_return_adjustments(tmp_path):
+    data=tmp_path/'data';data.mkdir();folder=tmp_path/'csv';folder.mkdir()
+    (data/'workspace.json').write_text(json.dumps({'as_of':'2026-11-04','state':{'accounts':{'Company ...145':{}}}}))
+    (data/'cash-flows.json').write_text(json.dumps({'flows':[]}))
+    (folder/'Company_XXX145_Transactions_test.csv').write_text('"Date","Action","Description","Amount"\n"01/24/2025","MoneyLink Deposit","Bank transfer","$150000.00"\n')
+    tx.prepare(folder,data)
+    flows=json.loads((data/'cash-flows.json').read_text())['flows']
+    assert len(flows)==1 and flows[0]['amount']==150000 and not flows[0].get('internal')

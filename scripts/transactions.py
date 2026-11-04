@@ -27,7 +27,7 @@ def classify(row):
     if action=='journal':
         counter=re.search(r'\.{3}(\d+)',description)
         return ('journal',counter[1] if counter else None)
-    if action in {'cash deposit','deposit','withdrawal','cash withdrawal','wire received','wire sent','moneylink transfer','ach deposit','ach withdrawal'}:
+    if action in {'cash deposit','deposit','withdrawal','cash withdrawal','wire received','wire sent','moneylink transfer','moneylink deposit','moneylink withdrawal','ach deposit','ach withdrawal'}:
         return ('external',None)
     if action in {'futures mm sweep','reinvest dividend','reinvest shares'}: return ('internal',None)
     if action in {'cash dividend','non-qualified div','qualified dividend','credit interest','margin interest','cash in lieu'}: return ('income_or_expense',None)
