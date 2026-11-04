@@ -315,3 +315,13 @@ metrics remain unavailable, including undefined ratios and missing alpha.
 A content manifest checks every published data file. The browser rejects mixed or
 corrupt snapshots. Publishing rolls back local data on preparation failure and only
 reports success after the live frontend and every published file match the build.
+
+### Edit position sectors in Excel
+
+On **Positions**, select an account (or ALL), then click **Export positions to Excel**.
+The `.xlsx` includes each holding and option leg, numeric values, filters, and yellow
+**Sector Assignment** cells with dropdowns. Choose **Auto** to restore the default
+classification. Save the workbook and click **Import sector changes**. The import
+validates all rows before applying changed sectors; holdings and valuations remain intact.
+Then click **Save sector assignments**, leave the download in Downloads, and run
+**Publish Barker Dashboard** on the desktop to retain changes on the shared website.

@@ -3259,6 +3259,9 @@ export default function App() {
   const [spxLoading, setSpxLoading] = useState(false);
   const [securityHistoryLoading, setSecurityHistoryLoading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState({});
+  const [positionsExcelStatus, setPositionsExcelStatus] = useState('');
+  const [positionsExcelBusy, setPositionsExcelBusy] = useState(false);
+  const positionsExcelInput = useRef(null);
   const [expandedPositionGroups, setExpandedPositionGroups] = useState({});
   const [selectedAccount, setSelectedAccount] = useState(persisted.selectedAccount || 'ALL');
   const [showBenchmark, setShowBenchmark] = useState(persisted.showBenchmark ?? true);
@@ -5076,6 +5079,57 @@ export default function App() {
     });
   }, [markSharedWorkspaceDirty]);
 
+  const positionExcelRecord = (position) => ({
+    account: position.attributedAccount || getPositionHeldAccount(position),
+    accountLabel: getAccountDisplayName(getPositionHeldAccount(position), accountDisplayNames, { short: true }),
+    symbol: position.symbol, description: position.description || '', type: position.assetType || '',
+    sector: position.sector || UNCLASSIFIED_SECTOR,
+    assignment: getPositionOverrideValue(position, sectorOverrides) === SECTOR_OVERRIDE_AUTO ? 'Auto' : getPositionOverrideValue(position, sectorOverrides),
+    qty: position.qty, price: position.price, marketValue: position.mktVal,
+    notional: derivativeExposure(position).notional, cost: position.costBasis,
+    gain: (position.mktVal || 0) - (position.costBasis || 0), gainPct: position.gainPct,
+    overrideSymbols: getPositionOverrideCandidates(position),
+  });
+  const excelSectors = [...ALL_SECTORS.map(sector => sector.name), UNCLASSIFIED_SECTOR];
+  const exportPositionsExcel = async () => {
+    setPositionsExcelBusy(true);
+    try {
+      const { exportPositionsWorkbook } = await import('./services/positions-excel');
+      const buffer = await exportPositionsWorkbook(selectedPositions.map(positionExcelRecord), excelSectors);
+      downloadTextFile(`barker-positions-${slugifyFilename(selectedAccountLabel)}.xlsx`, buffer, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      setPositionsExcelStatus('Excel exported. Edit the yellow Sector Assignment cells, save, then import the workbook.');
+    } catch (error) { setPositionsExcelStatus(`Export failed: ${error.message}`); }
+    finally { setPositionsExcelBusy(false); }
+  };
+  const importPositionSectors = async (file) => {
+    if (!file) return;
+    setPositionsExcelBusy(true);
+    try {
+      if (!/\.xlsx$/i.test(file.name)) throw new Error('Choose the saved .xlsx workbook.');
+      const { readPositionSectorChanges } = await import('./services/positions-excel');
+      const current = allPositions.map(position => {
+        const attributedAccount = getPositionAttributedAccount(position, positionAttributionOverrides);
+        return positionExcelRecord({ ...position, attributedAccount });
+      });
+      const changes = await readPositionSectorChanges(await file.arrayBuffer(), current, excelSectors);
+      if (changes.length) {
+        markSharedWorkspaceDirty('Imported sector changes pending sync');
+        setSectorOverrides(previous => {
+          const next = { ...previous };
+          for (const change of changes) {
+            const keys = change.overrideSymbols.map(symbol => getSectorOverrideKey(change.account, symbol));
+            keys.forEach(key => delete next[key]);
+            if (change.assignment !== 'Auto') next[keys[0]] = change.assignment;
+          }
+          return next;
+        });
+        setSectorSettingsSaved(false);
+      }
+      setPositionsExcelStatus(changes.length ? `Applied ${changes.length} sector changes. Click Save sector assignments, then run the desktop publisher to update the shared dashboard.` : 'No sector changes found.');
+    } catch (error) { setPositionsExcelStatus(`Import failed: ${error.message}`); }
+    finally { setPositionsExcelBusy(false); }
+  };
+
   const updatePositionAttributionOverride = useCallback((positionInput, nextAccount) => {
     const positions = Array.isArray(positionInput) ? positionInput : [positionInput];
     markSharedWorkspaceDirty('Desk attribution pending sync');
@@ -6009,6 +6063,13 @@ export default function App() {
           <div style={{ marginBottom:'4px', color:'#000000', fontSize:'11px', fontFamily:CQG_FONT_UI }}>
             {positionGroupCount} grouped lines · {selectedPositions.length} total positions · {selectedAccountLabel}
           </div>
+          <div style={{ display:'flex', gap:'6px', flexWrap:'wrap', marginBottom:'6px' }}>
+            <button type="button" style={S.btn} disabled={positionsExcelBusy || !selectedPositions.length} onClick={exportPositionsExcel}>Export positions to Excel</button>
+            <button type="button" style={S.btn} disabled={positionsExcelBusy} onClick={() => positionsExcelInput.current?.click()}>Import sector changes</button>
+            <button type="button" style={S.btn} onClick={saveSectorAssignments}>Save sector assignments</button>
+            <input ref={positionsExcelInput} type="file" accept=".xlsx" aria-label="Import positions sector workbook" style={{ display:'none' }} onChange={event => { const file = event.target.files?.[0]; event.target.value = ''; importPositionSectors(file); }} />
+          </div>
+          <div style={{ fontSize:'11px', marginBottom:'6px' }} role="status">{positionsExcelBusy ? 'Working on Excel workbook…' : positionsExcelStatus || 'Export positions, edit the yellow sector cells in Excel, then import your changes.'}</div>
           <div className="cqg-panel" style={S.card}>
             <div style={S.tableWrapper}>
               <table className="cqg-grid" style={S.table}>
