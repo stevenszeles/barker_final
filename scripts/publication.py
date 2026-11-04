@@ -9,7 +9,7 @@ from urllib.request import Request,urlopen
 
 
 def write_manifest(data):
-    names=['workspace.json','nav-history.json','market.json','cash-flows.json','transaction-audit.json','analytics-config.json','verification.json','verification.md']
+    names=['workspace.json','nav-history.json','market.json','cash-flows.json','transaction-audit.json','analytics-config.json','verification.json','verification.md','tracking.json']
     files={name:hashlib.sha256((data/name).read_bytes()).hexdigest() for name in names}
     identity=hashlib.sha256(json.dumps(files,sort_keys=True).encode()).hexdigest()
     asof=json.loads((data/'workspace.json').read_text())['as_of']

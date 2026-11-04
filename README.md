@@ -325,3 +325,49 @@ classification. Save the workbook and click **Import sector changes**. The impor
 validates all rows before applying changed sectors; holdings and valuations remain intact.
 Then click **Save sector assignments**, leave the download in Downloads, and run
 **Publish Barker Dashboard** on the desktop to retain changes on the shared website.
+
+### Simplified tracking and daily updates
+
+The Overview prioritizes value, cash, period return, benchmark, data date and tracking
+status. Returns adjusted for known flows remain explicitly provisional while historical
+cash-flow coverage is partial. Sectors opens with actual weight, target, gap, active
+weight, unrealized P/L and verified-performance availability. Detailed settings and
+benchmark charts are expandable. The allocation chart compares **actual** against
+target weight. Targets are never denominators for measured returns.
+
+In **Data & Settings → Select brokerage files**, select the complete current CSV
+batch. Matching duplicate balances are combined and conflicting or missing balances
+are rejected. Keep the generated `barker-update.zip` in Downloads and run the desktop
+publisher. The bundle includes current sector settings, requires no manual file moves,
+and is staged before validation. Previous sources are archived only after checks/build
+pass. Missing realized exports retain the prior realized data with its source date shown.
+The old individual upload controls remain under Advanced as previews.
+
+Static hosting cannot save changes directly for every viewer. Sector assignments,
+account names and targets now persist as browser drafts and are merged with subsequent
+publications when edits do not conflict. Conflicts remain recoverable as a download.
+Browser drafts are not shared backups; use Save sector assignments or an update bundle
+to publish. Direct shared saving still requires provisioning an authenticated writable
+service and a persistent database; the static site does not pretend that a local save
+is a shared save.
+
+`scripts/tracking_ledger.py` stores immutable normalized transaction events and dated
+independent snapshots in the ignored local `.ledger/events.sqlite3`. CSV/JSON duplicates
+are normalized; repeated identical legitimate transactions retain their occurrence count.
+Events are retained through each snapshot date. Snapshot sector assignments first apply
+on that import date and prior snapshots are not rewritten. Intraday snapshots, unresolved
+corporate actions and derivatives do not establish complete daily performance. The report
+separately shows source comparisons, holdings/cash/futures arithmetic, and independent
+transaction-to-position differences. Futures cash and the aggregate futures market value
+are retained separately rather than fabricated as positions.
+
+Daily performance helpers use actual capital, cash movements, income and fees; portfolio
+contributions use opening NAV and must sum to the daily portfolio return before linking.
+They are not enabled on the historical dashboard until daily valuation, cash, settlement
+and timing coverage are verified. Sector returns with undefined capital are unavailable.
+
+Complete checksum-verified releases are retained in `.ledger/releases`. Use the desktop
+**Restore Barker Dashboard** shortcut to choose an earlier release and republish it.
+Restoration validates and builds before publication. It restores the displayed release;
+it does not erase newer brokerage source files or the audit ledger. `--prepare-only` on
+`scripts/restore_dashboard.py` verifies a restore and returns data to the current state.

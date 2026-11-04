@@ -1,0 +1,278 @@
+{
+  "as_of": "2026-11-04",
+  "status": "needs_attention",
+  "source_comparisons": "passed",
+  "holdings_checks": [
+    {
+      "account": "Limit_Liability_Company ...662",
+      "holdings_plus_cash": 20990.54,
+      "reported_total": 20990.54,
+      "futures_balances": 0.0,
+      "difference": 0.0,
+      "status": "matched",
+      "balance_value": 20989.01,
+      "balance_note": "Balance history and positions may have different valuation times."
+    },
+    {
+      "account": "Individual ...521",
+      "holdings_plus_cash": 0.1,
+      "reported_total": 0.1,
+      "futures_balances": 0.0,
+      "difference": 0.0,
+      "status": "matched",
+      "balance_value": null,
+      "balance_note": "Balance history and positions may have different valuation times."
+    },
+    {
+      "account": "Limit_Liability_Company ...588",
+      "holdings_plus_cash": 11522.47,
+      "reported_total": 11522.47,
+      "futures_balances": 0.0,
+      "difference": 0.0,
+      "status": "matched",
+      "balance_value": 11539.97,
+      "balance_note": "Balance history and positions may have different valuation times."
+    },
+    {
+      "account": "Limit_Liability_Company ...013",
+      "holdings_plus_cash": 494813.95,
+      "reported_total": 494813.95,
+      "futures_balances": 0.0,
+      "difference": 0.0,
+      "status": "matched",
+      "balance_value": 494890.47,
+      "balance_note": "Balance history and positions may have different valuation times."
+    },
+    {
+      "account": "Limit_Liability_Company ...024",
+      "holdings_plus_cash": 16269.46,
+      "reported_total": 16269.46,
+      "futures_balances": 0.0,
+      "difference": 0.0,
+      "status": "matched",
+      "balance_value": 16269.46,
+      "balance_note": "Balance history and positions may have different valuation times."
+    },
+    {
+      "account": "Limit_Liability_Company ...591",
+      "holdings_plus_cash": 13336.7,
+      "reported_total": 13336.7,
+      "futures_balances": 0.0,
+      "difference": 0.0,
+      "status": "matched",
+      "balance_value": 13336.7,
+      "balance_note": "Balance history and positions may have different valuation times."
+    },
+    {
+      "account": "Limit_Liability_Company ...093",
+      "holdings_plus_cash": 12826.37,
+      "reported_total": 12826.37,
+      "futures_balances": 0.0,
+      "difference": -0.0,
+      "status": "matched",
+      "balance_value": 12817.3,
+      "balance_note": "Balance history and positions may have different valuation times."
+    },
+    {
+      "account": "Limit_Liability_Company ...724",
+      "holdings_plus_cash": 14865.74,
+      "reported_total": 14865.74,
+      "futures_balances": 0.0,
+      "difference": 0.0,
+      "status": "matched",
+      "balance_value": 14865.44,
+      "balance_note": "Balance history and positions may have different valuation times."
+    },
+    {
+      "account": "Limit_Liability_Company ...562",
+      "holdings_plus_cash": 387154.81,
+      "reported_total": 387154.81,
+      "futures_balances": 0.0,
+      "difference": 0.0,
+      "status": "matched",
+      "balance_value": 387238.1,
+      "balance_note": "Balance history and positions may have different valuation times."
+    },
+    {
+      "account": "Limit_Liability_Company ...288",
+      "holdings_plus_cash": 20546.26,
+      "reported_total": 20546.26,
+      "futures_balances": 0.0,
+      "difference": 0.0,
+      "status": "matched",
+      "balance_value": 20559.26,
+      "balance_note": "Balance history and positions may have different valuation times."
+    },
+    {
+      "account": "Limit_Liability_Company ...775",
+      "holdings_plus_cash": 11156.64,
+      "reported_total": 11156.64,
+      "futures_balances": 0.0,
+      "difference": 0.0,
+      "status": "matched",
+      "balance_value": 11156.64,
+      "balance_note": "Balance history and positions may have different valuation times."
+    },
+    {
+      "account": "Limit_Liability_Company ...145",
+      "holdings_plus_cash": 177718.62,
+      "reported_total": 177718.61,
+      "futures_balances": 2947.75,
+      "difference": 0.01,
+      "status": "matched",
+      "balance_value": 177728.22,
+      "balance_note": "Balance history and positions may have different valuation times."
+    }
+  ],
+  "transaction_records": 8131,
+  "transaction_review_count": 1878,
+  "cash_flow_coverage": "partial",
+  "reconciliation": {
+    "from": "2026-11-02",
+    "through": "2026-11-04",
+    "quantity_differences": [
+      {
+        "account": "Limit_Liability_Company ...288",
+        "symbol": "SPXW 11/03/2026 7525.00 P",
+        "expected": 1.0,
+        "actual": 0.0,
+        "difference": -1.0
+      },
+      {
+        "account": "Limit_Liability_Company ...288",
+        "symbol": "SPXW 11/03/2026 7540.00 P",
+        "expected": -1.0,
+        "actual": 0.0,
+        "difference": 1.0
+      }
+    ],
+    "unresolved_events": [
+      {
+        "account": "Limit_Liability_Company ...288",
+        "date": "2026-11-04",
+        "action": "Expired",
+        "symbol": "SPXW 11/03/2026 7540.00 P"
+      },
+      {
+        "account": "Limit_Liability_Company ...288",
+        "date": "2026-11-04",
+        "action": "Expired",
+        "symbol": "SPXW 11/03/2026 7525.00 P"
+      }
+    ],
+    "matched_positions": 128,
+    "status": "needs_review",
+    "note": "Snapshots are intraday. Export times and trade posting cutoffs are not verified; matching quantities alone does not verify cash or performance."
+  },
+  "sector_performance_status": "unavailable",
+  "performance_reason": "Daily sector valuations, cash reconciliation, derivative settlements and transaction cutoffs are not yet verified. Target weights are never used to calculate measured returns.",
+  "realized_source_date": "20261102",
+  "history": [
+    {
+      "id": "af4392bdf245d56f4fba5213828e1377fb9aba183d638f54d4d9e82764f2f40f",
+      "as_of": "2026-11-04",
+      "accounts": 12
+    },
+    {
+      "id": "c965a2ac1b40af0dd7e13684e811f7b6324489c43b68ca813fae9d16cc66f86f",
+      "as_of": "2026-11-04",
+      "accounts": 12
+    },
+    {
+      "id": "12d7e9493b5b547868f81fdc6b5302376945688569267202fd2d9713da2e647e",
+      "as_of": "2026-11-02",
+      "accounts": 12
+    }
+  ],
+  "source_files": [
+    {
+      "name": "Limit_Liability_Company_XXX013_Transactions_20261104-095227.csv",
+      "sha256": "0af094a2e3281f980e62b6baa0934bf22594e7f632c10705e2466d013a0b6bd7"
+    },
+    {
+      "name": "Limit_Liability_Company_XXX013_Transactions_20261104-095227.json",
+      "sha256": "e5df47466a5550311690881672e2e118898964b876b377823ccdeea801ef00e4"
+    },
+    {
+      "name": "Limit_Liability_Company_XXX024_Transactions_20261104-095221.csv",
+      "sha256": "0fa319a7ea5c4cefd56b8a896e4da27f957845cc6c7676b9eb0035c310cd6a9c"
+    },
+    {
+      "name": "Limit_Liability_Company_XXX024_Transactions_20261104-095221.json",
+      "sha256": "6897aac3d2c3b20a7c70449273665d7a841b80d0b1b48fe85e4f6eddf23d5a6a"
+    },
+    {
+      "name": "Limit_Liability_Company_XXX093_Transactions_20261104-095211.csv",
+      "sha256": "bf3726436fc4afe8bff9e4348192bfcad1b1a71a1f2dacffc5d7cad67b0db865"
+    },
+    {
+      "name": "Limit_Liability_Company_XXX093_Transactions_20261104-095211.json",
+      "sha256": "14cc25db0b45b108cb0edaeae0a4256b9b1c17e4b733bf2958fbf1320a75940d"
+    },
+    {
+      "name": "Limit_Liability_Company_XXX145_Transactions_20261104-095131.csv",
+      "sha256": "573a3b0007c5d01e4a206860d1fef2c48a71b0a437bcd751235a54080ac9c295"
+    },
+    {
+      "name": "Limit_Liability_Company_XXX145_Transactions_20261104-095131.json",
+      "sha256": "f21dcd0cdc1f498ffeddb2bcec74469647f5ee354054dab86a0de757540486ab"
+    },
+    {
+      "name": "Limit_Liability_Company_XXX288_Transactions_20261104-095150.csv",
+      "sha256": "d9f54119fde6feba525f898ad822036714df17e4d0d417d306499c74103a7ab7"
+    },
+    {
+      "name": "Limit_Liability_Company_XXX288_Transactions_20261104-095150.json",
+      "sha256": "41253e9295c7360b0001d0bae3919ee13ee24cc3456859e26832cfaa08fdfb93"
+    },
+    {
+      "name": "Limit_Liability_Company_XXX562_Transactions_20261104-095202.csv",
+      "sha256": "cfbeca8859c610989b21b9fac0111087c73d449ec93f71f103c009ce4a847d90"
+    },
+    {
+      "name": "Limit_Liability_Company_XXX562_Transactions_20261104-095202.json",
+      "sha256": "e0a178ee694779d3f74321a3d978c90d1f11e94a3d66b49fd4bd1188e3909ec8"
+    },
+    {
+      "name": "Limit_Liability_Company_XXX588_Transactions_20261104-095230.csv",
+      "sha256": "d6d56f7709831914637b44b09e94f90d82e562553c22410481c2b023d6d6f0bb"
+    },
+    {
+      "name": "Limit_Liability_Company_XXX588_Transactions_20261104-095230.json",
+      "sha256": "0e1943f70522b4dc6767637c6adb4494df1e92130760e14d2204f7bef3db9929"
+    },
+    {
+      "name": "Limit_Liability_Company_XXX591_Transactions_20261104-095216.csv",
+      "sha256": "2c4af30bd97bffd1bc6a04f104da10a0d78ae87a23469f6a2da3d1ba589d298e"
+    },
+    {
+      "name": "Limit_Liability_Company_XXX591_Transactions_20261104-095216.json",
+      "sha256": "27a9c082fba053fcf53f63283b003c072d7838e9c2f88ca542bed305fa97b6d6"
+    },
+    {
+      "name": "Limit_Liability_Company_XXX662_Transactions_20261104-095237.csv",
+      "sha256": "45afc3d2a5ac6fcce752afc48a42123fe52aecb88c00585ffdec99cfe9b5f46f"
+    },
+    {
+      "name": "Limit_Liability_Company_XXX662_Transactions_20261104-095237.json",
+      "sha256": "72dfeef7275e6efaaf1bbc4dc9a9b626764eb862275fa3751753952c561ab53c"
+    },
+    {
+      "name": "Limit_Liability_Company_XXX724_Transactions_20261104-095206.csv",
+      "sha256": "1fdd1672a39784525a3fda7c960202698f1e80a0f639223fcb6050279ebff96f"
+    },
+    {
+      "name": "Limit_Liability_Company_XXX724_Transactions_20261104-095206.json",
+      "sha256": "d1cfe0c7c771441108169f79f3a2973a113f864ce2477c94f8a5de8deaf08fc6"
+    },
+    {
+      "name": "Limit_Liability_Company_XXX775_Transactions_20261104-095138.csv",
+      "sha256": "02c49c0b9f6cd604910f192270717238445049aa540129e1ee92e902011e18bc"
+    },
+    {
+      "name": "Limit_Liability_Company_XXX775_Transactions_20261104-095138.json",
+      "sha256": "77e8498614f50df816d5fd0e72e1b045e7b39d56880b0a5310344c5c8ae8eb5a"
+    }
+  ],
+  "classification_policy": "Sector assignments are retained with each imported snapshot. Earlier snapshots are not rewritten; changes first apply on the import date."
+}

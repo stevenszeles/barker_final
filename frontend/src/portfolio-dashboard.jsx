@@ -5,6 +5,7 @@ import analyticsConfig from "../public/data/analytics-config.json";
 import { loadPublishedFile } from "./services/publication";
 import { api } from "./services/api";
 import { accountSelection, dateRange, selectedDefinitions } from "./services/chart-selection";
+import { DRAFT_KEY, settingsOnly, stableSettings, rebaseSettingsDraft } from "./services/settings-draft";
 import { sectorWeights } from "./services/analytics";
 
 // ─── SEED DATA: Account ...013 balance history (May 2024 – Mar 2026) ──────────
@@ -1145,6 +1146,12 @@ function parsePositionsCSV(text) {
       const cost = parts[9] ? parseFloat(parts[9].replace(/[$,]/g, '')) : 0;
       accounts[currentAccount].total = isNaN(val) ? 0 : val;
       accounts[currentAccount].cost = isNaN(cost) ? 0 : cost;
+      continue;
+    }
+    if (parts[0] === 'Futures Cash' || parts[0] === 'Futures Positions Market Value') {
+      const value = Number(parts[6]?.replace(/[$,]/g, ''));
+      if (!Number.isFinite(value)) throw new Error('Invalid reported futures balance');
+      accounts[currentAccount][parts[0] === 'Futures Cash' ? 'futuresCash' : 'futuresMarketValue'] = value;
       continue;
     }
     if (parts[0].startsWith('Cash')) {
@@ -3246,6 +3253,15 @@ export default function App() {
 
   const [tab, setTab] = useState('overview');
   const [sectorSettingsSaved, setSectorSettingsSaved] = useState(false);
+  const [tracking, setTracking] = useState(null);
+  const [trackingError, setTrackingError] = useState('');
+  const [draftReady, setDraftReady] = useState(false);
+  const [draftStatus, setDraftStatus] = useState('');
+  const [draftConflict, setDraftConflict] = useState(null);
+  const draftBase = useRef(null);
+  const updateBundleInput = useRef(null);
+  const [bundleStatus, setBundleStatus] = useState('');
+  const [bundleBusy, setBundleBusy] = useState(false);
   const [timeframe, setTimeframe] = useState(persisted.timeframe || '1Y');
   const [sectorTimeframe, setSectorTimeframe] = useState(persisted.sectorTimeframe || '1Y');
   const [realizedTimeframe, setRealizedTimeframe] = useState(persisted.realizedTimeframe || 'YTD');
@@ -3347,6 +3363,60 @@ export default function App() {
       futuresPnlSnapshots,
     });
   }, [accountDisplayNames, accounts, balanceHistory, futuresPnlSnapshots, positionAttributionOverrides, positionTransferEffectiveDates, realizedTradeAttributionOverrides, realizedTrades, sectorOverrides, sectorTargetsByAccount]);
+
+  useEffect(() => {
+    if (import.meta.env.VITE_STATIC_MODE !== '1') { setTrackingError('No verified tracking report is available for this workspace.'); return; }
+    let cancelled = false;
+    loadPublishedFile('tracking.json').then(value => { if (!cancelled) setTracking(value); })
+      .catch(error => { if (!cancelled) setTrackingError(error.message); });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (!sharedStateReady || draftReady || import.meta.env.VITE_STATIC_MODE !== '1') return;
+    const published = settingsOnly(sharedStateSnapshotRef.current);
+    draftBase.current = published;
+    const saved = loadJSONStorage(DRAFT_KEY, null);
+    if (saved?.base && saved?.settings) {
+      const restored = rebaseSettingsDraft(saved, published);
+      if (restored.conflicts.length) {
+        setDraftConflict(saved);
+        setDraftStatus('A saved draft conflicts with newer published settings. Download it for review or discard it below.');
+      } else {
+        setSectorOverrides(restored.settings.sectorOverrides);
+        setSectorTargetsByAccount(restored.settings.sectorTargetsByAccount);
+        setAccountDisplayNames(restored.settings.accountDisplayNames);
+      }
+    }
+    setDraftReady(true);
+  }, [sharedStateReady, draftReady]);
+
+  useEffect(() => {
+    if (!draftReady || draftConflict || import.meta.env.VITE_STATIC_MODE !== '1') return;
+    const settings = {sectorOverrides, sectorTargetsByAccount, accountDisplayNames};
+    try {
+      if (stableSettings(settings) === stableSettings(draftBase.current)) {
+        window.localStorage.removeItem(DRAFT_KEY);
+        setDraftStatus('');
+      } else {
+        window.localStorage.setItem(DRAFT_KEY, JSON.stringify({base:draftBase.current,settings,savedAt:new Date().toISOString()}));
+        setDraftStatus('Changes saved on this browser. Publish them to update everyone.');
+        setSectorSettingsSaved(false);
+      }
+    } catch { setDraftStatus('Browser storage is unavailable. Download your settings before leaving.'); }
+  }, [draftReady, draftConflict, sectorOverrides, sectorTargetsByAccount, accountDisplayNames]);
+
+  const prepareDailyUpdate = async (files) => {
+    if (!files?.length) return;
+    setBundleBusy(true);
+    try {
+      const { prepareUpdateBundle } = await import('./services/update-bundle');
+      const result = await prepareUpdateBundle(files, {sectorOverrides,sectorTargetsByAccount,accountDisplayNames}, {positions:parsePositionsCSV,balances:parseBalancesCSV,realized:parseRealizedCSV});
+      downloadTextFile('barker-update.zip', result.bytes, 'application/zip');
+      setBundleStatus(`Update bundle ready for ${result.asOf}. ${result.summary} Leave it in Downloads, then run Publish Barker Dashboard. The publisher reconciles the files before publishing.`);
+    } catch(error) { setBundleStatus(`Update not prepared: ${error.message}`); }
+    finally { setBundleBusy(false); }
+  };
 
   // Load SPX and sector ETF benchmarks using the proxied Stooq daily history feed.
   const loadBenchmarks = useCallback(async ({ forceRefresh = false, spxOnly = false } = {}) => {
@@ -4646,50 +4716,11 @@ export default function App() {
       const realizedCostBase = sectorTrades.reduce((sum, trade) => sum + Math.abs(trade.cost || 0), 0);
       const closedDollarReturn = sectorTrades.reduce((sum, trade) => sum + (trade.gain || 0), 0);
 
-      let openDollarReturn = 0;
-      let openInitialAllocation = 0;
-      let coveredOpenValue = 0;
-      let coveredOpenPositions = 0;
-
-      for (const position of sectors[name].positions) {
-        if (isOptionPosition(position) || isFuturePosition(position)) continue;
-        const history = getPositionHistorySeries(position);
-        const startPoint = getFirstValueOnOrAfter(history, windowStartDate);
-        const endPoint = getLastValueOnOrBefore(history, windowEndDate);
-        if (!startPoint || !endPoint) continue;
-        openDollarReturn += (position.qty || 0) * (endPoint[1] - startPoint[1]);
-        openInitialAllocation += Math.abs((position.qty || 0) * startPoint[1]);
-        coveredOpenValue += Math.abs(position.mktVal || 0);
-        coveredOpenPositions += 1;
-      }
-
-      const totalDollarReturn = openDollarReturn + closedDollarReturn;
-      const reconstructedInitialAllocationBase = openInitialAllocation + realizedCostBase;
-      const sectorReturnBase = targetDollarBase > 0
-        ? targetDollarBase
-        : reconstructedInitialAllocationBase > 0
-          ? reconstructedInitialAllocationBase
-          : actualDollarBase > 0
-            ? actualDollarBase
-            : value;
-      const portfolioRelativeReturn = reconstructedInitialAllocationBase > 0
-        ? (totalDollarReturn / reconstructedInitialAllocationBase) * 100
-        : sectorReturnBase > 0
-          ? (totalDollarReturn / sectorReturnBase) * 100
-          : null;
-      const targetRelativeReturn = sectorReturnBase > 0 ? (totalDollarReturn / sectorReturnBase) * 100 : null;
-      const benchmarkRelativeReturn = benchmarkDollarBase > 0 ? (totalDollarReturn / benchmarkDollarBase) * 100 : null;
-      const alphaReturn = benchmarkRelativeReturn !== null && totalReturn !== null ? benchmarkRelativeReturn - totalReturn : null;
-      const sleeveAlphaReturn = targetRelativeReturn !== null && totalReturn !== null ? targetRelativeReturn - totalReturn : null;
+      // Current holdings cannot reconstruct a historical sleeve. Only a reconciled ledger may enable returns.
+      const sectorReturnBase = null;
+      const sectorReturnBaseLabel = 'Verified historical capital required';
+      const reconstructedInitialAllocationBase = null;
       const benchmarkReturnDollar = totalReturn !== null && benchmarkDollarBase > 0 ? benchmarkDollarBase * (totalReturn / 100) : null;
-      const portfolioContribution = sectorStartAccountValue > 0 ? (totalDollarReturn / sectorStartAccountValue) * 100 : null;
-      const sectorReturnBaseLabel = targetDollarBase > 0
-        ? 'Target allocation'
-        : reconstructedInitialAllocationBase > 0
-          ? 'Initial sleeve allocation'
-          : actualDollarBase > 0
-            ? 'Live actual allocation'
-            : 'Current sector value';
       return {
         name,
         etf: benchmarkSymbol,
@@ -4736,10 +4767,10 @@ export default function App() {
         weightedBenchmarkReturn: totalReturn === null ? null : (benchmarkWeight * totalReturn) / 100,
         weightedTargetReturn: totalReturn === null ? null : (targetWeight * totalReturn) / 100,
         weightedActualReturn: null,
-        weightedActiveReturn: totalReturn === null ? null : (activeWeight * totalReturn) / 100,
-        coverageWeight: value > 0 ? (coveredOpenValue / value) * 100 : 0,
-        coveredOpenValue,
-        coveredOpenPositions,
+        weightedActiveReturn: null,
+        coverageWeight: null,
+        coveredOpenValue: null,
+        coveredOpenPositions: null,
         totalOpenPositions: sectors[name].positions.length,
         windowStartDate,
         windowEndDate,
@@ -4763,6 +4794,7 @@ export default function App() {
   ]);
 
   const benchmarkSectorReturn = useMemo(() => {
+    if (sectorBreakdown.some(sector => sector.benchmarkWeight !== 0 && !Number.isFinite(sector.benchmarkReturn))) return null;
     const totalBenchmarkBase = sectorBreakdown.reduce((sum, sector) => sum + (sector.benchmarkDollarBase || 0), 0);
     const totalBenchmarkDollarReturn = sectorBreakdown.reduce((sum, sector) => sum + (sector.benchmarkReturnDollar || 0), 0);
     return totalBenchmarkBase > 0 ? (totalBenchmarkDollarReturn / totalBenchmarkBase) * 100 : null;
@@ -4799,7 +4831,7 @@ export default function App() {
     const benchmark = sectorAttribution.reduce((sum, s) => sum + s.benchmarkWeight, 0);
     const target = sectorAttribution.reduce((sum, s) => sum + s.targetWeight, 0);
     const actual = sectorAttribution.reduce((sum, s) => sum + s.actualWeight, 0);
-    const classified = sectorAttribution.reduce((sum, s) => sum + s.value, 0);
+    const classified = sectorAttribution.reduce((sum, s) => sum + (s.actualWeight / 100 * currentAccountValue), 0);
     return {
       benchmark,
       target,
@@ -5651,6 +5683,19 @@ export default function App() {
           ))}
         </div>
 
+        <div style={{padding:'6px',display:'flex',gap:'10px',alignItems:'center',flexWrap:'wrap',fontSize:'11px',borderBottom:'1px solid #999'}}>
+          <button type="button" style={S.btn} onClick={() => setTab('upload')}>{trackingError ? 'Tracking checks unavailable' : tracking ? 'Needs attention' : 'Loading tracking checks…'}</button>
+          <span>{tracking ? `Source snapshot checked through ${tracking.as_of}. Cash-flow coverage: ${tracking.cash_flow_coverage}. Historical sector performance unverified.` : trackingError}</span>
+        </div>
+        {draftStatus && <div role="status" style={{padding:'8px',background:'#fff2cc',fontSize:'12px'}}>
+          {draftStatus}
+          <button type="button" style={{...S.btn,marginLeft:'8px'}} onClick={saveSectorAssignments}>Save sector assignments</button>
+          {draftConflict && <>
+            <button type="button" style={S.btn} onClick={() => downloadTextFile('publication-settings-recovered.json',JSON.stringify({format:'barker-sector-settings-v1',...draftConflict.settings},null,2),'application/json')}>Download older draft</button>
+            <button type="button" style={S.btn} onClick={() => { clearJSONStorage(DRAFT_KEY);setDraftConflict(null);setDraftStatus(''); }}>Discard older draft</button>
+          </>}
+        </div>}
+
         {/* ── ACCOUNT SELECTOR ── */}
         {tab !== 'upload' && tab !== 'performance' && (
           <div style={S.selectorBar}>
@@ -5677,12 +5722,12 @@ export default function App() {
           {allTimeStats && (
             <div style={{ ...S.grid(6), marginBottom:'4px' }}>
               {[
-                { label:'Portfolio NAV', val: fmt$(allTimeStats.currentNav), sub: 'Current Value' },
-                { label:'Total Return', val: fmtPct(allTimeStats.total), sub: 'Since Inception', color: allTimeStats.total >= 0 ? PALETTE.positive : PALETTE.negative },
-                { label:'YTD Return', val: fmtPct(allTimeStats.ytd), sub: latestBalanceSnapshotDate?.slice(0,4) || '--', color: allTimeStats.ytd >= 0 ? PALETTE.positive : PALETTE.negative },
-                { label:'Max Drawdown', val: fmtPct(allTimeStats.maxDrawdown == null ? null : -allTimeStats.maxDrawdown), sub: 'Peak to Trough', color:PALETTE.warning },
-                { label:'Volatility', val: `${fmtNum(allTimeStats.volatility)}%`, sub: 'Annualized' },
-                { label:'Sharpe Ratio', val: fmtNum(allTimeStats.sharpe), sub: 'Assumed risk-free rate', color: allTimeStats.sharpe >= 1 ? PALETTE.positive : allTimeStats.sharpe >= 0 ? PALETTE.warning : PALETTE.negative },
+                { label:'Portfolio Value', val:fmt$(currentAccountValue), sub:'Latest positions snapshot' },
+                { label:'Cash', val:fmt$(selectedAccountsData.reduce((sum,account) => sum + (Number(account.cash) || 0) + (Number(account.futuresCash) || 0),0)), sub:'Included in portfolio value' },
+                { label:`${timeframe} Return`, val:fmtPct(computePeriodReturn(filterChartSeries(legalActivePerformanceModel?.twrSeries || [], timeframe, comparisonEndDate))), sub:'Known cash flows adjusted; coverage partial' },
+                { label:`${timeframe} Benchmark`, val:fmtPct(computePeriodReturn(filteredSPX)), sub:'SPY total-return proxy' },
+                { label:'Data Through', val:sharedStateUpdatedAt?.slice(0,10) || '--', sub:'Snapshot, not live prices' },
+                { label:'Tracking', val:'Needs attention', sub:'Cash-flow coverage and sector history incomplete', color:PALETTE.warning },
               ].map(({ label, val, sub, color }) => (
                 <div key={label} className="cqg-tile" style={signalPanelStyle(color || '#666666')}>
                   <div className="cqg-title" style={S.cardTitle}>{label}</div>
@@ -5760,10 +5805,11 @@ export default function App() {
           {/* All accounts table */}
           <div className="cqg-panel" style={S.card}>
             <div className="cqg-title" style={S.cardTitle}>ALL ACCOUNTS — SNAPSHOT</div>
+            <p style={{fontSize:'11px'}}>Return figures adjust only known cash flows. Historical deposits and withdrawals are incomplete; these are provisional estimates, not verified investment performance.</p>
             <div style={S.tableWrapper}>
               <table className="cqg-grid" style={S.table}>
                 <thead>
-                  <tr>{['Account','Display Name','NAV','Day Chg','Total Return','Positions','Cost Basis','Unrealized G/L'].map(h => <th key={h} style={S.th}>{h}</th>)}</tr>
+                  <tr>{['Account','Display Name','NAV','Day Chg*','Return Since Start*','Positions','Cost Basis','Unrealized G/L'].map(h => <th key={h} style={S.th}>{h}</th>)}</tr>
                 </thead>
                 <tbody>
                   {accountSummary.map((acc, i) => {
@@ -6241,9 +6287,9 @@ export default function App() {
           <div className="cqg-panel" style={{ ...S.card, marginBottom:'4px' }}>
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:'12px', flexWrap:'wrap' }}>
               <div>
-                <div className="cqg-title" style={S.cardTitle}>SECTOR MODEL — BENCHMARK SECTORS PLUS MANUAL DESK BUCKETS</div>
+                <div className="cqg-title" style={S.cardTitle}>SECTORS — ALLOCATION AND PERFORMANCE</div>
                 <div style={{ color:'#666', fontSize:'11px', lineHeight:'1.5' }}>
-                  Sector weights and realized P/L are measured from the exports. Historical sector returns and alpha remain unavailable without a full holdings ledger. Manual buckets have no automatic substitute benchmark.
+                  Actual weights describe today’s holdings. Targets guide allocation decisions and never determine measured returns. Historical sector contribution stays unavailable until the ledger reconciles. Manual buckets have no automatic benchmark.
                   Sector targets are account-specific; select an individual account to edit benchmark and target weights.
                 </div>
               </div>
@@ -6261,8 +6307,8 @@ export default function App() {
             {[
               ['Benchmark Wt', fmtPct(sectorTotals.benchmark), '#003399', 'Editable baseline'],
               ['Target Wt', fmtPct(sectorTotals.target), Math.abs(sectorTotals.target - 100) < 0.25 ? '#0066CC' : '#CC6600', editableSectorScope ? `Configured weights for ${getAccountDisplayName(selectedAccount, accountDisplayNames, { short: true })}` : 'Weighted aggregate of account-specific targets'],
-              ['Active Sector Wt', fmtPct(sectorTotals.actual), '#0066CC', 'Current classified exposure'],
-              ['Benchmark Return', fmtPct(sectorTotals.benchmarkReturn), sectorTotals.benchmarkReturn >= 0 ? '#008000' : '#E60000', `Sector benchmark aggregate for ${sectorTimeframe}`],
+              ['Actual Sector Weight', fmtPct(sectorTotals.actual), '#0066CC', 'Current classified exposure'],
+              ['Benchmark Proxy Mix', fmtPct(sectorTotals.benchmarkReturn), sectorTotals.benchmarkReturn >= 0 ? '#008000' : '#E60000', `Fixed reference weights · ${sectorTimeframe} · ETF reference series`],
             ].map(([label, value, color, sub]) => (
               <div key={label} className="cqg-tile" style={signalPanelStyle(color || '#666666')}>
                 <div className="cqg-title" style={S.cardTitle}>{label}</div>
@@ -6272,13 +6318,26 @@ export default function App() {
             ))}
           </div>
 
+          <div className="cqg-panel" style={S.card}>
+            <div className="cqg-title" style={S.cardTitle}>SECTOR SUMMARY</div>
+            <div style={{fontSize:'11px',marginBottom:'8px'}}>Open P/L is unrealized since purchase, not a return for the selected period. Active weight is actual minus benchmark, in percentage points.</div>
+            <div style={S.tableWrapper}><table className="cqg-grid" style={S.table}>
+              <thead><tr>{['Sector','Actual Wt','Target Wt','Gap to Target (pp)','Active vs Benchmark (pp)','Open P/L','Period Contribution','Sector Return','Benchmark Return'].map(title => <th key={title} style={S.th}>{title}</th>)}</tr></thead>
+              <tbody>{sectorAttribution.filter(sector => sector.positions.length || sector.targetWeight || sector.benchmarkWeight).map(sector => <tr key={sector.name} onClick={() => setSelectedSector(sector.name)} style={{cursor:'pointer'}}>
+                <td style={S.td}>{sector.name}</td><td style={S.td}>{fmtPct(sector.actualWeight)}</td><td style={S.td}>{fmtPct(sector.targetWeight)}</td><td style={S.td}>{fmtNum(sector.sleeveGap)}</td><td style={S.td}>{fmtNum(sector.activeWeight)}</td><td style={S.td}>{fmt$(sector.unrealizedGain)}</td><td style={S.td}>Unverified</td><td style={S.td}>Unverified</td><td style={S.td}>{fmtPct(sector.benchmarkReturn)}</td>
+              </tr>)}
+              <tr><td style={S.td}>Cash and unclassified residual</td><td style={S.td}>{fmtPct(sectorTotals.excludedWeight)}</td><td colSpan={7} style={S.td}>Retained in portfolio NAV; not redistributed among sectors.</td></tr>
+              </tbody></table></div>
+          </div>
+          <details className="cqg-panel" style={S.card}>
+            <summary style={{cursor:'pointer',fontWeight:700}}>Benchmark charts and sector drilldown</summary>
           <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(360px, 1fr))', gap:'4px', marginBottom:'4px' }}>
             <div className="cqg-panel" style={S.card}>
               <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:'12px', marginBottom:'8px' }}>
-                <div className="cqg-title" style={S.cardTitle}>SECTOR WEIGHTS — ACTIVE vs TARGET</div>
+                <div className="cqg-title" style={S.cardTitle}>SECTOR WEIGHTS — ACTUAL vs TARGET</div>
                 <button
                   type="button"
-                  onClick={() => exportCurrentVisual('Sector Weights Active vs Target', sectorChartBars)}
+                  onClick={() => exportCurrentVisual('Sector Weights Actual vs Target', sectorChartBars)}
                   disabled={!sectorChartBars.length}
                   style={{ ...S.btn, padding:'4px 10px', fontSize:'10px', opacity: sectorChartBars.length ? 1 : 0.45 }}
                 >
@@ -6291,7 +6350,7 @@ export default function App() {
                   <XAxis type="number" tick={CHART_TICK_STYLE} tickFormatter={v => `${v.toFixed(1)}%`} tickMargin={8} />
                   <YAxis type="category" dataKey="name" tick={CHART_TICK_STYLE} width={sectorAxisWidth} tickMargin={8} />
                   <Tooltip content={<CustomTooltip mode="pct" />} />
-                  <Bar dataKey="activeWeight" name="Active Weight" fill="#0066CC" radius={[0,1,1,0]} />
+                  <Bar dataKey="actualWeight" name="Actual Weight" fill="#0066CC" radius={[0,1,1,0]} />
                   <Bar dataKey="targetWeight" name="Target Weight" fill="#003399" radius={[0,1,1,0]} />
                 </BarChart>
               </ResponsiveContainer>
@@ -6300,7 +6359,7 @@ export default function App() {
             <div className="cqg-panel" style={S.card}>
               <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'10px', gap:'12px', flexWrap:'wrap' }}>
                 <div>
-                  <div className="cqg-title" style={S.cardTitle}>SECTOR SLEEVE RETURN vs BENCHMARK — {selectedSector}</div>
+                  <div className="cqg-title" style={S.cardTitle}>SECTOR BENCHMARK HISTORY — {selectedSector}</div>
                   {sectorDetail && (
                     <div style={{ fontSize:'11px', color:'#666' }}>
                       {sectorDetail.benchmarkSymbol} · Sector Return {fmtPct(sectorDetail.sectorReturn)} · Benchmark {fmtPct(sectorDetail.benchmarkReturn)} · Active {fmtPct(sectorDetail.activeWeight)} · Vs Bench {fmtPct(sectorDetail.relativeWeight)}
@@ -6372,34 +6431,10 @@ export default function App() {
 
           <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(320px, 1fr))', gap:'4px', marginBottom:'4px' }}>
             <div className="cqg-panel" style={S.card}>
-              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:'12px', marginBottom:'8px' }}>
-                <div className="cqg-title" style={S.cardTitle}>SECTOR DECISION ALPHA — SLEEVE vs BENCHMARK</div>
-                <button
-                  type="button"
-                  onClick={() => exportCurrentVisual('Sector Decision Alpha', sectorChartBars)}
-                  disabled={!sectorChartBars.length}
-                  style={{ ...S.btn, padding:'4px 10px', fontSize:'10px', opacity: sectorChartBars.length ? 1 : 0.45 }}
-                >
-                  Export
-                </button>
-              </div>
-              <ResponsiveContainer width="100%" height={sectorChartHeight}>
-                <BarChart data={sectorChartBars} layout="vertical" margin={{ top:10, right:26, bottom:8, left:8 }}>
-                  <CartesianGrid strokeDasharray="2 5" stroke="#A0A0A4" horizontal={false} />
-                  <XAxis type="number" tick={CHART_TICK_STYLE} tickFormatter={v => `${v>=0?'+':''}${v.toFixed(1)}%`} tickMargin={8} />
-                  <YAxis type="category" dataKey="name" tick={CHART_TICK_STYLE} width={sectorAxisWidth} tickMargin={8} />
-                  <Tooltip content={<CustomTooltip mode="pct" />} />
-                  <ReferenceLine x={0} stroke="#333" />
-                  <Bar dataKey="actualAllocationAlphaDisplay" name="Decision Alpha" radius={[0,1,1,0]}>
-                    {sectorChartBars.map((s, i) => (
-                      <Cell
-                        key={i}
-                        fill={!Number.isFinite(s.actualAllocationAlpha) ? '#555' : s.actualAllocationAlpha >= 0 ? '#008000' : '#E60000'}
-                      />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
+              <div className="cqg-title" style={S.cardTitle}>HISTORICAL PERFORMANCE — VERIFICATION REQUIRED</div>
+              <p style={{fontSize:'12px',lineHeight:1.6}}>Sector P/L and contribution will come from dated holdings, trades, dividends, fees and transfers. Current targets do not change past performance.</p>
+              <p style={{fontSize:'12px',lineHeight:1.6}}>{tracking?.performance_reason || 'A verified daily holdings and cash ledger is required before historical sector returns can be shown.'}</p>
+              <button type="button" style={S.btn} onClick={() => setTab('upload')}>Review tracking checks</button>
             </div>
 
             <div className="cqg-panel" style={S.card}>
@@ -6407,7 +6442,7 @@ export default function App() {
               {sectorDetail ? (
                 <div style={{ ...S.grid(2), gap:'10px' }}>
                   <div style={{ background:'#F4F4F4', border:'1px solid #B8B8B8', borderRadius:'0', padding:'4px 6px' }}>
-                    <div style={{ color:'#555', fontSize:'10px', marginBottom:'6px' }}>TARGET SPLIT</div>
+                    <div style={{ color:'#555', fontSize:'10px', marginBottom:'6px' }}>TARGET ALLOCATION</div>
                     <div style={{ color:'#003399', fontSize:'18px', fontWeight:700 }}>{fmtPct(sectorDetail.targetWeight)}</div>
                     <div style={{ color:'#555555', fontSize:'11px', marginTop:'4px' }}>ETF {fmtPct(sectorDetail.targetEtfWeight)} · Alpha {fmtPct(sectorDetail.targetAlphaWeight)}</div>
                     {editableSectorScope && (
@@ -6443,7 +6478,7 @@ export default function App() {
                     <div style={{ color:'#555555', fontSize:'11px', marginTop:'4px' }}>ETF {fmtPct(sectorDetail.actualEtfWeight)} · Alpha {fmtPct(sectorDetail.actualAlphaWeight)}</div>
                   </div>
                   <div style={{ background:'#F4F4F4', border:'1px solid #B8B8B8', borderRadius:'0', padding:'4px 6px' }}>
-                    <div style={{ color:'#555', fontSize:'10px', marginBottom:'6px' }}>LIVE ACTIVE WT</div>
+                    <div style={{ color:'#555', fontSize:'10px', marginBottom:'6px' }}>ACTIVE vs BENCHMARK (pp)</div>
                     <div style={{ color:'#0066CC', fontSize:'18px', fontWeight:700 }}>{fmtPct(sectorDetail.activeWeight)}</div>
                     <div style={{ color:'#555555', fontSize:'11px', marginTop:'4px' }}>Historical sleeve TWR and alpha are unavailable; current sector weights and realized P/L remain available. Active = NAV weight minus benchmark weight · Invested weight excludes cash; shorts retain their sign · Vs benchmark {fmtPct(sectorDetail.relativeWeight)}</div>
                   </div>
@@ -6459,6 +6494,9 @@ export default function App() {
             </div>
           </div>
 
+          </details>
+          <details className="cqg-panel" style={S.card}>
+            <summary style={{cursor:'pointer',fontWeight:700}}>Advanced allocation settings and benchmark detail</summary>
           <div className="cqg-panel" style={S.card}>
             <div className="cqg-title" style={S.cardTitle}>SECTOR DETAIL — CLICK A ROW TO DRILL INTO ITS RETURN SERIES</div>
             {!editableSectorScope && (
@@ -6542,6 +6580,7 @@ export default function App() {
               </table>
             </div>
           </div>
+          </details>
         </div>
       )}
 
@@ -6879,10 +6918,35 @@ export default function App() {
       {/* ══════ UPLOAD TAB ══════ */}
       {tab === 'upload' && (
         <div style={S.section}>
+          <div className="cqg-panel" style={{...S.card,marginBottom:'6px'}}>
+            <div className="cqg-title" style={S.cardTitle}>UPDATE PORTFOLIO — ONE BATCH</div>
+            <p style={{fontSize:'12px'}}>Select the positions file, all account balance histories, transaction CSVs, and a realized gain/loss export if available. Duplicate identical balance files are combined; conflicting files stop the update.</p>
+            <button type="button" style={S.btn} disabled={bundleBusy} onClick={() => updateBundleInput.current?.click()}>{bundleBusy ? 'Checking files…' : 'Select brokerage files'}</button>
+            <input ref={updateBundleInput} type="file" multiple accept=".csv,.CSV" aria-label="Daily brokerage update files" style={{display:'none'}} onChange={event => { const files=Array.from(event.target.files || []);event.target.value='';prepareDailyUpdate(files); }} />
+            <p style={{fontSize:'12px'}} role="status">{bundleStatus || 'A single update bundle downloads with your sector settings. Leave it in Downloads, then run Publish Barker Dashboard. Shared saving still uses the desktop publisher.'}</p>
+          </div>
+          <div className="cqg-panel" style={{...S.card,marginBottom:'6px'}}>
+            <div className="cqg-title" style={S.cardTitle}>TRACKING AND RECONCILIATION</div>
+            {tracking ? <>
+              <p style={{fontSize:'12px'}}>Source comparisons passed through {tracking.as_of}. {tracking.transaction_records.toLocaleString()} unique transaction records retained. {tracking.transaction_review_count.toLocaleString()} transaction items need review. These do not establish complete historical performance.</p>
+              <p style={{fontSize:'12px'}}>Transaction-to-position check: {tracking.reconciliation.status.replaceAll('_',' ')}. {tracking.reconciliation.note}</p>
+              <div style={S.tableWrapper}><table style={S.table}><thead><tr>{['Account','Holdings + Cash + Futures','Reported Total','Difference','Check'].map(title => <th style={S.th} key={title}>{title}</th>)}</tr></thead>
+              <tbody>{tracking.holdings_checks.map(row => <tr key={row.account}><td style={S.td}>{getAccountDisplayName(row.account,accountDisplayNames,{short:true})}</td><td style={S.td}>{row.holdings_plus_cash.toLocaleString('en-US',{style:'currency',currency:'USD'})}</td><td style={S.td}>{Number(row.reported_total).toLocaleString('en-US',{style:'currency',currency:'USD'})}</td><td style={S.td}>{row.difference.toLocaleString('en-US',{style:'currency',currency:'USD'})}</td><td style={S.td}>{row.status.replaceAll('_',' ')}</td></tr>)}</tbody></table></div>
+              <details style={{marginTop:'10px'}}><summary>Unexplained quantity changes ({tracking.reconciliation.quantity_differences.length})</summary>
+                <div style={S.tableWrapper}><table style={S.table}><thead><tr>{['Account','Symbol','Expected Qty','Actual Qty','Difference'].map(title => <th key={title} style={S.th}>{title}</th>)}</tr></thead><tbody>{tracking.reconciliation.quantity_differences.map((row,i) => <tr key={i}><td style={S.td}>{getAccountDisplayName(row.account,accountDisplayNames,{short:true})}</td><td style={S.td}>{row.symbol}</td><td style={S.td}>{row.expected}</td><td style={S.td}>{row.actual}</td><td style={S.td}>{row.difference}</td></tr>)}</tbody></table></div>
+                <p style={{fontSize:'11px'}}>Intraday cutoffs, journaled shares and corporate actions need review before these differences can be resolved.</p>
+              </details>
+              <button type="button" style={{...S.btn,marginTop:'8px'}} onClick={() => downloadTextFile('barker-tracking-report.json',JSON.stringify(tracking,null,2),'application/json')}>Download tracking report</button>
+              <p style={{fontSize:'11px'}}>Realized gain/loss export: {tracking.realized_source_date ? `${tracking.realized_source_date.slice(0,4)}-${tracking.realized_source_date.slice(4,6)}-${tracking.realized_source_date.slice(6,8)}` : 'Not recorded'}. {tracking.classification_policy}</p>
+              <details><summary>Import history ({tracking.history.length} snapshots)</summary><ul>{tracking.history.map(row => <li key={row.id}>{row.as_of} · {row.accounts} accounts · {row.id.slice(0,12)}</li>)}</ul><p style={{fontSize:'11px'}}>Independent snapshots and transaction events are retained on the publishing computer. Complete release backups are available there for restoration.</p></details>
+            </> : <p>{trackingError || 'Loading verified tracking report…'}</p>}
+          </div>
+          <details style={{marginBottom:'8px'}}><summary style={{cursor:'pointer'}}>Advanced: individual file previews and settings</summary>
+
           <div style={{ display:'flex', justifyContent:'space-between', gap:'4px', alignItems:'flex-start', marginBottom:'4px', flexWrap:'wrap' }}>
             <div style={{ color:'#000000', fontSize:'11px', lineHeight:'1.5', maxWidth:'780px', background:'#EBEB7E', border:'1px solid #000000', padding:'3px 6px', fontFamily:CQG_FONT_UI }}>
               {import.meta.env.VITE_STATIC_MODE === '1'
-                ? 'Published snapshot. Uploads and edits here are temporary previews; they do not update the shared website. To update everyone’s portfolio, place the CSVs in Desktop → Dashboard CSV and run Publish Barker Dashboard. For sector changes, click Save sector assignments, keep the download in Downloads, then run Publish Barker Dashboard. Export any analysis you want to keep before reloading.'
+                ? 'Published snapshot. Sector settings are saved as a draft on this browser; individual file uploads below are previews. Shared updates require publication. To update everyone’s portfolio, place the CSVs in Desktop → Dashboard CSV and run Publish Barker Dashboard. For sector changes, click Save sector assignments, keep the download in Downloads, then run Publish Barker Dashboard. Export any analysis you want to keep before reloading.'
                 : 'Upload Schwab export files to update the shared portfolio workspace. Uploaded balances, positions, realized P&L, and sector configuration are saved to the backend so every viewer sees the same portfolio after one daily refresh. Files can be re-uploaded at any time to refresh the shared state.'}
               <div style={{ color: sharedSyncTone, marginTop:'6px', fontWeight:600 }}>
                 {import.meta.env.VITE_STATIC_MODE === "1" ? "Portfolio updated as of: " : "Workspace sync: "}{import.meta.env.VITE_STATIC_MODE === "1" ? sharedStateUpdatedAt?.slice(0, 10) : sharedSyncStatus}{import.meta.env.VITE_STATIC_MODE !== "1" && sharedStateUpdatedAt ? ` · ${new Date(sharedStateUpdatedAt).toLocaleString()}` : ''}
@@ -7008,6 +7072,7 @@ export default function App() {
               <button style={S.btn} onClick={() => loadBenchmarks({ forceRefresh: true })}>{spxLoading ? 'Loading…' : 'Refresh Benchmarks'}</button>
             </div>
           </div>
+          </details>
         </div>
       )}
       </div>

@@ -101,3 +101,5 @@ Thumbs.db
 !frontend/src/lib/**
 
 .venv-publish/
+
+.ledger/

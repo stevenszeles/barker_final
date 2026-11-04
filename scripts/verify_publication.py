@@ -30,11 +30,13 @@ def verify(folder, data):
                 if not row: continue
                 found=account(row[0])
                 if found:
-                    current=found;expected[current]={'positions':[],'cash':0,'total':0,'cost':0};headers=None;continue
+                    current=found;expected[current]={'positions':[],'cash':0,'total':0,'cost':0,'futuresCash':0,'futuresMarketValue':0};headers=None;continue
                 if row[0]=='Symbol': headers=row;continue
                 if not current or not headers: continue
                 record=dict(zip(headers,row))
-                if row[0].startswith('Cash'):
+                if row[0] in ('Futures Cash','Futures Positions Market Value'):
+                    expected[current]['futuresCash' if row[0]=='Futures Cash' else 'futuresMarketValue']=float(money(record.get('Mkt Val (Market Value)')))
+                elif row[0].startswith('Cash'):
                     expected[current]['cash']=float(money(record.get('Mkt Val (Market Value)')))
                 elif row[0] in ('Positions Total','Account Total'):
                     expected[current]['total']=float(money(record.get('Mkt Val (Market Value)')))
@@ -60,8 +62,8 @@ def verify(folder, data):
     report=[]
     for name, truth in expected.items():
         actual=state['accounts'][name]
-        for field in ('cash','total','cost'):
-            assert abs(actual[field]-truth[field])<.011, f'{name}: {field} mismatch'
+        for field in ('cash','total','cost','futuresCash','futuresMarketValue'):
+            assert abs(actual.get(field,0)-truth[field])<.011, f'{name}: {field} mismatch'
         actual_positions=Counter((p['symbol'],p['qty'],p['mktVal'],p['costBasis']) for p in actual['positions'])
         assert actual_positions==Counter(truth['positions']), f'{name}: holdings mismatch'
         if name in histories:

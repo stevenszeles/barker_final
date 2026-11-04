@@ -36,6 +36,17 @@ def classify(row):
     return ('review',None)
 
 
+def canonical_transaction(row):
+    # CSV and JSON exports use different fee column names and numeric formatting.
+    values={key:str(row.get(key) or '').strip() for key in ('Date','Action','Symbol','Description')}
+    values['Action']=values['Action'].lower()
+    values['Symbol']=re.sub(r'\s+',' ',values['Symbol'].upper())
+    for key in ('Quantity','Price','Amount'):
+        values[key]=amount(row.get(key))
+    values['FeesAndComm']=amount(row.get('FeesAndComm') or row.get('Fees & Comm'))
+    return json.dumps(values,sort_keys=True)
+
+
 def prepare(folder, data):
     workspace=json.loads((data/'workspace.json').read_text())
     asof=workspace['as_of']; accounts=workspace['state']['accounts']
@@ -48,16 +59,24 @@ def prepare(folder, data):
     flows=[flow for flow in config.get('flows',[]) if flow.get('source')!='transaction_export']
     manual_matches=Counter((flow["account"],flow["date"],round(flow["amount"],2)) for flow in flows)
     seen=set(); summaries=[]; review=[]; categories=Counter()
-    for path in sorted(folder.glob('*Transactions*.json')):
+    for path in sorted([*folder.glob('*Transactions*.json'), *folder.glob('*Transactions*.csv')]):
         suffix=re.search(r'_X{3,4}(\d+)_',path.name,re.I)
         if not suffix or suffix[1] not in names: raise ValueError(f'Transaction account not recognized: {path.name}')
-        account=names[suffix[1]]; export=json.loads(path.read_text())
+        account=names[suffix[1]]
+        if path.suffix.lower()=='.csv':
+            import csv
+            with path.open(encoding='utf-8-sig',newline='') as stream:
+                csv_rows=[row for row in csv.DictReader(stream) if row.get('Date','').strip()]
+            observed=sorted(iso(row['Date']) for row in csv_rows)
+            if not observed: raise ValueError(f'Empty transaction export: {path.name}')
+            export={'BrokerageTransactions':csv_rows,'FromDate':datetime.strptime(observed[0],'%Y-%m-%d').strftime('%m/%d/%Y'),'ToDate':datetime.strptime(observed[-1],'%Y-%m-%d').strftime('%m/%d/%Y')}
+        else: export=json.loads(path.read_text())
         rows=export.get('BrokerageTransactions')
         if not isinstance(rows,list): raise ValueError(f'Unsupported transaction structure: {path.name}')
         occurrences=Counter(); included=0; future=0; file_categories=Counter()
         for row in rows:
             day=iso(row['Date']); cash=amount(row.get('Amount'))
-            fingerprint=json.dumps(row,sort_keys=True)
+            fingerprint=canonical_transaction(row)
             occurrences[fingerprint]+=1
             key=(account,fingerprint,occurrences[fingerprint])
             if key in seen: continue

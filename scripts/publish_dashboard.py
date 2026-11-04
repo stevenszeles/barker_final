@@ -12,10 +12,13 @@ from verify_publication import verify
 from transactions import prepare as prepare_transactions
 from publication import write_manifest, wait_for_deployment
 from sector_settings import import_download
+from tracking_ledger import prepare as prepare_ledger
+from update_bundle import stage_bundle, accept_bundle
+from publication_history import archive_release
 
 ROOT=Path(__file__).resolve().parents[1]
 DATA=ROOT/'frontend/public/data'
-FILES=['cash-flows.json','workspace.json','nav-history.json','market.json','verification.json','verification.md','transaction-audit.json','publication.json','analytics-config.json']
+FILES=['cash-flows.json','workspace.json','nav-history.json','market.json','verification.json','verification.md','transaction-audit.json','publication.json','analytics-config.json','tracking.json']
 
 
 def run(args, cwd=ROOT):
@@ -53,7 +56,10 @@ def main():
         head=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT)
         remote=subprocess.check_output(['git','rev-parse','origin/main'],cwd=ROOT)
         if head!=remote: raise RuntimeError('Local branch differs from GitHub; reconcile it before publishing')
+    original_folder=args.csv_dir
+    if not args.prepare_only: args.csv_dir=stage_bundle(args.csv_dir)
     import_download(args.csv_dir)
+    archive_release(DATA,ROOT/'.ledger/releases')
     backups={name:(DATA/name).read_bytes() if (DATA/name).exists() else None for name in FILES}
     try:
         local_config=args.csv_dir/'analytics-config.json'
@@ -65,6 +71,11 @@ def main():
         prepare_transactions(args.csv_dir,DATA)
         run(['node','scripts/publish-original.mjs',str(args.csv_dir.resolve()),'--prepared-flows'],ROOT/'frontend')
         verify(args.csv_dir,DATA)
+        previous=ROOT/'.ledger/previous-workspace.json'
+        previous.parent.mkdir(exist_ok=True)
+        if backups['workspace.json']: previous.write_bytes(backups['workspace.json'])
+        seed=original_folder/'update-2026-11-04/previous-published-data/workspace.json'
+        prepare_ledger(args.csv_dir,DATA,ROOT/'.ledger/events.sqlite3',seed_paths=[previous,seed])
         refresh_market()
         manifest=write_manifest(DATA)
         run(['npm','run','test:analytics'],ROOT/'frontend')
@@ -78,6 +89,7 @@ def main():
     if args.prepare_only:
         print('Verified and built. No GitHub changes or deployment requested.')
         return
+    accept_bundle(args.csv_dir,original_folder)
     paths=['frontend/public/data/'+name for name in FILES]
     run(['git','add','--',*paths])
     changed=subprocess.run(['git','diff','--cached','--quiet'],cwd=ROOT).returncode
@@ -85,6 +97,7 @@ def main():
         asof=json.loads((DATA/'workspace.json').read_text())['as_of']
         run(['git','commit','-m',f'Publish verified portfolio as of {asof}','--',*paths])
         run(['git','push','origin','main'])
+    archive_release(DATA,ROOT/'.ledger/releases')
     wait_for_deployment('https://barker-portfolio-static.onrender.com',manifest,(ROOT/'frontend/dist/index.html').read_text())
 
 
