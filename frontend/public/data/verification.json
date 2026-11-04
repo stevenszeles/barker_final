@@ -1,16 +1,16 @@
 {
-  "as_of": "2026-10-29",
+  "as_of": "2026-11-04",
   "verified_accounts": 12,
-  "positions": 124,
-  "realized_lots": 1694,
+  "positions": 119,
+  "realized_lots": 473,
   "accounts": [
     {
       "account": "Limit_Liability_Company ...662",
-      "positions": 4,
-      "position_value": 20958.4,
-      "latest_balance": 20954.36,
-      "realized_lots": 72,
-      "realized_pl": 17096.29
+      "positions": 3,
+      "position_value": 20990.54,
+      "latest_balance": 20989.01,
+      "realized_lots": 37,
+      "realized_pl": 88.41
     },
     {
       "account": "Individual ...521",
@@ -22,83 +22,83 @@
     },
     {
       "account": "Limit_Liability_Company ...588",
-      "positions": 0,
-      "position_value": 11936.31,
-      "latest_balance": 11936.31,
-      "realized_lots": 58,
-      "realized_pl": -1567.27
+      "positions": 2,
+      "position_value": 11522.47,
+      "latest_balance": 11539.97,
+      "realized_lots": 25,
+      "realized_pl": -832.65
     },
     {
       "account": "Limit_Liability_Company ...013",
-      "positions": 24,
-      "position_value": 499188.52,
-      "latest_balance": 499046.99,
-      "realized_lots": 485,
-      "realized_pl": 57164.39
+      "positions": 26,
+      "position_value": 494813.95,
+      "latest_balance": 494890.47,
+      "realized_lots": 126,
+      "realized_pl": 15809.53
     },
     {
       "account": "Limit_Liability_Company ...024",
       "positions": 0,
       "position_value": 16269.46,
       "latest_balance": 16269.46,
-      "realized_lots": 43,
-      "realized_pl": 2596.7
+      "realized_lots": 24,
+      "realized_pl": 1521.12
     },
     {
       "account": "Limit_Liability_Company ...591",
       "positions": 0,
       "position_value": 13336.7,
       "latest_balance": 13336.7,
-      "realized_lots": 30,
-      "realized_pl": -901.26
+      "realized_lots": 17,
+      "realized_pl": 199.76
     },
     {
       "account": "Limit_Liability_Company ...093",
-      "positions": 2,
-      "position_value": 13269.46,
-      "latest_balance": 13265.39,
-      "realized_lots": 67,
-      "realized_pl": -1541.27
+      "positions": 4,
+      "position_value": 12826.37,
+      "latest_balance": 12817.3,
+      "realized_lots": 24,
+      "realized_pl": -1903.17
     },
     {
       "account": "Limit_Liability_Company ...724",
-      "positions": 2,
-      "position_value": 14851.46,
-      "latest_balance": 14851.46,
-      "realized_lots": 79,
-      "realized_pl": 690.12
+      "positions": 3,
+      "position_value": 14865.74,
+      "latest_balance": 14865.44,
+      "realized_lots": 31,
+      "realized_pl": -680.88
     },
     {
       "account": "Limit_Liability_Company ...562",
-      "positions": 59,
-      "position_value": 388731.9,
-      "latest_balance": 388632.56,
-      "realized_lots": 452,
-      "realized_pl": 92288.53
+      "positions": 44,
+      "position_value": 387154.81,
+      "latest_balance": 387238.1,
+      "realized_lots": 51,
+      "realized_pl": 12730.67
     },
     {
       "account": "Limit_Liability_Company ...288",
-      "positions": 7,
-      "position_value": 20247.7,
-      "latest_balance": 20246.69,
-      "realized_lots": 229,
-      "realized_pl": -6761.83
+      "positions": 6,
+      "position_value": 20546.26,
+      "latest_balance": 20559.26,
+      "realized_lots": 64,
+      "realized_pl": -1174.57
     },
     {
       "account": "Limit_Liability_Company ...775",
       "positions": 0,
       "position_value": 11156.64,
       "latest_balance": 11156.64,
-      "realized_lots": 68,
-      "realized_pl": -1548.03
+      "realized_lots": 20,
+      "realized_pl": 835.16
     },
     {
       "account": "Limit_Liability_Company ...145",
-      "positions": 26,
-      "position_value": 180151.57,
-      "latest_balance": 180127.09,
-      "realized_lots": 111,
-      "realized_pl": 6388.86
+      "positions": 31,
+      "position_value": 177718.61,
+      "latest_balance": 177728.22,
+      "realized_lots": 54,
+      "realized_pl": 3041.88
     }
   ]
 }

@@ -1,21 +1,21 @@
 # Portfolio publication verification
 
-Data as of 2026-10-29. All source comparisons passed.
+Data as of 2026-11-04. All source comparisons passed.
 
 | Account | Holdings | Position export value | Latest balance | Realized lots | Realized P/L |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Limit_Liability_Company ...662 | 4 | $20,958.40 | $20,954.36 | 72 | $17,096.29 |
+| Limit_Liability_Company ...662 | 3 | $20,990.54 | $20,989.01 | 37 | $88.41 |
 | Individual ...521 | 0 | $0.10 | — | 0 | $0.00 |
-| Limit_Liability_Company ...588 | 0 | $11,936.31 | $11,936.31 | 58 | $-1,567.27 |
-| Limit_Liability_Company ...013 | 24 | $499,188.52 | $499,046.99 | 485 | $57,164.39 |
-| Limit_Liability_Company ...024 | 0 | $16,269.46 | $16,269.46 | 43 | $2,596.70 |
-| Limit_Liability_Company ...591 | 0 | $13,336.70 | $13,336.70 | 30 | $-901.26 |
-| Limit_Liability_Company ...093 | 2 | $13,269.46 | $13,265.39 | 67 | $-1,541.27 |
-| Limit_Liability_Company ...724 | 2 | $14,851.46 | $14,851.46 | 79 | $690.12 |
-| Limit_Liability_Company ...562 | 59 | $388,731.90 | $388,632.56 | 452 | $92,288.53 |
-| Limit_Liability_Company ...288 | 7 | $20,247.70 | $20,246.69 | 229 | $-6,761.83 |
-| Limit_Liability_Company ...775 | 0 | $11,156.64 | $11,156.64 | 68 | $-1,548.03 |
-| Limit_Liability_Company ...145 | 26 | $180,151.57 | $180,127.09 | 111 | $6,388.86 |
+| Limit_Liability_Company ...588 | 2 | $11,522.47 | $11,539.97 | 25 | $-832.65 |
+| Limit_Liability_Company ...013 | 26 | $494,813.95 | $494,890.47 | 126 | $15,809.53 |
+| Limit_Liability_Company ...024 | 0 | $16,269.46 | $16,269.46 | 24 | $1,521.12 |
+| Limit_Liability_Company ...591 | 0 | $13,336.70 | $13,336.70 | 17 | $199.76 |
+| Limit_Liability_Company ...093 | 4 | $12,826.37 | $12,817.30 | 24 | $-1,903.17 |
+| Limit_Liability_Company ...724 | 3 | $14,865.74 | $14,865.44 | 31 | $-680.88 |
+| Limit_Liability_Company ...562 | 44 | $387,154.81 | $387,238.10 | 51 | $12,730.67 |
+| Limit_Liability_Company ...288 | 6 | $20,546.26 | $20,559.26 | 64 | $-1,174.57 |
+| Limit_Liability_Company ...775 | 0 | $11,156.64 | $11,156.64 | 20 | $835.16 |
+| Limit_Liability_Company ...145 | 31 | $177,718.61 | $177,728.22 | 54 | $3,041.88 |
 
 Position exports are intraday; balance exports are end-of-day history. Their differences are retained.
 All holdings quantities, market values and cost bases, complete balance histories, and realized totals were independently reconciled.
