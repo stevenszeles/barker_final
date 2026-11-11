@@ -1,15 +1,15 @@
 {
-  "id": "c1633377a3630764f067228474bf375a3faf1929b4f96c0aafa274bdb355eadd",
-  "as_of": "2026-11-04",
+  "id": "bc4ea9052991d2bdeb26deb6e64c1ff8c0df0cdcee5cd95ee150e0540c90a37c",
+  "as_of": "2026-11-11",
   "files": {
-    "workspace.json": "acaf60515d09f1dfc7e267d866d8eca48133eff80083abd9a1904f9222c4e154",
-    "nav-history.json": "29d7f01d3183f20b47433529a8390ea1b5a1e447f4b5a02c6260cdb59d7ffc1f",
-    "market.json": "049116398d4088112d6b3efe46b8a157a943b149925e827adb1ea21e3cb3d0e3",
+    "workspace.json": "791ef1a0f20651e0b7bef9b1c933423c03ab04fa268ecd23381b708765913f95",
+    "nav-history.json": "ac4345a3597202f6b150d000d8930f01346f30da146b23224b427e3262d13120",
+    "market.json": "0ac2fb90f650f6ebf92bc67e1c47d7039a9552909a1f7d6e4f94026fd8a9f88f",
     "cash-flows.json": "8f479fd771c47c537fceb4a97c77e38d525a4afd9006136fc2a640e42487831b",
-    "transaction-audit.json": "4be056f31f86bbcc098fef6ec79b6d5be76454c71ae44533007f7c6c600eeecb",
+    "transaction-audit.json": "cbbda9229339d0b11c97eb7580a9ef75ece3d38b83775bf9670ac99f6f7aba2d",
     "analytics-config.json": "42badeb1a53967594c02aad6fe8c0bb8d089e612ae31d0abd8b3fe067246315a",
-    "verification.json": "da3434c4b4b41419e9324ed20d334dba8bb453956307963dfa024facbd4c14b6",
-    "verification.md": "c91db31459e6821d67b04d41139463bb9dbfc40b8d90b685ceb3ad70f174f7bd",
-    "tracking.json": "e50763a247dd0e38950d696aa02266db7c33fddbeecdbae22b3d1b51e61433b5"
+    "verification.json": "3edfb610b7d70bf7349fe7f988ce5f07e9dbcaec0d1261369d7f3a156f22951b",
+    "verification.md": "8fb555dd10c463d238c388715d545e395ad2fdb80f795b7136e0f3a7f8ae13ad",
+    "tracking.json": "a7195f35807e6182f44c671e9364bf874be774492e8432e9e18bc68d480a67b6"
   }
 }

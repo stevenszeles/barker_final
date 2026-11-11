@@ -1,16 +1,16 @@
 {
-  "as_of": "2026-11-04",
+  "as_of": "2026-11-11",
   "verified_accounts": 12,
-  "positions": 119,
-  "realized_lots": 473,
+  "positions": 121,
+  "realized_lots": 137,
   "accounts": [
     {
       "account": "Limit_Liability_Company ...662",
-      "positions": 3,
-      "position_value": 20990.54,
-      "latest_balance": 20989.01,
-      "realized_lots": 37,
-      "realized_pl": 88.41
+      "positions": 2,
+      "position_value": 21129.05,
+      "latest_balance": 21129.05,
+      "realized_lots": 6,
+      "realized_pl": -385.4
     },
     {
       "account": "Individual ...521",
@@ -23,82 +23,82 @@
     {
       "account": "Limit_Liability_Company ...588",
       "positions": 2,
-      "position_value": 11522.47,
-      "latest_balance": 11539.97,
-      "realized_lots": 25,
-      "realized_pl": -832.65
+      "position_value": 11021.97,
+      "latest_balance": 11021.97,
+      "realized_lots": 0,
+      "realized_pl": 0
     },
     {
       "account": "Limit_Liability_Company ...013",
-      "positions": 26,
-      "position_value": 494813.95,
-      "latest_balance": 494890.47,
-      "realized_lots": 126,
-      "realized_pl": 15809.53
+      "positions": 27,
+      "position_value": 489236.81,
+      "latest_balance": 489264.76,
+      "realized_lots": 11,
+      "realized_pl": 1068.36
     },
     {
       "account": "Limit_Liability_Company ...024",
       "positions": 0,
       "position_value": 16269.46,
       "latest_balance": 16269.46,
-      "realized_lots": 24,
-      "realized_pl": 1521.12
+      "realized_lots": 0,
+      "realized_pl": 0
     },
     {
       "account": "Limit_Liability_Company ...591",
-      "positions": 0,
-      "position_value": 13336.7,
-      "latest_balance": 13336.7,
-      "realized_lots": 17,
-      "realized_pl": 199.76
+      "positions": 1,
+      "position_value": 13381.8,
+      "latest_balance": 13381.8,
+      "realized_lots": 0,
+      "realized_pl": 0
     },
     {
       "account": "Limit_Liability_Company ...093",
-      "positions": 4,
-      "position_value": 12826.37,
-      "latest_balance": 12817.3,
-      "realized_lots": 24,
-      "realized_pl": -1903.17
+      "positions": 6,
+      "position_value": 13084.95,
+      "latest_balance": 13043.45,
+      "realized_lots": 3,
+      "realized_pl": -28.14
     },
     {
       "account": "Limit_Liability_Company ...724",
-      "positions": 3,
-      "position_value": 14865.74,
-      "latest_balance": 14865.44,
-      "realized_lots": 31,
-      "realized_pl": -680.88
+      "positions": 6,
+      "position_value": 14994.17,
+      "latest_balance": 14992.67,
+      "realized_lots": 6,
+      "realized_pl": -402.64
     },
     {
       "account": "Limit_Liability_Company ...562",
-      "positions": 44,
-      "position_value": 387154.81,
-      "latest_balance": 387238.1,
-      "realized_lots": 51,
-      "realized_pl": 12730.67
+      "positions": 48,
+      "position_value": 384130.51,
+      "latest_balance": 384099.56,
+      "realized_lots": 33,
+      "realized_pl": -1164.05
     },
     {
       "account": "Limit_Liability_Company ...288",
-      "positions": 6,
-      "position_value": 20546.26,
-      "latest_balance": 20559.26,
-      "realized_lots": 64,
-      "realized_pl": -1174.57
+      "positions": 4,
+      "position_value": 20046.35,
+      "latest_balance": 20052.71,
+      "realized_lots": 63,
+      "realized_pl": -533.01
     },
     {
       "account": "Limit_Liability_Company ...775",
       "positions": 0,
-      "position_value": 11156.64,
-      "latest_balance": 11156.64,
-      "realized_lots": 20,
-      "realized_pl": 835.16
+      "position_value": 10781.26,
+      "latest_balance": 10781.26,
+      "realized_lots": 2,
+      "realized_pl": -375.38
     },
     {
       "account": "Limit_Liability_Company ...145",
-      "positions": 31,
-      "position_value": 177718.61,
-      "latest_balance": 177728.22,
-      "realized_lots": 54,
-      "realized_pl": 3041.88
+      "positions": 25,
+      "position_value": 177717.41,
+      "latest_balance": 177707.27,
+      "realized_lots": 13,
+      "realized_pl": 476.03
     }
   ]
 }

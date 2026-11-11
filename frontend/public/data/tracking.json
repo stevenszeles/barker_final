@@ -1,16 +1,16 @@
 {
-  "as_of": "2026-11-04",
+  "as_of": "2026-11-11",
   "status": "needs_attention",
   "source_comparisons": "passed",
   "holdings_checks": [
     {
       "account": "Limit_Liability_Company ...662",
-      "holdings_plus_cash": 20990.54,
-      "reported_total": 20990.54,
+      "holdings_plus_cash": 21129.05,
+      "reported_total": 21129.05,
       "futures_balances": 0.0,
       "difference": 0.0,
       "status": "matched",
-      "balance_value": 20989.01,
+      "balance_value": 21129.05,
       "balance_note": "Balance history and positions may have different valuation times."
     },
     {
@@ -25,22 +25,22 @@
     },
     {
       "account": "Limit_Liability_Company ...588",
-      "holdings_plus_cash": 11522.47,
-      "reported_total": 11522.47,
+      "holdings_plus_cash": 11021.97,
+      "reported_total": 11021.97,
       "futures_balances": 0.0,
       "difference": 0.0,
       "status": "matched",
-      "balance_value": 11539.97,
+      "balance_value": 11021.97,
       "balance_note": "Balance history and positions may have different valuation times."
     },
     {
       "account": "Limit_Liability_Company ...013",
-      "holdings_plus_cash": 494813.95,
-      "reported_total": 494813.95,
+      "holdings_plus_cash": 489236.81,
+      "reported_total": 489236.81,
       "futures_balances": 0.0,
-      "difference": 0.0,
+      "difference": -0.0,
       "status": "matched",
-      "balance_value": 494890.47,
+      "balance_value": 489264.76,
       "balance_note": "Balance history and positions may have different valuation times."
     },
     {
@@ -55,72 +55,72 @@
     },
     {
       "account": "Limit_Liability_Company ...591",
-      "holdings_plus_cash": 13336.7,
-      "reported_total": 13336.7,
+      "holdings_plus_cash": 13381.8,
+      "reported_total": 13381.8,
       "futures_balances": 0.0,
       "difference": 0.0,
       "status": "matched",
-      "balance_value": 13336.7,
+      "balance_value": 13381.8,
       "balance_note": "Balance history and positions may have different valuation times."
     },
     {
       "account": "Limit_Liability_Company ...093",
-      "holdings_plus_cash": 12826.37,
-      "reported_total": 12826.37,
+      "holdings_plus_cash": 13084.95,
+      "reported_total": 13084.95,
       "futures_balances": 0.0,
-      "difference": -0.0,
+      "difference": 0.0,
       "status": "matched",
-      "balance_value": 12817.3,
+      "balance_value": 13043.45,
       "balance_note": "Balance history and positions may have different valuation times."
     },
     {
       "account": "Limit_Liability_Company ...724",
-      "holdings_plus_cash": 14865.74,
-      "reported_total": 14865.74,
+      "holdings_plus_cash": 14994.17,
+      "reported_total": 14994.17,
       "futures_balances": 0.0,
-      "difference": 0.0,
+      "difference": -0.0,
       "status": "matched",
-      "balance_value": 14865.44,
+      "balance_value": 14992.67,
       "balance_note": "Balance history and positions may have different valuation times."
     },
     {
       "account": "Limit_Liability_Company ...562",
-      "holdings_plus_cash": 387154.81,
-      "reported_total": 387154.81,
+      "holdings_plus_cash": 384130.51,
+      "reported_total": 384130.51,
       "futures_balances": 0.0,
-      "difference": 0.0,
+      "difference": -0.0,
       "status": "matched",
-      "balance_value": 387238.1,
+      "balance_value": 384099.56,
       "balance_note": "Balance history and positions may have different valuation times."
     },
     {
       "account": "Limit_Liability_Company ...288",
-      "holdings_plus_cash": 20546.26,
-      "reported_total": 20546.26,
+      "holdings_plus_cash": 20046.35,
+      "reported_total": 20046.35,
       "futures_balances": 0.0,
       "difference": 0.0,
       "status": "matched",
-      "balance_value": 20559.26,
+      "balance_value": 20052.71,
       "balance_note": "Balance history and positions may have different valuation times."
     },
     {
       "account": "Limit_Liability_Company ...775",
-      "holdings_plus_cash": 11156.64,
-      "reported_total": 11156.64,
+      "holdings_plus_cash": 10781.26,
+      "reported_total": 10781.26,
       "futures_balances": 0.0,
       "difference": 0.0,
       "status": "matched",
-      "balance_value": 11156.64,
+      "balance_value": 10781.26,
       "balance_note": "Balance history and positions may have different valuation times."
     },
     {
       "account": "Limit_Liability_Company ...145",
-      "holdings_plus_cash": 177718.62,
-      "reported_total": 177718.61,
-      "futures_balances": 2947.75,
-      "difference": 0.01,
+      "holdings_plus_cash": 177717.41,
+      "reported_total": 177717.41,
+      "futures_balances": 3677.53,
+      "difference": 0.0,
       "status": "matched",
-      "balance_value": 177728.22,
+      "balance_value": 177707.27,
       "balance_note": "Balance history and positions may have different valuation times."
     }
   ],
@@ -128,46 +128,514 @@
   "transaction_review_count": 1876,
   "cash_flow_coverage": "partial",
   "reconciliation": {
-    "from": "2026-11-02",
-    "through": "2026-11-04",
+    "from": "2026-11-04",
+    "through": "2026-11-11",
     "quantity_differences": [
       {
-        "account": "Limit_Liability_Company ...288",
-        "symbol": "SPXW 11/03/2026 7525.00 P",
+        "account": "Limit_Liability_Company ...013",
+        "symbol": "AEO 12/04/2026 19.50 P",
+        "expected": 1.0,
+        "actual": 0.0,
+        "difference": -1.0
+      },
+      {
+        "account": "Limit_Liability_Company ...013",
+        "symbol": "ASML",
+        "expected": 5.0,
+        "actual": 0.0,
+        "difference": -5.0
+      },
+      {
+        "account": "Limit_Liability_Company ...013",
+        "symbol": "CMG",
+        "expected": 0.0,
+        "actual": 10.0,
+        "difference": 10.0
+      },
+      {
+        "account": "Limit_Liability_Company ...013",
+        "symbol": "CRM 12/18/2026 250.00 C",
+        "expected": 0.0,
+        "actual": 1.0,
+        "difference": 1.0
+      },
+      {
+        "account": "Limit_Liability_Company ...013",
+        "symbol": "CRM 12/18/2026 270.00 C",
+        "expected": 0.0,
+        "actual": -1.0,
+        "difference": -1.0
+      },
+      {
+        "account": "Limit_Liability_Company ...013",
+        "symbol": "GOOGL 03/19/2027 285.00 C",
+        "expected": 0.0,
+        "actual": 1.0,
+        "difference": 1.0
+      },
+      {
+        "account": "Limit_Liability_Company ...013",
+        "symbol": "GOOGL 03/19/2027 340.00 C",
+        "expected": 0.0,
+        "actual": -1.0,
+        "difference": -1.0
+      },
+      {
+        "account": "Limit_Liability_Company ...013",
+        "symbol": "LLY",
+        "expected": 12.0,
+        "actual": 0.0,
+        "difference": -12.0
+      },
+      {
+        "account": "Limit_Liability_Company ...013",
+        "symbol": "LNG",
+        "expected": 0.0,
+        "actual": 20.0,
+        "difference": 20.0
+      },
+      {
+        "account": "Limit_Liability_Company ...013",
+        "symbol": "NUKZ 12/18/2026 67.00 C",
+        "expected": 0.0,
+        "actual": 1.0,
+        "difference": 1.0
+      },
+      {
+        "account": "Limit_Liability_Company ...013",
+        "symbol": "TSLA",
+        "expected": 15.0,
+        "actual": 0.0,
+        "difference": -15.0
+      },
+      {
+        "account": "Limit_Liability_Company ...013",
+        "symbol": "VST 11/06/2026 150.00 C",
+        "expected": 1.0,
+        "actual": 0.0,
+        "difference": -1.0
+      },
+      {
+        "account": "Limit_Liability_Company ...013",
+        "symbol": "VST 11/06/2026 162.50 C",
+        "expected": -1.0,
+        "actual": 0.0,
+        "difference": 1.0
+      },
+      {
+        "account": "Limit_Liability_Company ...093",
+        "symbol": "NVDA 11/13/2026 170.00 P",
+        "expected": 0.0,
+        "actual": 1.0,
+        "difference": 1.0
+      },
+      {
+        "account": "Limit_Liability_Company ...093",
+        "symbol": "NVDA 11/13/2026 172.50 P",
+        "expected": 0.0,
+        "actual": -1.0,
+        "difference": -1.0
+      },
+      {
+        "account": "Limit_Liability_Company ...093",
+        "symbol": "NVDA 11/13/2026 175.00 C",
+        "expected": 0.0,
+        "actual": -1.0,
+        "difference": -1.0
+      },
+      {
+        "account": "Limit_Liability_Company ...093",
+        "symbol": "NVDA 11/13/2026 177.50 C",
+        "expected": 0.0,
+        "actual": 1.0,
+        "difference": 1.0
+      },
+      {
+        "account": "Limit_Liability_Company ...093",
+        "symbol": "SPY 12/18/2026 740.00 P",
+        "expected": -1.0,
+        "actual": 0.0,
+        "difference": 1.0
+      },
+      {
+        "account": "Limit_Liability_Company ...093",
+        "symbol": "SPY 12/18/2026 750.00 P",
+        "expected": 1.0,
+        "actual": 0.0,
+        "difference": -1.0
+      },
+      {
+        "account": "Limit_Liability_Company ...145",
+        "symbol": "GDX",
+        "expected": 0.0,
+        "actual": 70.0,
+        "difference": 70.0
+      },
+      {
+        "account": "Limit_Liability_Company ...145",
+        "symbol": "GEV",
+        "expected": 8.0,
+        "actual": 0.0,
+        "difference": -8.0
+      },
+      {
+        "account": "Limit_Liability_Company ...145",
+        "symbol": "GLD",
+        "expected": 0.0,
+        "actual": -30.0,
+        "difference": -30.0
+      },
+      {
+        "account": "Limit_Liability_Company ...145",
+        "symbol": "IRM",
+        "expected": 0.0,
+        "actual": 5.0,
+        "difference": 5.0
+      },
+      {
+        "account": "Limit_Liability_Company ...145",
+        "symbol": "JETS 12/18/2026 27.00 C",
+        "expected": 5.0,
+        "actual": 0.0,
+        "difference": -5.0
+      },
+      {
+        "account": "Limit_Liability_Company ...145",
+        "symbol": "JETS 12/18/2026 30.00 C",
+        "expected": -5.0,
+        "actual": 0.0,
+        "difference": 5.0
+      },
+      {
+        "account": "Limit_Liability_Company ...145",
+        "symbol": "ROST 11/13/2026 220.00 P",
+        "expected": 1.0,
+        "actual": 0.0,
+        "difference": -1.0
+      },
+      {
+        "account": "Limit_Liability_Company ...145",
+        "symbol": "ROST 11/13/2026 225.00 P",
+        "expected": -1.0,
+        "actual": 0.0,
+        "difference": 1.0
+      },
+      {
+        "account": "Limit_Liability_Company ...145",
+        "symbol": "ROST 11/13/2026 240.00 C",
+        "expected": -1.0,
+        "actual": 0.0,
+        "difference": 1.0
+      },
+      {
+        "account": "Limit_Liability_Company ...145",
+        "symbol": "ROST 11/13/2026 245.00 C",
+        "expected": 1.0,
+        "actual": 0.0,
+        "difference": -1.0
+      },
+      {
+        "account": "Limit_Liability_Company ...145",
+        "symbol": "TSLA 12/18/2026 365.00 P",
+        "expected": 1.0,
+        "actual": 0.0,
+        "difference": -1.0
+      },
+      {
+        "account": "Limit_Liability_Company ...145",
+        "symbol": "TSLA 12/18/2026 400.00 C",
         "expected": 1.0,
         "actual": 0.0,
         "difference": -1.0
       },
       {
         "account": "Limit_Liability_Company ...288",
-        "symbol": "SPXW 11/03/2026 7540.00 P",
-        "expected": -1.0,
-        "actual": 0.0,
-        "difference": 1.0
-      }
-    ],
-    "unresolved_events": [
-      {
-        "account": "Limit_Liability_Company ...288",
-        "date": "2026-11-04",
-        "action": "Expired",
-        "symbol": "SPXW 11/03/2026 7540.00 P"
+        "symbol": "IDR 11/20/2026 25.00 C",
+        "expected": 0.0,
+        "actual": 2.0,
+        "difference": 2.0
       },
       {
         "account": "Limit_Liability_Company ...288",
-        "date": "2026-11-04",
-        "action": "Expired",
-        "symbol": "SPXW 11/03/2026 7525.00 P"
+        "symbol": "SNAP 11/06/2026 4.50 P",
+        "expected": 1.0,
+        "actual": 0.0,
+        "difference": -1.0
+      },
+      {
+        "account": "Limit_Liability_Company ...288",
+        "symbol": "SNAP 11/06/2026 5.00 P",
+        "expected": 7.0,
+        "actual": 0.0,
+        "difference": -7.0
+      },
+      {
+        "account": "Limit_Liability_Company ...288",
+        "symbol": "SNAP 11/06/2026 5.50 P",
+        "expected": 4.0,
+        "actual": 0.0,
+        "difference": -4.0
+      },
+      {
+        "account": "Limit_Liability_Company ...288",
+        "symbol": "SNAP 11/06/2026 6.50 C",
+        "expected": 10.0,
+        "actual": 0.0,
+        "difference": -10.0
+      },
+      {
+        "account": "Limit_Liability_Company ...288",
+        "symbol": "SNAP 11/06/2026 6.50 P",
+        "expected": -10.0,
+        "actual": 0.0,
+        "difference": 10.0
+      },
+      {
+        "account": "Limit_Liability_Company ...288",
+        "symbol": "SNAP 11/06/2026 8.50 C",
+        "expected": 1.0,
+        "actual": 0.0,
+        "difference": -1.0
+      },
+      {
+        "account": "Limit_Liability_Company ...288",
+        "symbol": "SNAP 11/13/2026 7.00 C",
+        "expected": 0.0,
+        "actual": 1.0,
+        "difference": 1.0
+      },
+      {
+        "account": "Limit_Liability_Company ...288",
+        "symbol": "USO",
+        "expected": 0.0,
+        "actual": -100.0,
+        "difference": -100.0
+      },
+      {
+        "account": "Limit_Liability_Company ...288",
+        "symbol": "USO 11/11/2026 139.00 P",
+        "expected": 0.0,
+        "actual": -1.0,
+        "difference": -1.0
+      },
+      {
+        "account": "Limit_Liability_Company ...562",
+        "symbol": "AAPL",
+        "expected": 0.0,
+        "actual": 40.0,
+        "difference": 40.0
+      },
+      {
+        "account": "Limit_Liability_Company ...562",
+        "symbol": "BAC 11/06/2026 53.00 C",
+        "expected": 5.0,
+        "actual": 0.0,
+        "difference": -5.0
+      },
+      {
+        "account": "Limit_Liability_Company ...562",
+        "symbol": "CRWV 11/13/2026 47.00 P",
+        "expected": 0.0,
+        "actual": 1.0,
+        "difference": 1.0
+      },
+      {
+        "account": "Limit_Liability_Company ...562",
+        "symbol": "FCX",
+        "expected": 0.0,
+        "actual": -10.0,
+        "difference": -10.0
+      },
+      {
+        "account": "Limit_Liability_Company ...562",
+        "symbol": "KCE 11/20/2026 150.00 P",
+        "expected": -1.0,
+        "actual": 0.0,
+        "difference": 1.0
+      },
+      {
+        "account": "Limit_Liability_Company ...562",
+        "symbol": "NVDA 11/16/2026 150.00 P",
+        "expected": 0.0,
+        "actual": -1.0,
+        "difference": -1.0
+      },
+      {
+        "account": "Limit_Liability_Company ...562",
+        "symbol": "NVDA 11/16/2026 160.00 P",
+        "expected": 0.0,
+        "actual": 1.0,
+        "difference": 1.0
+      },
+      {
+        "account": "Limit_Liability_Company ...562",
+        "symbol": "SLG",
+        "expected": -9.0,
+        "actual": 0.0,
+        "difference": 9.0
+      },
+      {
+        "account": "Limit_Liability_Company ...562",
+        "symbol": "SOXX",
+        "expected": 0.0,
+        "actual": 10.0,
+        "difference": 10.0
+      },
+      {
+        "account": "Limit_Liability_Company ...562",
+        "symbol": "SPCX 11/09/2026 145.00 C",
+        "expected": -1.0,
+        "actual": 0.0,
+        "difference": 1.0
+      },
+      {
+        "account": "Limit_Liability_Company ...562",
+        "symbol": "SPCX 11/13/2026 150.00 C",
+        "expected": 0.0,
+        "actual": -1.0,
+        "difference": -1.0
+      },
+      {
+        "account": "Limit_Liability_Company ...562",
+        "symbol": "STLD",
+        "expected": 1.0,
+        "actual": 0.0,
+        "difference": -1.0
+      },
+      {
+        "account": "Limit_Liability_Company ...562",
+        "symbol": "USO",
+        "expected": 0.0,
+        "actual": -25.0,
+        "difference": -25.0
+      },
+      {
+        "account": "Limit_Liability_Company ...562",
+        "symbol": "XLE 01/15/2027 70.00 C",
+        "expected": 0.0,
+        "actual": 1.0,
+        "difference": 1.0
+      },
+      {
+        "account": "Limit_Liability_Company ...562",
+        "symbol": "XLE 01/15/2027 75.00 C",
+        "expected": 0.0,
+        "actual": 1.0,
+        "difference": 1.0
+      },
+      {
+        "account": "Limit_Liability_Company ...562",
+        "symbol": "XLF 06/17/2027 42.00 C",
+        "expected": 1.0,
+        "actual": 0.0,
+        "difference": -1.0
+      },
+      {
+        "account": "Limit_Liability_Company ...591",
+        "symbol": "ROST",
+        "expected": 0.0,
+        "actual": 10.0,
+        "difference": 10.0
+      },
+      {
+        "account": "Limit_Liability_Company ...662",
+        "symbol": "AMZN 03/19/2027 265.00 C",
+        "expected": 0.0,
+        "actual": 1.0,
+        "difference": 1.0
+      },
+      {
+        "account": "Limit_Liability_Company ...662",
+        "symbol": "AMZN 03/19/2027 305.00 C",
+        "expected": 0.0,
+        "actual": -1.0,
+        "difference": -1.0
+      },
+      {
+        "account": "Limit_Liability_Company ...662",
+        "symbol": "CVS",
+        "expected": -2.0,
+        "actual": 0.0,
+        "difference": 2.0
+      },
+      {
+        "account": "Limit_Liability_Company ...662",
+        "symbol": "CVS 11/20/2026 85.00 P",
+        "expected": 1.0,
+        "actual": 0.0,
+        "difference": -1.0
+      },
+      {
+        "account": "Limit_Liability_Company ...662",
+        "symbol": "CVS 11/20/2026 92.50 C",
+        "expected": 1.0,
+        "actual": 0.0,
+        "difference": -1.0
+      },
+      {
+        "account": "Limit_Liability_Company ...724",
+        "symbol": "NVDA 11/06/2026 245.00 C",
+        "expected": 1.0,
+        "actual": 0.0,
+        "difference": -1.0
+      },
+      {
+        "account": "Limit_Liability_Company ...724",
+        "symbol": "NVDA 11/06/2026 260.00 C",
+        "expected": -1.0,
+        "actual": 0.0,
+        "difference": 1.0
+      },
+      {
+        "account": "Limit_Liability_Company ...724",
+        "symbol": "NVDA 12/04/2026 180.00 C",
+        "expected": 0.0,
+        "actual": 2.0,
+        "difference": 2.0
+      },
+      {
+        "account": "Limit_Liability_Company ...724",
+        "symbol": "NVDA 12/04/2026 195.00 C",
+        "expected": 0.0,
+        "actual": -2.0,
+        "difference": -2.0
+      },
+      {
+        "account": "Limit_Liability_Company ...724",
+        "symbol": "PM",
+        "expected": 0.0,
+        "actual": 10.0,
+        "difference": 10.0
+      },
+      {
+        "account": "Limit_Liability_Company ...724",
+        "symbol": "UPS 12/18/2026 110.00 C",
+        "expected": 0.0,
+        "actual": 1.0,
+        "difference": 1.0
+      },
+      {
+        "account": "Limit_Liability_Company ...724",
+        "symbol": "UPS 12/18/2026 120.00 C",
+        "expected": 0.0,
+        "actual": -1.0,
+        "difference": -1.0
       }
     ],
-    "matched_positions": 128,
+    "unresolved_events": [],
+    "matched_positions": 85,
     "status": "needs_review",
     "note": "Snapshots are intraday. Export times and trade posting cutoffs are not verified; matching quantities alone does not verify cash or performance."
   },
   "sector_performance_status": "unavailable",
   "performance_reason": "Daily sector valuations, cash reconciliation, derivative settlements and transaction cutoffs are not yet verified. Target weights are never used to calculate measured returns.",
-  "realized_source_date": "20261102",
+  "realized_source_date": "20261111",
   "history": [
+    {
+      "id": "d8ed90315c2c132e940d229aaf260e38dfb209cc81bb5371cb03806013b0b41f",
+      "as_of": "2026-11-11",
+      "accounts": 12
+    },
     {
       "id": "af4392bdf245d56f4fba5213828e1377fb9aba183d638f54d4d9e82764f2f40f",
       "as_of": "2026-11-04",
