@@ -1,183 +1,183 @@
 {
-  "as_of": "2026-11-11",
+  "as_of": "2026-11-16",
   "cash_flow_coverage": "partial",
   "files": [
     {
       "account": "Limit_Liability_Company ...013",
-      "from": "2022-11-04",
-      "through": "2026-11-04",
-      "included_records": 1910,
+      "from": "2022-11-16",
+      "through": "2026-11-13",
+      "included_records": 1889,
       "excluded_after_snapshot": 0,
       "categories": {
-        "trade": 1295,
-        "income_or_expense": 302,
-        "review": 306,
+        "trade": 1290,
+        "income_or_expense": 303,
+        "review": 289,
         "corporate_action": 6,
         "internal": 1
       },
-      "source_sha256": "0af094a2e3281f980e62b6baa0934bf22594e7f632c10705e2466d013a0b6bd7"
+      "source_sha256": "89cfe72b23a9bf376f81f2cb4c50ee16ef7ad5ee91af287d486bf91428bd7378"
     },
     {
       "account": "Limit_Liability_Company ...024",
-      "from": "2022-11-07",
+      "from": "2022-11-21",
       "through": "2026-10-28",
-      "included_records": 327,
+      "included_records": 321,
       "excluded_after_snapshot": 0,
       "categories": {
-        "trade": 148,
+        "trade": 144,
         "income_or_expense": 31,
-        "review": 130,
+        "review": 128,
         "journal": 8,
         "internal": 10
       },
-      "source_sha256": "0fa319a7ea5c4cefd56b8a896e4da27f957845cc6c7676b9eb0035c310cd6a9c"
+      "source_sha256": "27cdac355c47a325dedff51d60c9cb5d7cdae846f9bc6ef6f4e3fd2f5cf62426"
     },
     {
       "account": "Limit_Liability_Company ...093",
-      "from": "2022-11-04",
-      "through": "2026-11-04",
-      "included_records": 323,
+      "from": "2022-11-29",
+      "through": "2026-11-16",
+      "included_records": 324,
       "excluded_after_snapshot": 0,
       "categories": {
-        "trade": 196,
-        "income_or_expense": 23,
+        "trade": 198,
+        "review": 90,
+        "income_or_expense": 24,
         "journal": 6,
-        "internal": 6,
-        "review": 92
+        "internal": 6
       },
-      "source_sha256": "bf3726436fc4afe8bff9e4348192bfcad1b1a71a1f2dacffc5d7cad67b0db865"
+      "source_sha256": "18959a9f60db71a8c0d49f627182b3c90d451b33f02496af1c0c65430d2a41e5"
     },
     {
       "account": "Limit_Liability_Company ...145",
       "from": "2022-11-30",
-      "through": "2026-11-04",
-      "included_records": 623,
+      "through": "2026-11-12",
+      "included_records": 649,
       "excluded_after_snapshot": 0,
       "categories": {
-        "trade": 243,
-        "internal": 197,
+        "trade": 265,
+        "internal": 201,
         "income_or_expense": 125,
         "corporate_action": 7,
         "review": 34,
         "journal": 15,
         "external": 2
       },
-      "source_sha256": "573a3b0007c5d01e4a206860d1fef2c48a71b0a437bcd751235a54080ac9c295"
+      "source_sha256": "ad7d5eec1985d7f2d04de72050253ea55e367164d634e8399a095508bb3fc8c8"
     },
     {
       "account": "Limit_Liability_Company ...288",
-      "from": "2022-11-07",
-      "through": "2026-11-04",
-      "included_records": 635,
+      "from": "2022-11-30",
+      "through": "2026-11-16",
+      "included_records": 751,
       "excluded_after_snapshot": 0,
       "categories": {
-        "trade": 515,
+        "trade": 632,
         "income_or_expense": 30,
         "journal": 9,
-        "review": 71,
+        "review": 70,
         "internal": 10
       },
-      "source_sha256": "d9f54119fde6feba525f898ad822036714df17e4d0d417d306499c74103a7ab7"
+      "source_sha256": "3328fb8ff6c1f89321767f12e7aefbbd46d0ea530995432bf6454b094e345772"
     },
     {
       "account": "Limit_Liability_Company ...562",
-      "from": "2022-11-04",
-      "through": "2026-11-04",
-      "included_records": 2228,
+      "from": "2022-11-16",
+      "through": "2026-11-16",
+      "included_records": 2270,
       "excluded_after_snapshot": 0,
       "categories": {
-        "trade": 1497,
-        "income_or_expense": 330,
+        "income_or_expense": 333,
+        "trade": 1549,
         "corporate_action": 6,
-        "review": 379,
+        "review": 366,
         "journal": 10,
         "internal": 6
       },
-      "source_sha256": "cfbeca8859c610989b21b9fac0111087c73d449ec93f71f103c009ce4a847d90"
+      "source_sha256": "523546bb77d0ad5b4dd892fc4dfaf9b2b1560b8220024b03a7777c58096f4e77"
     },
     {
       "account": "Limit_Liability_Company ...588",
-      "from": "2022-11-07",
-      "through": "2026-10-30",
-      "included_records": 367,
+      "from": "2022-11-16",
+      "through": "2026-11-16",
+      "included_records": 361,
       "excluded_after_snapshot": 0,
       "categories": {
-        "trade": 194,
+        "trade": 190,
         "income_or_expense": 24,
         "journal": 8,
         "internal": 10,
-        "review": 131
+        "review": 129
       },
-      "source_sha256": "d6d56f7709831914637b44b09e94f90d82e562553c22410481c2b023d6d6f0bb"
+      "source_sha256": "b9b55300e72ee16ed0958cf67e025bb08a5dce07ba66f872c5973b1370e940ec"
     },
     {
       "account": "Limit_Liability_Company ...591",
-      "from": "2022-11-04",
-      "through": "2026-10-20",
-      "included_records": 416,
+      "from": "2022-11-29",
+      "through": "2026-11-05",
+      "included_records": 405,
       "excluded_after_snapshot": 0,
       "categories": {
-        "trade": 207,
+        "trade": 200,
         "income_or_expense": 27,
         "journal": 8,
         "internal": 10,
-        "review": 164
+        "review": 160
       },
-      "source_sha256": "2c4af30bd97bffd1bc6a04f104da10a0d78ae87a23469f6a2da3d1ba589d298e"
+      "source_sha256": "b2d0f61c78cb28faa7e36797d4e5b2ad64c7c34c606c5ac5734bc667e2c51ae4"
     },
     {
       "account": "Limit_Liability_Company ...662",
-      "from": "2022-11-07",
-      "through": "2026-11-04",
-      "included_records": 389,
+      "from": "2022-11-30",
+      "through": "2026-11-12",
+      "included_records": 390,
       "excluded_after_snapshot": 0,
       "categories": {
-        "trade": 202,
+        "trade": 206,
         "income_or_expense": 24,
         "journal": 9,
         "internal": 10,
         "corporate_action": 1,
-        "review": 143
+        "review": 140
       },
-      "source_sha256": "45afc3d2a5ac6fcce752afc48a42123fe52aecb88c00585ffdec99cfe9b5f46f"
+      "source_sha256": "de94cf56a0dd01165da28870f26f7ab1b0dfb66a55eb6510a394651334f8dace"
     },
     {
       "account": "Limit_Liability_Company ...724",
       "from": "2022-11-21",
-      "through": "2026-11-03",
-      "included_records": 406,
+      "through": "2026-11-10",
+      "included_records": 413,
       "excluded_after_snapshot": 0,
       "categories": {
-        "trade": 262,
+        "trade": 269,
         "income_or_expense": 24,
         "journal": 8,
         "internal": 10,
         "review": 102
       },
-      "source_sha256": "1fdd1672a39784525a3fda7c960202698f1e80a0f639223fcb6050279ebff96f"
+      "source_sha256": "5af633efde00eab2b7c0039c499e1cb6381299f9d772e1045a7d72061413ab38"
     },
     {
       "account": "Limit_Liability_Company ...775",
-      "from": "2022-11-04",
-      "through": "2026-10-28",
-      "included_records": 507,
+      "from": "2022-11-18",
+      "through": "2026-11-06",
+      "included_records": 501,
       "excluded_after_snapshot": 0,
       "categories": {
-        "trade": 246,
+        "trade": 243,
         "income_or_expense": 25,
         "journal": 8,
         "internal": 10,
-        "review": 218
+        "review": 215
       },
-      "source_sha256": "02c49c0b9f6cd604910f192270717238445049aa540129e1ee92e902011e18bc"
+      "source_sha256": "98f0e707959e9170ac08d89c3e0fdad465e52782cb2847e826e44fb76ab1017a"
     }
   ],
   "categories": {
-    "trade": 5005,
-    "income_or_expense": 965,
-    "review": 1770,
+    "trade": 5186,
+    "income_or_expense": 970,
+    "review": 1723,
     "corporate_action": 20,
-    "internal": 280,
+    "internal": 284,
     "journal": 89,
     "external": 2
   },
@@ -1953,108 +1953,6 @@
       "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
     },
     {
-      "account": "Limit_Liability_Company ...013",
-      "date": "2022-11-15",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...013",
-      "date": "2022-11-14",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...013",
-      "date": "2022-11-14",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...013",
-      "date": "2022-11-14",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...013",
-      "date": "2022-11-14",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...013",
-      "date": "2022-11-14",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...013",
-      "date": "2022-11-14",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...013",
-      "date": "2022-11-14",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...013",
-      "date": "2022-11-14",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...013",
-      "date": "2022-11-09",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...013",
-      "date": "2022-11-08",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...013",
-      "date": "2022-11-07",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...013",
-      "date": "2022-11-07",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...013",
-      "date": "2022-11-07",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...013",
-      "date": "2022-11-07",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...013",
-      "date": "2022-11-07",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...013",
-      "date": "2022-11-04",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
       "account": "Limit_Liability_Company ...024",
       "date": "2025-12-22",
       "action": "Exchange or Exercise",
@@ -2871,15 +2769,9 @@
       "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
     },
     {
-      "account": "Limit_Liability_Company ...024",
-      "date": "2022-11-09",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...024",
-      "date": "2022-11-08",
-      "action": "Journaled Shares",
+      "account": "Limit_Liability_Company ...093",
+      "date": "2026-11-16",
+      "action": "Exchange or Exercise",
       "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
     },
     {
@@ -3449,24 +3341,6 @@
     {
       "account": "Limit_Liability_Company ...093",
       "date": "2022-11-30",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...093",
-      "date": "2022-11-14",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...093",
-      "date": "2022-11-09",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...093",
-      "date": "2022-11-07",
       "action": "Journaled Shares",
       "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
     },
@@ -4265,12 +4139,6 @@
     {
       "account": "Limit_Liability_Company ...288",
       "date": "2022-11-30",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...288",
-      "date": "2022-11-08",
       "action": "Journaled Shares",
       "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
     },
@@ -6567,84 +6435,6 @@
       "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
     },
     {
-      "account": "Limit_Liability_Company ...562",
-      "date": "2022-11-15",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...562",
-      "date": "2022-11-14",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...562",
-      "date": "2022-11-14",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...562",
-      "date": "2022-11-14",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...562",
-      "date": "2022-11-14",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...562",
-      "date": "2022-11-14",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...562",
-      "date": "2022-11-10",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...562",
-      "date": "2022-11-08",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...562",
-      "date": "2022-11-07",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...562",
-      "date": "2022-11-07",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...562",
-      "date": "2022-11-07",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...562",
-      "date": "2022-11-07",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...562",
-      "date": "2022-11-04",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
       "account": "Limit_Liability_Company ...588",
       "date": "2025-09-02",
       "action": "Journal",
@@ -7463,18 +7253,6 @@
     {
       "account": "Limit_Liability_Company ...588",
       "date": "2022-11-16",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...588",
-      "date": "2022-11-10",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...588",
-      "date": "2022-11-08",
       "action": "Journaled Shares",
       "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
     },
@@ -8487,30 +8265,6 @@
       "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
     },
     {
-      "account": "Limit_Liability_Company ...591",
-      "date": "2022-11-14",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...591",
-      "date": "2022-11-10",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...591",
-      "date": "2022-11-08",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...591",
-      "date": "2022-11-04",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
       "account": "Limit_Liability_Company ...662",
       "date": "2025-09-02",
       "action": "Journal",
@@ -9401,24 +9155,6 @@
     {
       "account": "Limit_Liability_Company ...662",
       "date": "2022-11-30",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...662",
-      "date": "2022-11-14",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...662",
-      "date": "2022-11-10",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...662",
-      "date": "2022-11-08",
       "action": "Journaled Shares",
       "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
     },
@@ -11417,24 +11153,6 @@
     {
       "account": "Limit_Liability_Company ...775",
       "date": "2022-11-21",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...775",
-      "date": "2022-11-14",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...775",
-      "date": "2022-11-08",
-      "action": "Journaled Shares",
-      "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
-    },
-    {
-      "account": "Limit_Liability_Company ...775",
-      "date": "2022-11-07",
       "action": "Journaled Shares",
       "reason": "Review classification or corporate-action valuation; not automatically counted as a cash flow"
     }

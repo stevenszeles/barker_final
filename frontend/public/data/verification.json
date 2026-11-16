@@ -1,16 +1,16 @@
 {
-  "as_of": "2026-11-11",
+  "as_of": "2026-11-16",
   "verified_accounts": 12,
-  "positions": 121,
-  "realized_lots": 137,
+  "positions": 110,
+  "realized_lots": 1892,
   "accounts": [
     {
       "account": "Limit_Liability_Company ...662",
-      "positions": 2,
-      "position_value": 21129.05,
-      "latest_balance": 21129.05,
-      "realized_lots": 6,
-      "realized_pl": -385.4
+      "positions": 3,
+      "position_value": 20676.75,
+      "latest_balance": 20674.6,
+      "realized_lots": 78,
+      "realized_pl": 16710.89
     },
     {
       "account": "Individual ...521",
@@ -22,83 +22,83 @@
     },
     {
       "account": "Limit_Liability_Company ...588",
-      "positions": 2,
-      "position_value": 11021.97,
-      "latest_balance": 11021.97,
-      "realized_lots": 0,
-      "realized_pl": 0
+      "positions": 0,
+      "position_value": 9997.25,
+      "latest_balance": 9997.25,
+      "realized_lots": 62,
+      "realized_pl": -3506.33
     },
     {
       "account": "Limit_Liability_Company ...013",
-      "positions": 27,
-      "position_value": 489236.81,
-      "latest_balance": 489264.76,
-      "realized_lots": 11,
-      "realized_pl": 1068.36
+      "positions": 29,
+      "position_value": 479250.36,
+      "latest_balance": 478856.73,
+      "realized_lots": 501,
+      "realized_pl": 58849.63
     },
     {
       "account": "Limit_Liability_Company ...024",
       "positions": 0,
       "position_value": 16269.46,
       "latest_balance": 16269.46,
-      "realized_lots": 0,
-      "realized_pl": 0
+      "realized_lots": 43,
+      "realized_pl": 2596.7
     },
     {
       "account": "Limit_Liability_Company ...591",
       "positions": 1,
-      "position_value": 13381.8,
-      "latest_balance": 13381.8,
-      "realized_lots": 0,
-      "realized_pl": 0
+      "position_value": 13230.2,
+      "latest_balance": 13230.2,
+      "realized_lots": 49,
+      "realized_pl": -1171.6
     },
     {
       "account": "Limit_Liability_Company ...093",
-      "positions": 6,
-      "position_value": 13084.95,
-      "latest_balance": 13043.45,
-      "realized_lots": 3,
-      "realized_pl": -28.14
+      "positions": 2,
+      "position_value": 12908.13,
+      "latest_balance": 12908.13,
+      "realized_lots": 70,
+      "realized_pl": -1569.41
     },
     {
       "account": "Limit_Liability_Company ...724",
       "positions": 6,
-      "position_value": 14994.17,
-      "latest_balance": 14992.67,
-      "realized_lots": 6,
-      "realized_pl": -402.64
+      "position_value": 14417.66,
+      "latest_balance": 14417.66,
+      "realized_lots": 85,
+      "realized_pl": 287.48
     },
     {
       "account": "Limit_Liability_Company ...562",
-      "positions": 48,
-      "position_value": 384130.51,
-      "latest_balance": 384099.56,
-      "realized_lots": 33,
-      "realized_pl": -1164.05
+      "positions": 46,
+      "position_value": 376152.06,
+      "latest_balance": 375894.94,
+      "realized_lots": 501,
+      "realized_pl": 87276.42
     },
     {
       "account": "Limit_Liability_Company ...288",
-      "positions": 4,
-      "position_value": 20046.35,
-      "latest_balance": 20052.71,
-      "realized_lots": 63,
-      "realized_pl": -533.01
+      "positions": 1,
+      "position_value": 17672.98,
+      "latest_balance": 17672.98,
+      "realized_lots": 305,
+      "realized_pl": -9667.19
     },
     {
       "account": "Limit_Liability_Company ...775",
       "positions": 0,
       "position_value": 10781.26,
       "latest_balance": 10781.26,
-      "realized_lots": 2,
-      "realized_pl": -375.38
+      "realized_lots": 70,
+      "realized_pl": -1923.41
     },
     {
       "account": "Limit_Liability_Company ...145",
-      "positions": 25,
-      "position_value": 177717.41,
-      "latest_balance": 177707.27,
-      "realized_lots": 13,
-      "realized_pl": 476.03
+      "positions": 22,
+      "position_value": 176334.61,
+      "latest_balance": 176297.74,
+      "realized_lots": 128,
+      "realized_pl": 7180.41
     }
   ]
 }
